@@ -453,6 +453,18 @@ async function sendOTP(isResend = false) {
     const data = await res.json();
 
     if (!res.ok) {
+      // 429 = rate-limited: a valid OTP was already sent to this address.
+      // Transition to OTP entry step so the user can enter the code they received.
+      if (res.status === 429) {
+        document.getElementById('otp-email-display').textContent = emailAddr;
+        showStep('otp');
+        clearOTPBoxes();
+        document.getElementById('d0').focus();
+        startResendTimer();
+        showAlert('warn', 'OTP was already sent to ' + emailAddr + '. Enter it below. Resend available after 60s.');
+        if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
+        return;
+      }
       showAlert('error', data.error || 'Failed to send OTP.');
       if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
       return;
