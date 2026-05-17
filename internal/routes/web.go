@@ -1,12 +1,13 @@
+// internal/routes/web.go
 package routes
 
 import (
 	"EverythingSuckz/fsb/internal/auth"
-	"time"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/token"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -15,17 +16,34 @@ import (
 // ─── Register ─────────────────────────────────────────────────────────────────
 
 func (e *allRoutes) LoadWeb(r *Route) {
-	// Login / logout / register — public
+	// ── Auth — public ──────────────────────────────────────────────────────────
+
+	// Legacy form-based login (kept for backward compat)
 	r.Engine.GET("/login", auth.ShowLogin)
 	r.Engine.POST("/login", auth.DoLogin)
+
+	// Register
 	r.Engine.GET("/register", auth.ShowRegister)
 	r.Engine.POST("/register", auth.DoRegister)
+
+	// Logout
 	r.Engine.POST("/logout", auth.RequireAuth, auth.DoLogout)
 
-	// ── Admin Panel ── (static HTML — served directly, no Go logic needed)
-	// File: web/admin_panel.html
-	// Login is handled inside the HTML itself (JS-only, client-side)
-	// Access: http://yourdomain.com/admin
+	// ── OTP login routes (NEW) ─────────────────────────────────────────────────
+
+	// GET  /login/check-service  → {"up": true/false}  (Brevo health probe)
+	r.Engine.GET("/login/check-service", auth.CheckEmailService)
+
+	// POST /login/otp/send       → send 4-digit OTP to email
+	r.Engine.POST("/login/otp/send", auth.SendOTPHandler)
+
+	// POST /login/otp/verify     → verify OTP → set cookie → {"redirect":"/courses"}
+	r.Engine.POST("/login/otp/verify", auth.VerifyOTPHandler)
+
+	// POST /login/password       → fallback password login (only when Brevo is down)
+	r.Engine.POST("/login/password", auth.DoPasswordLogin)
+
+	// ── Admin Panel ────────────────────────────────────────────────────────────
 	r.Engine.GET("/admin", func(c *gin.Context) {
 		c.HTML(http.StatusOK, "admin_panel.html", gin.H{})
 	})
@@ -35,7 +53,7 @@ func (e *allRoutes) LoadWeb(r *Route) {
 		c.Redirect(http.StatusFound, "/courses")
 	})
 
-	// Protected pages
+	// ── Protected pages ────────────────────────────────────────────────────────
 	protected := r.Engine.Group("/", auth.RequireAuth)
 	{
 		protected.GET("/courses", handleCoursesList)
@@ -76,15 +94,15 @@ func handleCoursesList(c *gin.Context) {
 	}
 
 	type CourseCard struct {
-		ID          string
-		Title       string
-		Description string
-		Thumbnail   string
-		Price       string
-		BuyLink     string
-		FileCount   int64
-		ExpiresAt   string // empty = permanent; else "02 Jan 2006"
-		IsExpiringSoon bool // true if < 7 days left
+		ID             string
+		Title          string
+		Description    string
+		Thumbnail      string
+		Price          string
+		BuyLink        string
+		FileCount      int64
+		ExpiresAt      string // empty = permanent; else "02 Jan 2006"
+		IsExpiringSoon bool   // true if < 7 days left
 	}
 
 	myCourses := make([]CourseCard, 0)
@@ -102,7 +120,6 @@ func handleCoursesList(c *gin.Context) {
 			FileCount:   count,
 		}
 		if acc, ok := enrolledMap[course.ID]; ok {
-			// Add expiry info
 			if acc.ExpiresAt != nil {
 				card.ExpiresAt = acc.ExpiresAt.Format("02 Jan 2006")
 				card.IsExpiringSoon = acc.ExpiresAt.Before(time.Now().AddDate(0, 0, 7))
