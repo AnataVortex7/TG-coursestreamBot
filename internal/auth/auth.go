@@ -2,7 +2,10 @@ package auth
 
 import (
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/email"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -178,31 +181,30 @@ func ShowRegister(c *gin.Context) {
 }
 
 // DoRegister — POST /register
-// User fills: full_name, mobile OR email, password, confirm_password.
+// Step 1: Validate form, store pending record, send OTP to email.
+// Returns JSON so the frontend can handle the response and show the OTP step.
 func DoRegister(c *gin.Context) {
-	fullName  := strings.TrimSpace(c.PostForm("full_name"))
-	mobile    := strings.TrimSpace(c.PostForm("mobile"))
-	email     := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
+	fullName := strings.TrimSpace(c.PostForm("full_name"))
+	mobile   := strings.TrimSpace(c.PostForm("mobile"))
+	emailAddr := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
 	password  := c.PostForm("password")
 	confirm   := c.PostForm("confirm_password")
 
 	fail := func(msg string) {
-		c.HTML(http.StatusBadRequest, "login.html", gin.H{
-			"tab":       "register",
-			"error":     msg,
-			"full_name": fullName,
-			"mobile":    mobile,
-			"email":     email,
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 	}
 
-	// Validation
+	// ── Validation ───────────────────────────────────────────────────────────
 	if fullName == "" {
 		fail("Full name is required.")
 		return
 	}
-	if mobile == "" && email == "" {
+	if mobile == "" && emailAddr == "" {
 		fail("Please enter your mobile number or email address.")
+		return
+	}
+	if emailAddr == "" {
+		fail("Email address is required for OTP verification.")
 		return
 	}
 	if len(password) < 6 {
@@ -214,23 +216,130 @@ func DoRegister(c *gin.Context) {
 		return
 	}
 
+	// ── Check duplicate ───────────────────────────────────────────────────────
+	existing, _ := db.GetUserByMobileOrEmail(emailAddr)
+	if existing != nil {
+		fail("This email is already registered. Please sign in.")
+		return
+	}
+	if mobile != "" {
+		existingMobile, _ := db.GetUserByMobileOrEmail(mobile)
+		if existingMobile != nil {
+			fail("This mobile number is already registered.")
+			return
+		}
+	}
+
+	// ── Rate limit ────────────────────────────────────────────────────────────
+	if !db.CanSendRegOTP(emailAddr) {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": "Please wait 60 seconds before requesting a new OTP.",
+		})
+		return
+	}
+
+	// ── Hash password ─────────────────────────────────────────────────────────
 	hash, err := HashPassword(password)
 	if err != nil {
 		fail("Server error. Please try again.")
 		return
 	}
 
-	user, err := db.CreateUserFull("", fullName, mobile, email, hash)
+	// ── Generate + hash OTP ───────────────────────────────────────────────────
+	otpPlain := generateOTP()
+	otpHash, err := HashPassword(otpPlain)
 	if err != nil {
-		fail(err.Error()) // "mobile number or email already registered"
+		fail("Server error. Please try again.")
 		return
 	}
 
-	// Auto-login after registration
+	// ── Store pending registration ────────────────────────────────────────────
+	if err := db.CreatePendingRegistration(emailAddr, mobile, fullName, hash, otpHash); err != nil {
+		fail("Server error. Please try again.")
+		return
+	}
+
+	// ── Send OTP email ────────────────────────────────────────────────────────
+	if err := email.SendRegOTP(emailAddr, fullName, otpPlain); err != nil {
+		log.Printf("[Register] SendRegOTP FAILED for %s: %v", emailAddr, err)
+		_ = db.DeletePendingRegistration(emailAddr)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error": "Failed to send verification email. Please try again.",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"step":  "otp",
+		"email": emailAddr,
+	})
+}
+
+// VerifyRegistrationOTP — POST /register/verify
+// Step 2: Check OTP, create user, auto-login.
+func VerifyRegistrationOTP(c *gin.Context) {
+	emailAddr := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
+	otpCode   := strings.TrimSpace(c.PostForm("otp"))
+
+	if emailAddr == "" || otpCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Email and OTP are required."})
+		return
+	}
+	if len(otpCode) != 4 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "OTP must be exactly 4 digits."})
+		return
+	}
+
+	// Fetch pending record
+	rec, err := db.GetPendingRegistration(emailAddr)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error. Please try again."})
+		return
+	}
+	if rec == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "OTP expired or not found. Please register again."})
+		return
+	}
+
+	// Too many wrong attempts?
+	if rec.Attempts >= maxOTPAttempts {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": "Too many wrong attempts. Please register again.",
+		})
+		return
+	}
+
+	// Verify OTP
+	if !CheckPassword(otpCode, rec.OTPHash) {
+		_ = db.IncrementPendingAttempts(rec.ID)
+		remaining := maxOTPAttempts - rec.Attempts - 1
+		if remaining <= 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": "Wrong OTP. No attempts left. Please register again.",
+			})
+		} else {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": fmt.Sprintf("Wrong OTP. %d attempt(s) remaining.", remaining),
+			})
+		}
+		return
+	}
+
+	// ✓ OTP correct — create the user
+	user, err := db.CreateUserFull("", rec.FullName, rec.Mobile, emailAddr, rec.PasswordHash)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Clean up pending record
+	_ = db.DeletePendingRegistration(emailAddr)
+
+	// Auto-login
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
-		// Registration succeeded but token failed — send to login
-		c.Redirect(http.StatusFound, "/login?registered=1")
+		// Account created but token failed — redirect to login
+		c.JSON(http.StatusOK, gin.H{"redirect": "/login?registered=1"})
 		return
 	}
 	ip := clientIP(c)
@@ -239,7 +348,7 @@ func DoRegister(c *gin.Context) {
 
 	maxAge := int(sessionExpiry.Seconds())
 	c.SetCookie(cookieName, tokenStr, maxAge, "/", "", false, true)
-	c.Redirect(http.StatusFound, "/courses")
+	c.JSON(http.StatusOK, gin.H{"redirect": "/courses"})
 }
 
 // DoLogout — POST /logout
