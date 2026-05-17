@@ -91,7 +91,7 @@ func FileFromMedia(media tg.MessageMediaClass) (*types.File, error) {
 			AccessHash:    document.AccessHash,
 			FileReference: document.FileReference,
 			ThumbSize:     "",
-			DCID:          document.DC,
+			DCID:          document.DCID,
 		}, nil
 	case *tg.MessageMediaPhoto:
 		photo, ok := media.Photo.AsNotEmpty()
@@ -122,7 +122,7 @@ func FileFromMedia(media tg.MessageMediaClass) (*types.File, error) {
 			AccessHash:    photo.GetAccessHash(),
 			FileReference: photo.GetFileReference(),
 			ThumbSize:     size.GetType(),
-			DCID:          photo.GetDcID(),
+			DCID:          photo.GetDCID(),
 		}, nil
 	}
 	return nil, fmt.Errorf("unexpected type %T", media)
