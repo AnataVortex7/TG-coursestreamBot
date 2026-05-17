@@ -6,6 +6,7 @@ package email
 import (
 	"crypto/tls"
 	"fmt"
+	"log"
 	"net"
 	"net/smtp"
 	"os"
@@ -41,14 +42,38 @@ func envOr(key, fallback string) string {
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 
-// IsServiceUp does a quick TCP dial to Brevo's SMTP port (no email sent).
-// Returns true if reachable within 5 seconds.
+// IsServiceUp dials Brevo's SMTP server AND verifies credentials.
+// Returns true only when auth succeeds — a plain TCP check is not enough
+// because the port can be open even when the key is wrong or unset.
 func IsServiceUp() bool {
-	conn, err := net.DialTimeout("tcp", smtpHost+":"+smtpPort, 5*time.Second)
+	if smtpUser == "" || smtpPass == "" {
+		return false
+	}
+
+	rawConn, err := net.DialTimeout("tcp", smtpHost+":"+smtpPort, 5*time.Second)
 	if err != nil {
 		return false
 	}
-	conn.Close()
+
+	client, err := smtp.NewClient(rawConn, smtpHost)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+
+	tlsCfg := &tls.Config{ServerName: smtpHost, MinVersion: tls.VersionTLS12}
+	if err = client.StartTLS(tlsCfg); err != nil {
+		return false
+	}
+
+	auth := smtp.PlainAuth("", smtpUser, smtpPass, smtpHost)
+	if err = client.Auth(auth); err != nil {
+		// Log so Koyeb logs show the real reason
+		// Check: Koyeb dashboard → your app → Logs tab
+		log.Printf("[Brevo] SMTP auth failed: %v", err)
+		return false
+	}
+
 	return true
 }
 
