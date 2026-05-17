@@ -328,7 +328,75 @@
     <p class="footer-note">Don't have an account? <a href="#" onclick="switchTab('register');return false;">Register here</a></p>
   </div>
 
-  <!-- ═══════════════ REGISTER PANEL ═══════════════ -->\n  <div id="panel-register" class="form-panel {{ if eq .tab `register` }}active{{ end }}">\n\n    <!-- JS-driven alert -->\n    <div id="reg-alert" class="alert" style="display:none;"></div>\n\n    <!-- ── Step 1: Registration form ── -->\n    <div id="reg-step-form" class="step active">\n      <h2>Create account</h2>\n      <p class="subtitle">Register with your email to get started</p>\n\n      {{ if .error }}{{ if eq .tab "register" }}\n      <div class="alert alert-error">\n        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>\n        {{ .error }}\n      </div>\n      {{ end }}{{ end }}\n\n      <div class="field">\n        <label for="reg-name">Full Name *</label>\n        <input id="reg-name" type="text" placeholder="Rahul Sharma" value="{{ .full_name }}" />\n      </div>\n      <div class="field">\n        <label for="reg-mobile">Mobile Number</label>\n        <input id="reg-mobile" type="tel" placeholder="9876543210" value="{{ .mobile }}" pattern="[6-9][0-9]{9}" />\n      </div>\n      <div class="or-row">or</div>\n      <div class="field">\n        <label for="reg-email">Email Address *</label>\n        <input id="reg-email" type="email" placeholder="you@example.com" value="{{ .email }}" />\n      </div>\n      <div class="field">\n        <label for="reg-pass">Password *</label>\n        <input id="reg-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password" />\n      </div>\n      <div class="field">\n        <label for="reg-confirm">Confirm Password *</label>\n        <input id="reg-confirm" type="password" placeholder="Repeat password" autocomplete="new-password" />\n      </div>\n      <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()">Create Account →</button>\n    </div>\n\n    <!-- ── Step 2: OTP verification ── -->\n    <div id="reg-step-otp" class="step">\n      <h2>Verify your email</h2>\n      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="reg-email-display" style="color:var(--text);"></strong></p>\n      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>\n\n      <div class="otp-boxes">\n        <input class="otp-box" id="rd0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />\n        <input class="otp-box" id="rd1" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />\n        <input class="otp-box" id="rd2" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />\n        <input class="otp-box" id="rd3" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />\n      </div>\n\n      <button id="btn-reg-verify" class="btn-primary" onclick="verifyRegOTP()">Verify & Create Account →</button>\n\n      <div class="resend-row">\n        <span id="reg-resend-timer">Resend in <strong id="reg-resend-countdown">60</strong>s</span>\n        <button id="btn-reg-resend" class="btn-link" onclick="submitRegistration(true)" disabled>Resend OTP</button>\n      </div>\n\n      <div style="margin-top:0.9rem;text-align:center;">\n        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToRegForm()">← Change details</button>\n      </div>\n    </div>\n\n    <p class="footer-note">Already have an account? <a href="#" onclick="switchTab('login');return false;">Sign in</a></p>\n  </div>
+  <!-- ═══════════════ REGISTER PANEL ═══════════════ -->
+  <div id="panel-register" class="form-panel {{ if eq .tab `register` }}active{{ end }}">
+
+    <!-- JS-driven alert -->
+    <div id="reg-alert" class="alert" style="display:none;"></div>
+
+    <!-- Step 1: Registration form -->
+    <div id="reg-step-form" class="step active">
+      <h2>Create account</h2>
+      <p class="subtitle">Register with your email to get started</p>
+
+      {{ if .error }}{{ if eq .tab "register" }}
+      <div class="alert alert-error">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        {{ .error }}
+      </div>
+      {{ end }}{{ end }}
+
+      <div class="field">
+        <label for="reg-name">Full Name *</label>
+        <input id="reg-name" type="text" placeholder="Rahul Sharma" value="{{ .full_name }}" />
+      </div>
+      <div class="field">
+        <label for="reg-mobile">Mobile Number</label>
+        <input id="reg-mobile" type="tel" placeholder="9876543210" value="{{ .mobile }}" pattern="[6-9][0-9]{9}" />
+      </div>
+      <div class="or-row">or</div>
+      <div class="field">
+        <label for="reg-email">Email Address *</label>
+        <input id="reg-email" type="email" placeholder="you@example.com" value="{{ .email }}" />
+      </div>
+      <div class="field">
+        <label for="reg-pass">Password *</label>
+        <input id="reg-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password" />
+      </div>
+      <div class="field">
+        <label for="reg-confirm">Confirm Password *</label>
+        <input id="reg-confirm" type="password" placeholder="Repeat password" autocomplete="new-password" />
+      </div>
+      <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()">Create Account &#x2192;</button>
+    </div>
+
+    <!-- Step 2: OTP verification -->
+    <div id="reg-step-otp" class="step">
+      <h2>Verify your email</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="reg-email-display" style="color:var(--text);"></strong></p>
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>
+
+      <div class="otp-boxes">
+        <input class="otp-box" id="rd0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />
+        <input class="otp-box" id="rd1" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
+        <input class="otp-box" id="rd2" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
+        <input class="otp-box" id="rd3" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
+      </div>
+
+      <button id="btn-reg-verify" class="btn-primary" onclick="verifyRegOTP()">Verify &amp; Create Account &#x2192;</button>
+
+      <div class="resend-row">
+        <span id="reg-resend-timer">Resend in <strong id="reg-resend-countdown">60</strong>s</span>
+        <button id="btn-reg-resend" class="btn-link" onclick="submitRegistration(true)" disabled>Resend OTP</button>
+      </div>
+
+      <div style="margin-top:0.9rem;text-align:center;">
+        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToRegForm()">&#x2190; Change details</button>
+      </div>
+    </div>
+
+    <p class="footer-note">Already have an account? <a href="#" onclick="switchTab('login');return false;">Sign in</a></p>
+  </div>
 </div>
 
 <script>
