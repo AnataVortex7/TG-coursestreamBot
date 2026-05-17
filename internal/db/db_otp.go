@@ -95,6 +95,16 @@ func MarkOTPUsed(id primitive.ObjectID) error {
 	return err
 }
 
+// DeleteOTP removes all OTP records for email.
+// Called when email delivery fails so the rate-limit timer resets
+// and the user can retry immediately without waiting 60 seconds.
+func DeleteOTP(email string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColOTPs.DeleteMany(ctx, bson.M{"email": email})
+	return err
+}
+
 // CanSendOTP returns true when at least 60 seconds have passed since
 // the last OTP was issued for email (rate-limit guard).
 func CanSendOTP(email string) bool {
