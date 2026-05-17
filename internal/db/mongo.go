@@ -27,6 +27,7 @@ var (
 	ColStreamNonces *mongo.Collection // per-page-load stream nonces (anti-piracy)
 	ColWorkers      *mongo.Collection // external streaming workers
 	ColOTPs         *mongo.Collection // email OTP login records (TTL: 10 min)
+	ColPendingRegs  *mongo.Collection // unverified registration records (TTL: 10 min)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -150,7 +151,8 @@ func Connect() {
 	ColChannelCache = Database.Collection("channel_cache")
 	ColStreamNonces = Database.Collection("stream_nonces")
 	ColWorkers      = Database.Collection("workers")
-	ColOTPs         = Database.Collection("otp_records") // ← OTP login records
+	ColOTPs         = Database.Collection("otp_records")        // ← OTP login records
+	ColPendingRegs  = Database.Collection("pending_registrations") // ← unverified registrations
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -201,6 +203,9 @@ func createIndexes() {
 	// otp_records: fast email lookup + TTL auto-delete on expires_at
 	ensureIndex(ctx, ColOTPs, bson.D{{Key: "email", Value: 1}}, false)
 	ensureTTLIndex(ctx, ColOTPs, "expires_at")
+
+	ensureIndex(ctx, ColPendingRegs, bson.D{{Key: "email", Value: 1}}, false)
+	ensureTTLIndex(ctx, ColPendingRegs, "expires_at")
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
