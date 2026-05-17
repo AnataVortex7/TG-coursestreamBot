@@ -7,6 +7,7 @@ import (
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"strings"
@@ -79,8 +80,14 @@ func SendOTPHandler(c *gin.Context) {
 
 	// Send via Brevo SMTP
 	if err := email.SendOTP(emailAddr, otpPlain); err != nil {
-		// If send fails, remove the stored OTP so user can retry immediately
-		_ = db.CreateOTP(emailAddr, "") // effectively invalidates by replacing with garbage
+		// Log the real error so it appears in Koyeb / Docker logs.
+		// Check: Koyeb dashboard → your app → Logs tab
+		log.Printf("[OTP] SendOTP FAILED for %s: %v", emailAddr, err)
+
+		// Delete the OTP record so the 60-second rate limit does NOT block
+		// the user from retrying immediately after a failed send.
+		_ = db.DeleteOTP(emailAddr)
+
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"error": "Failed to send OTP email. Please try again or use password login.",
 		})
