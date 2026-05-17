@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Error {{ .code }} — CourseStream</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --border:   #2a2d3a;
+    --accent:   #6c63ff;
+    --accent-h: #574fd6;
+    --text:     #e8e9f0;
+    --muted:    #7a7d8e;
+    --danger:   #ff5c5c;
+    --radius:   12px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+  }
+
+  .container {
+    text-align: center;
+    max-width: 480px;
+    width: 100%;
+  }
+
+  /* ── Big error code ── */
+  .error-code {
+    font-size: clamp(5rem, 20vw, 8rem);
+    font-weight: 800;
+    line-height: 1;
+    letter-spacing: -4px;
+    background: linear-gradient(135deg, var(--accent) 0%, #a89cff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 1.5rem;
+    user-select: none;
+  }
+
+  /* ── Icon strip below code ── */
+  .icon-wrap {
+    width: 64px;
+    height: 64px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 1.5rem;
+  }
+
+  .icon-wrap svg {
+    width: 30px;
+    height: 30px;
+  }
+
+  /* Different icon tint per code */
+  .icon-403 svg { fill: var(--danger); }
+  .icon-404 svg { fill: var(--muted); }
+  .icon-500 svg { fill: #ffaa44; }
+  .icon-400 svg { fill: var(--muted); }
+  .icon-default svg { fill: var(--muted); }
+
+  /* ── Message ── */
+  .error-message {
+    font-size: 1.05rem;
+    font-weight: 500;
+    color: var(--text);
+    line-height: 1.5;
+    margin-bottom: 0.75rem;
+  }
+
+  .error-hint {
+    font-size: 0.875rem;
+    color: var(--muted);
+    margin-bottom: 2.25rem;
+    line-height: 1.55;
+  }
+
+  /* ── Buttons ── */
+  .btn-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .btn-back {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 0.7rem 1.4rem;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    text-decoration: none;
+  }
+  .btn-back:hover  { background: var(--accent-h); }
+  .btn-back:active { transform: scale(0.97); }
+  .btn-back svg { width: 16px; height: 16px; fill: #fff; }
+
+  .btn-home {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    padding: 0.7rem 1.4rem;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    text-decoration: none;
+  }
+  .btn-home:hover { border-color: var(--muted); color: var(--text); }
+  .btn-home svg { width: 16px; height: 16px; fill: currentColor; }
+
+  /* ── Divider line ── */
+  .divider {
+    width: 48px;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin: 0 auto 1.75rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- Big error code -->
+  <div class="error-code">{{ .code }}</div>
+
+  <!-- Icon -->
+  <div class="icon-wrap
+    {{ if eq .code 403 }}icon-403
+    {{ else if eq .code 404 }}icon-404
+    {{ else if eq .code 500 }}icon-500
+    {{ else if eq .code 400 }}icon-400
+    {{ else }}icon-default
+    {{ end }}">
+
+    {{ if eq .code 403 }}
+    <!-- Lock icon -->
+    <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+    {{ else if eq .code 404 }}
+    <!-- Search-off icon -->
+    <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14zm-1-7h2v2h2v2h-2v2h-2v-2h-2v-2h2V7z"/></svg>
+    {{ else if eq .code 500 }}
+    <!-- Warning icon -->
+    <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+    {{ else }}
+    <!-- Info icon -->
+    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+    {{ end }}
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Message -->
+  <p class="error-message">{{ .message }}</p>
+
+  <p class="error-hint">
+    {{ if eq .code 403 }}
+      You don't have permission to view this resource. Contact your administrator if you believe this is a mistake.
+    {{ else if eq .code 404 }}
+      The page or file you're looking for doesn't exist or may have been moved.
+    {{ else if eq .code 500 }}
+      Something went wrong on our end. Please try again in a moment.
+    {{ else if eq .code 400 }}
+      The request was invalid. Please check the link and try again.
+    {{ else }}
+      An unexpected error occurred. Please try navigating back.
+    {{ end }}
+  </p>
+
+  <!-- Buttons -->
+  <div class="btn-row">
+    <button class="btn-back" onclick="history.back()">
+      <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      Go Back
+    </button>
+    <a class="btn-home" href="/courses">
+      <svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>
+      My Courses
+    </a>
+  </div>
+
+</div>
+
+</body>
+</html>

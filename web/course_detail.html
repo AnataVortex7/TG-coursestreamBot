@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>📚 {{ .course.Title }}</title>
+<style>
+  :root {
+    --bg:#0f0f13;--surface:#1a1a24;--card:#22222e;--border:#2e2e40;
+    --accent:#7c6af7;--accent2:#5eead4;--text:#e8e8f0;--muted:#7070a0;
+    --video:#7c6af7;--audio:#f472b6;--pdf:#fb923c;--photo:#34d399;--doc:#60a5fa;--none:#6b7280;
+    --radius:14px;--shadow:0 4px 24px rgba(0,0,0,.4);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+  header{background:linear-gradient(135deg,#1a1030,#0f1a2e);border-bottom:1px solid var(--border);padding:28px 24px 20px;text-align:center;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
+  header h1{font-size:1.7rem;font-weight:700;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+  header p{color:var(--muted);font-size:.85rem;margin-top:4px}
+  .header-meta{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:8px;flex-wrap:wrap}
+  .back-btn{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:8px;background:var(--surface);color:var(--muted);border:1px solid var(--border);text-decoration:none;font-size:.8rem;font-weight:600;transition:all .2s}
+  .back-btn:hover{color:var(--text);border-color:var(--accent)}
+  .user-badge{font-size:.78rem;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:5px 12px}
+  .page-info{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;padding:10px 16px 0;font-size:.82rem;color:var(--muted)}
+  .page-info strong{color:var(--text)}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;padding:16px 16px 4px}
+  .filter-btn{padding:6px 16px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--muted);cursor:pointer;font-size:.8rem;font-weight:600;transition:all .2s}
+  .filter-btn:hover,.filter-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .filter-btn[data-type="video"].active{background:var(--video);border-color:var(--video)}
+  .filter-btn[data-type="audio"].active{background:var(--audio);border-color:var(--audio)}
+  .filter-btn[data-type="pdf"].active{background:var(--pdf);border-color:var(--pdf)}
+  .filter-btn[data-type="photo"].active{background:var(--photo);border-color:var(--photo)}
+  .filter-btn[data-type="document"].active{background:var(--doc);border-color:var(--doc)}
+  .search-wrap{max-width:440px;margin:12px auto 0;position:relative}
+  .search-wrap input{width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:999px;padding:8px 16px 8px 38px;font-size:.85rem;outline:none;transition:border-color .2s}
+  .search-wrap input:focus{border-color:var(--accent)}
+  .search-wrap .icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;padding:20px 20px 20px;max-width:1300px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow);transition:transform .2s,box-shadow .2s}
+  .card:hover{transform:translateY(-3px);box-shadow:0 8px 32px rgba(0,0,0,.6)}
+  .card-stripe{height:4px;width:100%}
+  .type-video .card-stripe{background:linear-gradient(90deg,var(--video),#b48ef7)}
+  .type-audio .card-stripe{background:linear-gradient(90deg,var(--audio),#f9a8d4)}
+  .type-pdf .card-stripe{background:linear-gradient(90deg,var(--pdf),#fcd34d)}
+  .type-photo .card-stripe{background:linear-gradient(90deg,var(--photo),#6ee7b7)}
+  .type-document .card-stripe{background:linear-gradient(90deg,var(--doc),#93c5fd)}
+  .card-body{padding:16px 16px 12px;flex:1;display:flex;flex-direction:column;gap:10px}
+  .card-header-row{display:flex;align-items:center;justify-content:space-between}
+  .type-badge{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 10px;border-radius:999px;border:1px solid}
+  .type-video .type-badge{color:var(--video);border-color:var(--video);background:#7c6af715}
+  .type-audio .type-badge{color:var(--audio);border-color:var(--audio);background:#f472b615}
+  .type-pdf .type-badge{color:var(--pdf);border-color:var(--pdf);background:#fb923c15}
+  .type-photo .type-badge{color:var(--photo);border-color:var(--photo);background:#34d39915}
+  .type-document .type-badge{color:var(--doc);border-color:var(--doc);background:#60a5fa15}
+  .msg-id{font-size:.72rem;color:var(--muted);font-family:monospace}
+  .file-name{font-size:.92rem;font-weight:600;word-break:break-word;line-height:1.35}
+  .caption-text{font-size:.82rem;color:var(--accent2);line-height:1.45;word-break:break-word;white-space:pre-wrap}
+  .meta{display:flex;gap:12px;font-size:.75rem;color:var(--muted);flex-wrap:wrap}
+  .meta span{display:flex;align-items:center;gap:4px}
+  .card-actions{padding:0 16px 14px;display:flex;gap:8px;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;font-size:.8rem;font-weight:600;text-decoration:none;transition:opacity .2s,transform .15s;cursor:pointer}
+  .btn:hover{opacity:.88;transform:scale(.98)}
+  .btn-watch{background:var(--video);color:#fff}
+  .btn-listen{background:var(--audio);color:#fff}
+  .btn-view{background:var(--pdf);color:#fff}
+  .btn-photo{background:var(--photo);color:#111}
+  .btn-open{background:var(--doc);color:#fff}
+  .pagination{display:flex;justify-content:center;gap:12px;padding:16px 20px 40px;flex-wrap:wrap}
+  .pagination button{display:inline-flex;align-items:center;gap:6px;padding:9px 22px;border-radius:10px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s}
+  .pagination button:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+  .pagination button:disabled{opacity:.3;cursor:not-allowed}
+  .pagination .page-label{font-size:.82rem;color:var(--muted);align-self:center}
+  .jump-wrap{display:inline-flex;align-items:center;gap:6px;align-self:center}
+  .jump-wrap input{width:62px;padding:7px 10px;border-radius:8px;background:var(--surface);border:1px solid var(--border);color:var(--text);font-size:.85rem;font-weight:600;text-align:center;outline:none;transition:border-color .2s}
+  .jump-wrap input:focus{border-color:var(--accent)}
+  .jump-wrap button{padding:7px 14px;border-radius:8px;background:var(--accent);color:#fff;border:none;font-size:.82rem;font-weight:700;cursor:pointer;transition:opacity .2s}
+  .jump-wrap button:hover{opacity:.85}
+  .empty{grid-column:1/-1;text-align:center;padding:80px 20px;color:var(--muted)}
+  .empty .emoji{font-size:3rem;display:block;margin-bottom:12px}
+  ::-webkit-scrollbar{width:6px}
+  ::-webkit-scrollbar-track{background:var(--bg)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+  @media(max-width:480px){.grid{padding:12px 12px 16px;gap:12px}header h1{font-size:1.3rem}}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📚 {{ .course.Title }}</h1>
+  <p>{{ .totalCount }} files in this course</p>
+  <div class="header-meta">
+    <a href="/courses" class="back-btn">← Back to Courses</a>
+    <span class="user-badge">👤 {{ .username }}</span>
+  </div>
+  <div class="search-wrap">
+    <span class="icon">🔍</span>
+    <input type="text" id="searchInput" placeholder="Search files…" oninput="applyFilters()"/>
+  </div>
+</header>
+
+<div class="page-info">
+  Showing <strong id="visibleCount">{{ .totalCount }}</strong> of <strong>{{ .totalCount }}</strong> files
+</div>
+
+<div class="filters">
+  <button class="filter-btn active" data-type="all" onclick="setFilter('all',this)">All</button>
+  <button class="filter-btn" data-type="video"    onclick="setFilter('video',this)">🎬 Video</button>
+  <button class="filter-btn" data-type="audio"    onclick="setFilter('audio',this)">🎵 Audio</button>
+  <button class="filter-btn" data-type="pdf"      onclick="setFilter('pdf',this)">📄 PDF</button>
+  <button class="filter-btn" data-type="photo"    onclick="setFilter('photo',this)">🖼️ Photo</button>
+  <button class="filter-btn" data-type="document" onclick="setFilter('document',this)">📦 Document</button>
+</div>
+
+<div class="grid" id="grid">
+{{ range .playlist }}
+<div class="card type-{{ .MediaType }}"
+     data-type="{{ .MediaType }}"
+     data-name="{{ .FileName }}"
+     data-title="{{ .Title }}">
+  <div class="card-stripe"></div>
+  <div class="card-body">
+    <div class="card-header-row">
+      <span class="type-badge">
+        {{ if eq .MediaType "video" }}🎬 Video
+        {{ else if eq .MediaType "audio" }}🎵 Audio
+        {{ else if eq .MediaType "pdf" }}📄 PDF
+        {{ else if eq .MediaType "photo" }}🖼️ Photo
+        {{ else }}📦 Document{{ end }}
+      </span>
+      <span class="msg-id">#{{ .Index }}</span>
+    </div>
+    {{ if .Title }}<div class="file-name">{{ .Title }}</div>{{ end }}
+    {{ if .Caption }}<div class="caption-text">💬 {{ .Caption }}</div>{{ end }}
+    {{ if .FileName }}<div class="file-name" style="color:var(--muted);font-size:.82rem">{{ .FileName }}</div>{{ end }}
+    <div class="meta">
+      {{ if .FileSize }}<span>💾 {{ .FileSize }}</span>{{ end }}
+      {{ if .MimeType }}<span>🏷️ {{ .MimeType }}</span>{{ end }}
+    </div>
+  </div>
+  {{ if .HasMedia }}
+  <div class="card-actions">
+    {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-watch">▶ Watch</a>
+    {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-listen">🎵 Listen</a>
+    {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-view">📄 View PDF</a>
+    {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-photo">🖼️ View Photo</a>
+    {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
+  </div>
+  {{ end }}
+</div>
+{{ else }}
+<div class="empty">
+  <span class="emoji">📭</span>
+  <p>No files in this course yet.</p>
+</div>
+{{ end }}
+</div>
+
+<div class="pagination" id="pagination">
+  <button id="btnFirst"    onclick="goToPage(1)">⏮ Start</button>
+  <button id="btnPrev"     onclick="goToPage(currentPage-1)">← Prev</button>
+  <span class="page-label" id="pageLabel">Page 1</span>
+  <button id="btnNext"     onclick="goToPage(currentPage+1)">Next →</button>
+  <div class="jump-wrap">
+    <input type="number" id="jumpInput" min="1" placeholder="Go#" title="Jump to page"
+      onkeydown="if(event.key==='Enter') jumpToPage()"/>
+    <button onclick="jumpToPage()">Go</button>
+  </div>
+</div>
+
+<script>
+  const PAGE_SIZE = 50;
+  let currentFilter = 'all';
+  let currentPage   = 1;
+  let filteredCards = [];
+
+  function allCards() {
+    return Array.from(document.querySelectorAll('.card'));
+  }
+
+  function setFilter(type, btn) {
+    currentFilter = type;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentPage = 1;
+    applyFilters();
+  }
+
+  function applyFilters() {
+    const q = document.getElementById('searchInput').value.toLowerCase().trim();
+    filteredCards = allCards().filter(card => {
+      const typeMatch = currentFilter === 'all' || card.dataset.type === currentFilter;
+      const n = (card.dataset.name  || '').toLowerCase();
+      const t = (card.dataset.title || '').toLowerCase();
+      const searchMatch = !q || n.includes(q) || t.includes(q);
+      return typeMatch && searchMatch;
+    });
+    renderPage();
+  }
+
+  function renderPage() {
+    const total = filteredCards.length;
+    const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const end   = start + PAGE_SIZE;
+
+    // hide all, show only current page slice
+    allCards().forEach(c => c.style.display = 'none');
+    filteredCards.forEach((c, i) => {
+      c.style.display = (i >= start && i < end) ? '' : 'none';
+    });
+
+    document.getElementById('visibleCount').textContent = total;
+    document.getElementById('pageLabel').textContent = `Page ${currentPage} / ${totalPages}`;
+    document.getElementById('btnFirst').disabled = currentPage === 1;
+    document.getElementById('btnPrev').disabled  = currentPage === 1;
+    document.getElementById('btnNext').disabled  = currentPage >= totalPages;
+
+    // hide pagination if only 1 page
+    document.getElementById('pagination').style.display = totalPages <= 1 ? 'none' : 'flex';
+  }
+
+  function goToPage(p) {
+    const totalPages = Math.max(1, Math.ceil(filteredCards.length / PAGE_SIZE));
+    currentPage = Math.max(1, Math.min(p, totalPages));
+    renderPage();
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  }
+
+  function jumpToPage() {
+    const input = document.getElementById('jumpInput');
+    const p = parseInt(input.value, 10);
+    if (!isNaN(p) && p >= 1) {
+      goToPage(p);
+    }
+    input.value = '';
+    input.blur();
+  }
+
+  // init
+  applyFilters();
+</script>
+</body>
+</html>

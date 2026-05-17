@@ -1,0 +1,254 @@
+package db
+
+import (
+	"context"
+	"log"
+	"os"
+	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+// ─── Global DB handle ────────────────────────────────────────────────────────
+
+var (
+	Client   *mongo.Client
+	Database *mongo.Database
+
+	ColUsers        *mongo.Collection
+	ColCourses      *mongo.Collection
+	ColAccess       *mongo.Collection
+	ColSessions     *mongo.Collection
+	ColChannelCache *mongo.Collection
+	ColStreamNonces *mongo.Collection // per-page-load stream nonces (anti-piracy)
+	ColWorkers      *mongo.Collection // external streaming workers
+)
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+// User — website login user (self-registers or admin creates via bot)
+type User struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty"       json:"id"`
+	Username     string             `bson:"username"            json:"username"`      // unique, auto-set to mobile or email if blank
+	FullName     string             `bson:"full_name"           json:"full_name"`
+	Mobile       string             `bson:"mobile"              json:"mobile"`        // e.g. "9876543210" (digits only, optional)
+	Email        string             `bson:"email"               json:"email"`         // optional
+	PasswordHash string             `bson:"password_hash"       json:"-"`
+	CreatedAt    time.Time          `bson:"created_at"          json:"created_at"`
+	IsActive     bool               `bson:"is_active"           json:"is_active"`
+}
+
+// Session — one active session per user (new login kills old)
+type Session struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty"`
+	UserID    primitive.ObjectID `bson:"user_id"`
+	Token     string             `bson:"token"`       // JWT token string (for fast lookup)
+	IP        string             `bson:"ip"`          // last known IP
+	UserAgent string             `bson:"user_agent"`
+	CreatedAt time.Time          `bson:"created_at"`
+	ExpiresAt time.Time          `bson:"expires_at"`
+}
+
+// Course — a course admin creates via bot
+type Course struct {
+	ID          primitive.ObjectID `bson:"_id,omitempty"  json:"id"`
+	Title       string             `bson:"title"          json:"title"`
+	Description string             `bson:"description"    json:"description"`
+	Thumbnail   string             `bson:"thumbnail"      json:"thumbnail"`    // telegram file_id or URL
+	Price       string             `bson:"price"          json:"price"`        // display string e.g. "₹999"
+	BuyLink     string             `bson:"buy_link"       json:"buy_link"`     // payment / WhatsApp link
+	ChannelID   int64              `bson:"channel_id"     json:"channel_id"`   // dedicated Telegram channel for this course
+	IsActive    bool               `bson:"is_active"      json:"is_active"`
+	CreatedAt   time.Time          `bson:"created_at"     json:"created_at"`
+}
+
+// Access — which user can access which course (no expiry by design)
+type Access struct {
+	ID        primitive.ObjectID  `bson:"_id,omitempty"`
+	UserID    primitive.ObjectID  `bson:"user_id"`
+	CourseID  primitive.ObjectID  `bson:"course_id"`
+	GrantedAt time.Time           `bson:"granted_at"`
+	GrantedBy int64               `bson:"granted_by"`  // telegram admin user_id
+	ExpiresAt *time.Time          `bson:"expires_at"`  // nil = permanent
+}
+
+// CachedFile — one Telegram message cached from channel
+// Admin runs /syncchannel once; new uploads auto-append.
+type CachedFile struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty"  json:"id"`
+	MessageID int                `bson:"message_id"     json:"message_id"`
+	ChannelID int64              `bson:"channel_id"     json:"channel_id"`   // which TG channel this message is from
+	CourseID  primitive.ObjectID `bson:"course_id"      json:"course_id"`
+	Title     string             `bson:"title"          json:"title"`      // human-readable label (caption > filename)
+	Caption   string             `bson:"caption"        json:"caption"`    // raw Telegram message caption
+	FileName  string             `bson:"file_name"      json:"file_name"`
+	MimeType  string             `bson:"mime_type"      json:"mime_type"`
+	FileSize  int64              `bson:"file_size"      json:"file_size"`
+	SortOrder int                `bson:"sort_order"     json:"sort_order"` // playback order inside course
+	CreatedAt time.Time          `bson:"created_at"     json:"created_at"`
+}
+
+// Worker — an external streaming worker instance registered with the main server.
+// Workers self-register via POST /api/worker/register on startup,
+// and send heartbeats every 25s via POST /api/worker/heartbeat.
+type Worker struct {
+	ID       primitive.ObjectID `bson:"_id"`
+	URL      string             `bson:"url"`       // "https://worker1.koyeb.app" (no trailing slash)
+	Status   string             `bson:"status"`    // "active" | "unhealthy" | "offline"
+	LastSeen time.Time          `bson:"last_seen"`
+	AddedAt  time.Time          `bson:"added_at"`
+}
+
+// StreamNonce — per-page-load nonce that ties a player page to its stream.
+// Generated in handleWatch, verified in handleWatchStream.
+// UpsertStreamNonce replaces any old nonce for the same (user, watchToken) pair,
+// so opening the player in a new tab invalidates the previous tab's stream.
+type StreamNonce struct {
+	ID         primitive.ObjectID `bson:"_id,omitempty"`
+	Nonce      string             `bson:"nonce"`       // random UUID — goes in ?n= query param
+	UserID     primitive.ObjectID `bson:"user_id"`
+	WatchToken string             `bson:"watch_token"` // the /watch/:token value (for scoping)
+	CreatedAt  time.Time          `bson:"created_at"`
+	ExpiresAt  time.Time          `bson:"expires_at"`  // TTL index auto-deletes this
+}
+
+// Connect reads MONGODB_URI from env, connects, creates collections + indexes.
+// Call this once at startup (before bot and HTTP server start).
+func Connect() {
+	uri := os.Getenv("MONGODB_URI")
+	if uri == "" {
+		log.Fatal("[db] MONGODB_URI env variable is not set")
+	}
+
+	dbName := os.Getenv("MONGODB_DB")
+	if dbName == "" {
+		dbName = "coursebot" // sensible default
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	clientOpts := options.Client().ApplyURI(uri)
+	client, err := mongo.Connect(ctx, clientOpts)
+	if err != nil {
+		log.Fatalf("[db] mongo.Connect error: %v", err)
+	}
+
+	// Ping to verify connection
+	if err = client.Ping(ctx, nil); err != nil {
+		log.Fatalf("[db] ping error: %v", err)
+	}
+
+	Client = client
+	Database = client.Database(dbName)
+
+	// Assign collection handles
+	ColUsers        = Database.Collection("users")
+	ColCourses      = Database.Collection("courses")
+	ColAccess       = Database.Collection("access")
+	ColSessions     = Database.Collection("sessions")
+	ColChannelCache = Database.Collection("channel_cache")
+	ColStreamNonces = Database.Collection("stream_nonces")
+	ColWorkers      = Database.Collection("workers")
+
+	createIndexes()
+	log.Printf("[db] connected to MongoDB — database: %s", dbName)
+}
+
+// ─── Indexes ─────────────────────────────────────────────────────────────────
+
+func createIndexes() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// users: unique username, mobile, email (sparse — empty strings don't conflict)
+	ensureIndex(ctx, ColUsers, bson.D{{Key: "username", Value: 1}}, true)
+	ensureIndex(ctx, ColUsers, bson.D{{Key: "mobile", Value: 1}}, true)
+	ensureIndex(ctx, ColUsers, bson.D{{Key: "email", Value: 1}}, true)
+
+	// sessions: unique token + TTL auto-delete when expires_at passes
+	ensureIndex(ctx, ColSessions, bson.D{{Key: "token", Value: 1}}, true)
+	ensureIndex(ctx, ColSessions, bson.D{{Key: "user_id", Value: 1}}, false)
+	ensureTTLIndex(ctx, ColSessions, "expires_at")
+
+	// access: one grant per user+course pair
+	ensureCompoundIndex(ctx, ColAccess,
+		bson.D{{Key: "user_id", Value: 1}, {Key: "course_id", Value: 1}},
+		true,
+	)
+
+	// channel_cache: fast lookup by (message_id, channel_id) — unique per channel
+	// Different courses can have the same message_id if they use different channels
+	ensureCompoundIndex(ctx, ColChannelCache,
+		bson.D{{Key: "message_id", Value: 1}, {Key: "channel_id", Value: 1}},
+		true,
+	)
+	ensureIndex(ctx, ColChannelCache, bson.D{{Key: "course_id", Value: 1}}, false)
+	ensureIndex(ctx, ColChannelCache, bson.D{{Key: "sort_order", Value: 1}}, false)
+
+	// stream_nonces: unique nonce lookup + compound unique (user_id, watch_token)
+	// so UpsertStreamNonce can replace old nonce for same user+video.
+	// TTL index auto-deletes expired nonces.
+	ensureIndex(ctx, ColStreamNonces, bson.D{{Key: "nonce", Value: 1}}, true)
+	ensureCompoundIndex(ctx, ColStreamNonces,
+		bson.D{{Key: "user_id", Value: 1}, {Key: "watch_token", Value: 1}},
+		true,
+	)
+	ensureTTLIndex(ctx, ColStreamNonces, "expires_at")
+
+	// workers: unique URL — one document per worker deployment
+	ensureIndex(ctx, ColWorkers, bson.D{{Key: "url", Value: 1}}, true)
+	ensureIndex(ctx, ColWorkers, bson.D{{Key: "status", Value: 1}}, false)
+}
+
+func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
+	model := mongo.IndexModel{
+		Keys:    keys,
+		Options: options.Index().SetUnique(unique).SetSparse(true),
+	}
+	if _, err := col.Indexes().CreateOne(ctx, model); err != nil {
+		log.Printf("[db] index warning (%s): %v", col.Name(), err)
+	}
+}
+
+func ensureCompoundIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
+	model := mongo.IndexModel{
+		Keys:    keys,
+		Options: options.Index().SetUnique(unique),
+	}
+	if _, err := col.Indexes().CreateOne(ctx, model); err != nil {
+		log.Printf("[db] compound index warning (%s): %v", col.Name(), err)
+	}
+}
+
+func ensureTTLIndex(ctx context.Context, col *mongo.Collection, field string) {
+	model := mongo.IndexModel{
+		Keys:    bson.D{{Key: field, Value: 1}},
+		Options: options.Index().SetExpireAfterSeconds(0), // MongoDB deletes at expires_at value
+	}
+	if _, err := col.Indexes().CreateOne(ctx, model); err != nil {
+		log.Printf("[db] TTL index warning (%s.%s): %v", col.Name(), field, err)
+	}
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// Ctx returns a 10-second background context for DB ops.
+func Ctx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 10*time.Second)
+}
+
+// Disconnect cleanly closes the MongoDB connection (call on shutdown).
+func Disconnect() {
+	if Client == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := Client.Disconnect(ctx); err != nil {
+		log.Printf("[db] disconnect error: %v", err)
+	}
+}

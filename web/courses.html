@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Courses · CourseStream</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --surface2: #21253a;
+    --border:   #2a2d3a;
+    --accent:   #6c63ff;
+    --accent-h: #574fd6;
+    --green:    #22c55e;
+    --green-h:  #16a34a;
+    --text:     #e8e9f0;
+    --muted:    #7a7d8e;
+    --radius:   12px;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+  }
+
+  /* ── Navbar ── */
+  nav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 1.5rem;
+    height: 56px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .nav-brand {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .nav-brand svg { width: 22px; height: 22px; fill: var(--accent); }
+  .nav-right { display: flex; align-items: center; gap: 1rem; }
+  .nav-user  { font-size: 0.85rem; color: var(--muted); }
+  .btn-logout {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    color: var(--muted);
+    font-size: 0.8rem;
+    padding: 0.35rem 0.8rem;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .btn-logout:hover { border-color: var(--muted); color: var(--text); }
+
+  /* ── Main ── */
+  main { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  /* ── Section header ── */
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+  .section-header h2 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+  .badge {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    font-size: 0.75rem;
+    color: var(--muted);
+    padding: 0.15rem 0.6rem;
+    font-weight: 500;
+  }
+  .section-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.5rem 0;
+  }
+
+  /* ── Grid ── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.25rem;
+  }
+
+  /* ── Card ── */
+  .course-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.15s, transform 0.15s;
+    text-decoration: none;
+    color: inherit;
+  }
+  .course-card:hover {
+    border-color: var(--accent);
+    transform: translateY(-2px);
+  }
+  .course-card.available:hover { border-color: var(--green); }
+
+  /* Thumbnail */
+  .thumb {
+    width: 100%;
+    aspect-ratio: 16/9;
+    object-fit: cover;
+    display: block;
+    background: var(--surface2);
+  }
+  .thumb-placeholder {
+    width: 100%;
+    aspect-ratio: 16/9;
+    background: var(--surface2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .thumb-placeholder svg { width: 40px; height: 40px; fill: var(--border); }
+
+  /* Enrolled badge on thumbnail */
+  .thumb-wrap { position: relative; }
+  .enrolled-badge {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background: rgba(34,197,94,0.9);
+    color: #fff;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    padding: 0.2rem 0.55rem;
+    border-radius: 20px;
+    text-transform: uppercase;
+  }
+
+  /* Card body */
+  .card-body {
+    padding: 1.1rem 1.25rem 1.25rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+  .course-title {
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.4;
+    margin-bottom: 0.5rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .course-desc {
+    font-size: 0.85rem;
+    color: var(--muted);
+    line-height: 1.5;
+    flex: 1;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-bottom: 1rem;
+  }
+  .card-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .file-count {
+    font-size: 0.8rem;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+  .file-count svg { width: 14px; height: 14px; fill: var(--muted); }
+
+  .price-tag {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--green);
+  }
+
+  /* Buttons */
+  .btn-watch {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.45rem 1rem;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    white-space: nowrap;
+  }
+  .btn-watch svg { width: 14px; height: 14px; fill: #fff; }
+  .course-card:hover .btn-watch { background: var(--accent-h); }
+
+  .btn-buy {
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 0.45rem 1rem;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .btn-buy svg { width: 14px; height: 14px; fill: #fff; }
+  .btn-buy:hover { background: var(--green-h); }
+
+  /* Expiry badge */
+  .expiry-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    padding: 0.2rem 0.55rem;
+    border-radius: 20px;
+    margin-top: 0.5rem;
+  }
+  .expiry-ok   { background: rgba(34,197,94,0.12);  color: #4ade80; border: 1px solid rgba(34,197,94,0.25); }
+  .expiry-warn { background: rgba(251,191,36,0.12); color: #fbbf24; border: 1px solid rgba(251,191,36,0.25); }
+  .expiry-perm { background: rgba(108,99,255,0.12); color: #a5b4fc; border: 1px solid rgba(108,99,255,0.25); }
+
+  /* ── Empty state ── */
+  .empty {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+    background: var(--surface);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+  }
+  .empty svg { width: 32px; height: 32px; fill: var(--border); margin-bottom: 0.75rem; }
+
+</style>
+</head>
+<body>
+
+<!-- Navbar -->
+<nav>
+  <div class="nav-brand">
+    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+    CourseStream
+  </div>
+  <div class="nav-right">
+    <span class="nav-user">👤 {{ .username }}</span>
+    <form method="POST" action="/logout" style="margin:0">
+      <button type="submit" class="btn-logout">Sign out</button>
+    </form>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ══════════════ MY COURSES ══════════════ -->
+  <div class="section-header">
+    <h2>📚 My Courses</h2>
+    <span class="badge">{{ len .myCourses }} enrolled</span>
+  </div>
+
+  {{ if eq (len .myCourses) 0 }}
+  <div class="empty">
+    <div><svg viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-5 14H7v-2h7v2zm3-4H7v-2h10v2zm0-4H7V7h10v2z"/></svg></div>
+    You haven't enrolled in any courses yet. Buy a course below to get started!
+  </div>
+  {{ else }}
+  <div class="grid">
+    {{ range .myCourses }}
+    <a class="course-card" href="/course/{{ .ID }}">
+      <div class="thumb-wrap">
+        {{ if .Thumbnail }}
+        <img class="thumb" src="{{ .Thumbnail }}" alt="{{ .Title }}" loading="lazy"/>
+        {{ else }}
+        <div class="thumb-placeholder">
+          <svg viewBox="0 0 24 24"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/></svg>
+        </div>
+        {{ end }}
+        <span class="enrolled-badge">✓ Enrolled</span>
+      </div>
+      <div class="card-body">
+        <div class="course-title">{{ .Title }}</div>
+        <div class="course-desc">{{ .Description }}</div>
+        {{ if .ExpiresAt }}
+        <div>
+          {{ if .IsExpiringSoon }}
+          <span class="expiry-badge expiry-warn">⚠️ Expires {{ .ExpiresAt }}</span>
+          {{ else }}
+          <span class="expiry-badge expiry-ok">✓ Valid till {{ .ExpiresAt }}</span>
+          {{ end }}
+        </div>
+        {{ else }}
+        <span class="expiry-badge expiry-perm">♾️ Permanent</span>
+        {{ end }}
+        <div class="card-footer">
+          <span class="file-count">
+            <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            {{ .FileCount }} video{{ if ne .FileCount 1 }}s{{ end }}
+          </span>
+          <span class="btn-watch">
+            <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            Watch Now
+          </span>
+        </div>
+      </div>
+    </a>
+    {{ end }}
+  </div>
+  {{ end }}
+
+  <hr class="section-divider"/>
+
+  <!-- ══════════════ AVAILABLE COURSES ══════════════ -->
+  <div class="section-header">
+    <h2>🛒 Available Courses</h2>
+    <span class="badge">{{ len .available }} courses</span>
+  </div>
+
+  {{ if eq (len .available) 0 }}
+  <div class="empty">
+    <div><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 11h-2v-2h2v2zm0-4h-2V7h2v4z"/></svg></div>
+    No new courses available right now. Check back later!
+  </div>
+  {{ else }}
+  <div class="grid">
+    {{ range .available }}
+    <div class="course-card available">
+      <div class="thumb-wrap">
+        {{ if .Thumbnail }}
+        <img class="thumb" src="{{ .Thumbnail }}" alt="{{ .Title }}" loading="lazy"/>
+        {{ else }}
+        <div class="thumb-placeholder">
+          <svg viewBox="0 0 24 24"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/></svg>
+        </div>
+        {{ end }}
+      </div>
+      <div class="card-body">
+        <div class="course-title">{{ .Title }}</div>
+        <div class="course-desc">{{ .Description }}</div>
+        <div class="card-footer">
+          {{ if .Price }}
+          <span class="price-tag">₹ {{ .Price }}</span>
+          {{ else }}
+          <span class="file-count">Course available</span>
+          {{ end }}
+          {{ if .BuyLink }}
+          <a class="btn-buy" href="{{ .BuyLink }}" target="_blank" rel="noopener" onclick="event.stopPropagation()">
+            <svg viewBox="0 0 24 24"><path d="M7 18c-1.1 0-1.99.9-1.99 2S5.9 22 7 22s2-.9 2-2-.9-2-2-2zM1 2v2h2l3.6 7.59-1.35 2.45c-.16.28-.25.61-.25.96C5 16.1 6.9 18 9 18h12v-2H9.42c-.14 0-.25-.11-.25-.25l.03-.12.9-1.63H19c.75 0 1.41-.41 1.75-1.03l3.58-6.49A1 1 0 0023.43 5H5.21l-.94-2H1zm16 16c-1.1 0-1.99.9-1.99 2S15.9 22 17 22s2-.9 2-2-.9-2-2-2z"/></svg>
+            Buy Now
+          </a>
+          {{ else }}
+          <span class="btn-buy" style="opacity:0.5;cursor:default;">Contact Admin</span>
+          {{ end }}
+        </div>
+      </div>
+    </div>
+    {{ end }}
+  </div>
+  {{ end }}
+
+</main>
+
+</body>
+</html>
