@@ -1,3 +1,4 @@
+// internal/db/mongo.go
 package db
 
 import (
@@ -25,6 +26,7 @@ var (
 	ColChannelCache *mongo.Collection
 	ColStreamNonces *mongo.Collection // per-page-load stream nonces (anti-piracy)
 	ColWorkers      *mongo.Collection // external streaming workers
+	ColOTPs         *mongo.Collection // email OTP login records (TTL: 10 min)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -92,8 +94,6 @@ type CachedFile struct {
 }
 
 // Worker — an external streaming worker instance registered with the main server.
-// Workers self-register via POST /api/worker/register on startup,
-// and send heartbeats every 25s via POST /api/worker/heartbeat.
 type Worker struct {
 	ID       primitive.ObjectID `bson:"_id"`
 	URL      string             `bson:"url"`       // "https://worker1.koyeb.app" (no trailing slash)
@@ -103,9 +103,6 @@ type Worker struct {
 }
 
 // StreamNonce — per-page-load nonce that ties a player page to its stream.
-// Generated in handleWatch, verified in handleWatchStream.
-// UpsertStreamNonce replaces any old nonce for the same (user, watchToken) pair,
-// so opening the player in a new tab invalidates the previous tab's stream.
 type StreamNonce struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty"`
 	Nonce      string             `bson:"nonce"`       // random UUID — goes in ?n= query param
@@ -153,6 +150,7 @@ func Connect() {
 	ColChannelCache = Database.Collection("channel_cache")
 	ColStreamNonces = Database.Collection("stream_nonces")
 	ColWorkers      = Database.Collection("workers")
+	ColOTPs         = Database.Collection("otp_records") // ← OTP login records
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -181,7 +179,6 @@ func createIndexes() {
 	)
 
 	// channel_cache: fast lookup by (message_id, channel_id) — unique per channel
-	// Different courses can have the same message_id if they use different channels
 	ensureCompoundIndex(ctx, ColChannelCache,
 		bson.D{{Key: "message_id", Value: 1}, {Key: "channel_id", Value: 1}},
 		true,
@@ -189,9 +186,7 @@ func createIndexes() {
 	ensureIndex(ctx, ColChannelCache, bson.D{{Key: "course_id", Value: 1}}, false)
 	ensureIndex(ctx, ColChannelCache, bson.D{{Key: "sort_order", Value: 1}}, false)
 
-	// stream_nonces: unique nonce lookup + compound unique (user_id, watch_token)
-	// so UpsertStreamNonce can replace old nonce for same user+video.
-	// TTL index auto-deletes expired nonces.
+	// stream_nonces: unique nonce + compound unique (user_id, watch_token) + TTL
 	ensureIndex(ctx, ColStreamNonces, bson.D{{Key: "nonce", Value: 1}}, true)
 	ensureCompoundIndex(ctx, ColStreamNonces,
 		bson.D{{Key: "user_id", Value: 1}, {Key: "watch_token", Value: 1}},
@@ -199,9 +194,13 @@ func createIndexes() {
 	)
 	ensureTTLIndex(ctx, ColStreamNonces, "expires_at")
 
-	// workers: unique URL — one document per worker deployment
+	// workers: unique URL
 	ensureIndex(ctx, ColWorkers, bson.D{{Key: "url", Value: 1}}, true)
 	ensureIndex(ctx, ColWorkers, bson.D{{Key: "status", Value: 1}}, false)
+
+	// otp_records: fast email lookup + TTL auto-delete on expires_at
+	ensureIndex(ctx, ColOTPs, bson.D{{Key: "email", Value: 1}}, false)
+	ensureTTLIndex(ctx, ColOTPs, "expires_at")
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
