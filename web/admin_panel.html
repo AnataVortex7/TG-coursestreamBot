@@ -59,6 +59,7 @@
   .form-hint{font-size:11px;color:#999;margin-top:4px}
   .req{color:#e53935;margin-left:2px}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 
   .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid #e0e0e0;background:#fff;color:#333;transition:all .15s}
   .btn:hover{background:#f5f5f5}
@@ -72,6 +73,8 @@
   .btn-success:hover{background:#e8f5e9;border-color:#2e7d32}
   .btn-warning{background:#fff;color:#e65100;border-color:#ffe0b2}
   .btn-warning:hover{background:#fff3e0;border-color:#e65100}
+  .btn-info{background:#fff;color:#1565c0;border-color:#bbdefb}
+  .btn-info:hover{background:#e3f2fd;border-color:#1565c0}
   .btn-sm{padding:5px 10px;font-size:12px}
 
   table{width:100%;border-collapse:collapse}
@@ -80,7 +83,6 @@
   table td{font-size:13px;padding:12px 14px;border-bottom:1px solid #f7f7f7;vertical-align:middle}
   table tr:last-child td{border-bottom:none}
   table tr:hover td{background:#fafafa}
-  /* Sync expand row */
   .sync-row{display:none;background:#f8f8ff}
   .sync-row.open{display:table-row}
   .sync-inner{padding:14px 18px;display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
@@ -95,6 +97,8 @@
   .badge-red{background:#ffebee;color:#c62828}
   .badge-blue{background:#e3f2fd;color:#1565c0}
   .badge-orange{background:#fff3e0;color:#e65100}
+  .badge-gray{background:#f5f5f5;color:#666}
+  .badge-purple{background:#ede7f6;color:#4527a0}
 
   .toast{position:fixed;bottom:24px;right:24px;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;animation:slideUp .25s ease;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,.12)}
   .toast-success{background:#2e7d32;color:#fff}
@@ -108,6 +112,11 @@
   .modal-title{font-size:16px;font-weight:700;margin-bottom:8px}
   .modal-msg{font-size:13px;color:#666;line-height:1.6}
   .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+
+  /* History modal — wider */
+  .modal-wide{max-width:780px}
+  .history-table-wrap{max-height:420px;overflow-y:auto;border-radius:8px;border:1px solid #f0f0f0}
+  .history-table-wrap table th{position:sticky;top:0;z-index:1}
 
   .empty{text-align:center;padding:36px;color:#aaa;font-size:13px}
   .empty-icon{font-size:32px;margin-bottom:8px}
@@ -125,6 +134,28 @@
   .quick-btn .qi{font-size:22px}
 
   .stats-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
+
+  /* ── URL Monitor specific ─────────────────────────────────────── */
+  .um-stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+  .um-stat{background:#fff;border:1px solid #ebebeb;border-radius:10px;padding:14px 16px}
+  .um-stat .label{font-size:11px;color:#888;font-weight:500;margin-bottom:4px}
+  .um-stat .value{font-size:22px;font-weight:700}
+
+  .um-url-cell{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-family:monospace;color:#555}
+  .um-label-cell{font-size:13px;font-weight:600}
+  .um-actions{display:flex;gap:6px;flex-wrap:wrap}
+
+  .latency-bar-wrap{display:flex;align-items:center;gap:6px}
+  .latency-bar{height:6px;border-radius:3px;min-width:4px;max-width:80px}
+
+  .ping-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+  .ping-dot-up{background:#2e7d32}
+  .ping-dot-down{background:#c62828}
+  .ping-dot-unknown{background:#bbb}
+
+  .auto-refresh-badge{font-size:11px;color:#888;display:flex;align-items:center;gap:5px}
+  .auto-refresh-dot{width:7px;height:7px;border-radius:50%;background:#2e7d32;animation:blink 1.4s infinite}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
 </style>
 </head>
 <body>
@@ -169,6 +200,9 @@
       <div class="nav-item" id="nav-sessions" onclick="goto('sessions',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Sessions
       </div>
+      <div class="nav-item" id="nav-urlmonitor" onclick="goto('urlmonitor',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>URL Monitor
+      </div>
       <div class="nav-item" id="nav-stats" onclick="goto('stats',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Stats
       </div>
@@ -202,7 +236,7 @@
             <div class="quick-btn" onclick="goto('courses',document.getElementById('nav-courses'))"><div class="qi">📖</div>Add Course</div>
             <div class="quick-btn" onclick="goto('access',document.getElementById('nav-access'))"><div class="qi">🔑</div>Grant Access</div>
             <div class="quick-btn" onclick="goto('sessions',document.getElementById('nav-sessions'))"><div class="qi">💀</div>Kill Session</div>
-            <div class="quick-btn" onclick="goto('stats',document.getElementById('nav-stats'))"><div class="qi">📊</div>View Stats</div>
+            <div class="quick-btn" onclick="goto('urlmonitor',document.getElementById('nav-urlmonitor'))"><div class="qi">🔗</div>URL Monitor</div>
             <div class="quick-btn" onclick="loadStats();toast('✅ Refresh kele!')"><div class="qi">🔄</div>Refresh</div>
           </div>
         </div>
@@ -318,15 +352,11 @@
           <div class="card-body">
             <div class="form-row">
               <label>User Select Kara <span class="req">*</span></label>
-              <select id="ga-user">
-                <option value="">-- User select kara --</option>
-              </select>
+              <select id="ga-user"><option value="">-- User select kara --</option></select>
             </div>
             <div class="form-row">
               <label>Course Select Kara <span class="req">*</span></label>
-              <select id="ga-course">
-                <option value="">-- Course select kara --</option>
-              </select>
+              <select id="ga-course"><option value="">-- Course select kara --</option></select>
             </div>
             <div class="form-row">
               <label>Months (0 = Permanent)</label>
@@ -341,15 +371,11 @@
           <div class="card-body">
             <div class="form-row">
               <label>User Select Kara <span class="req">*</span></label>
-              <select id="ra-user">
-                <option value="">-- User select kara --</option>
-              </select>
+              <select id="ra-user"><option value="">-- User select kara --</option></select>
             </div>
             <div class="form-row">
               <label>Course Select Kara <span class="req">*</span></label>
-              <select id="ra-course">
-                <option value="">-- Course select kara --</option>
-              </select>
+              <select id="ra-course"><option value="">-- Course select kara --</option></select>
             </div>
             <button class="btn btn-danger" style="margin-top:34px" onclick="execRevoke()">❌ Revoke Access</button>
           </div>
@@ -369,6 +395,60 @@
           <button class="btn btn-sm" onclick="loadSessions()">🔄 Refresh</button>
         </div>
         <div id="sessions-body"><div class="loading">⏳ Loading...</div></div>
+      </div>
+    </div>
+
+    <!-- URL MONITOR -->
+    <div class="page" id="page-urlmonitor">
+      <div class="page-header">
+        <div class="page-title">🔗 URL Monitor</div>
+        <div class="page-sub">URLs add kara, parallel ping chalu rahil, last 50 responses memory madhe</div>
+      </div>
+
+      <!-- Add URL form -->
+      <div class="card">
+        <div class="card-head"><div class="card-title">➕ Nava URL Add Kara</div></div>
+        <div class="card-body">
+          <div class="three-col">
+            <div class="form-row">
+              <label>URL <span class="req">*</span></label>
+              <input type="text" id="um-url" placeholder="https://example.com/health" autocomplete="off" />
+              <div class="form-hint">http:// kiva https:// ne suruvat pahije</div>
+            </div>
+            <div class="form-row">
+              <label>Label (Optional)</label>
+              <input type="text" id="um-label" placeholder="My API Server" autocomplete="off" />
+            </div>
+            <div class="form-row">
+              <label>Interval (Seconds) <span class="req">*</span></label>
+              <input type="number" id="um-interval" value="30" min="2" />
+              <div class="form-hint">Minimum 2 seconds</div>
+            </div>
+          </div>
+          <button class="btn btn-primary" id="addURLBtn" onclick="execAddURL()">➕ URL Monitor Madhe Add Kara</button>
+        </div>
+      </div>
+
+      <!-- Stats summary -->
+      <div class="um-stat-grid" id="um-summary-grid" style="display:none">
+        <div class="um-stat"><div class="label">Total URLs</div><div class="value" id="um-total">0</div></div>
+        <div class="um-stat"><div class="label">🟢 UP</div><div class="value" style="color:#2e7d32" id="um-up">0</div></div>
+        <div class="um-stat"><div class="label">🔴 DOWN</div><div class="value" style="color:#c62828" id="um-down">0</div></div>
+        <div class="um-stat"><div class="label">⚪ Unknown</div><div class="value" style="color:#888" id="um-unknown">0</div></div>
+      </div>
+
+      <!-- URL list -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">📋 Monitored URLs</div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <div class="auto-refresh-badge" id="um-refresh-badge" style="display:none">
+              <div class="auto-refresh-dot"></div>Auto-refresh 10s
+            </div>
+            <button class="btn btn-sm" onclick="loadURLMonitor()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div id="um-list-body"><div class="loading">⏳ Loading...</div></div>
       </div>
     </div>
 
@@ -402,11 +482,26 @@
   </div>
 </div>
 
+<!-- History Modal -->
+<div class="modal-overlay" id="historyModal">
+  <div class="modal modal-wide">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div class="modal-title" id="history-modal-title">Ping History</div>
+      <button class="btn btn-sm" onclick="document.getElementById('historyModal').classList.remove('open')">✕ Close</button>
+    </div>
+    <div id="history-modal-body"><div class="loading">⏳ Loading...</div></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="document.getElementById('historyModal').classList.remove('open')">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let adminToken = '';
 let cachedCourses = [];
 let cachedUsers = [];
+let umAutoRefreshTimer = null;
 
 // ─── API Helper ───────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
@@ -439,6 +534,7 @@ async function doLogin() {
 
 function doLogout() {
   adminToken=''; cachedCourses=[]; cachedUsers=[];
+  stopUMAutoRefresh();
   document.getElementById('panelScreen').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
   document.getElementById('loginUser').value=''; document.getElementById('loginPass').value='';
@@ -456,6 +552,8 @@ function goto(name, el) {
   if (name==='sessions') loadSessions();
   if (name==='stats') loadDetailStats();
   if (name==='access') { loadUsers(); loadCourses(); }
+  if (name==='urlmonitor') { loadURLMonitor(); startUMAutoRefresh(); }
+  else stopUMAutoRefresh();
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
@@ -569,7 +667,7 @@ function populateUserDropdowns() {
     const cur=sel.value;
     sel.innerHTML='<option value="">-- User select kara --</option>';
     cachedUsers.forEach(u=>{
-      if (!u.is_active) return; // फक्त active users
+      if (!u.is_active) return;
       const opt=document.createElement('option');
       opt.value=u.id;
       const contact=u.mobile||u.email||u.username;
@@ -674,7 +772,6 @@ async function execSync(courseId, title, idx) {
     if (!res.ok){ toast('❌ '+(d.error||'Sync failed'),'error'); return; }
     statusEl.style.display='inline';
     toast('🔄 "'+title+'" sync background madhe chalu zali! (Range: '+start+'→'+end+')','info');
-    // 8 seconds nantar files count refresh kar
     setTimeout(()=>loadCourses(), 8000);
   } catch(e){ toast('❌ Network error','error'); }
 }
@@ -751,7 +848,7 @@ async function loadSessions() {
       h+=`<div class="session-item">
         <div class="session-info">
           <div class="uname">👤 ${esc(s.full_name||s.username)} <span style="font-size:11px;font-weight:400;color:#888">(@${esc(s.username)})</span></div>
-          <div class="meta">${s.mobile?'📱 '+esc(s.mobile)+' &nbsp;·&nbsp; ':''}${s.email?'📧 '+esc(s.email)+' &nbsp;·&nbsp; '  :''}🌐 ${esc(s.ip)} &nbsp;·&nbsp; ⏰ Expires: ${esc(s.expires_at)}</div>
+          <div class="meta">${s.mobile?'📱 '+esc(s.mobile)+' &nbsp;·&nbsp; ':''}${s.email?'📧 '+esc(s.email)+' &nbsp;·&nbsp; ':''}🌐 ${esc(s.ip)} &nbsp;·&nbsp; ⏰ Expires: ${esc(s.expires_at)}</div>
           <div class="token">Token: ${esc(s.token_hint)}</div>
         </div>
         <button class="btn btn-danger btn-sm" onclick="killSession(${JSON.stringify(s.token)},'${esc(s.username)}')">💀 Kill</button>
@@ -767,6 +864,200 @@ async function killSession(token, username) {
     if (res.ok){ toast('✅ '+username+' la logout kela!'); loadSessions(); }
     else{ const d=await res.json(); toast('❌ '+(d.error||'Error'),'error'); }
   } catch{ toast('❌ Network error','error'); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// URL MONITOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function startUMAutoRefresh() {
+  stopUMAutoRefresh();
+  umAutoRefreshTimer = setInterval(loadURLMonitor, 10000);
+  const badge = document.getElementById('um-refresh-badge');
+  if (badge) badge.style.display='flex';
+}
+
+function stopUMAutoRefresh() {
+  if (umAutoRefreshTimer) { clearInterval(umAutoRefreshTimer); umAutoRefreshTimer=null; }
+  const badge = document.getElementById('um-refresh-badge');
+  if (badge) badge.style.display='none';
+}
+
+async function execAddURL() {
+  const url = document.getElementById('um-url').value.trim();
+  const label = document.getElementById('um-label').value.trim();
+  const interval = parseInt(document.getElementById('um-interval').value) || 30;
+  if (!url) { toast('❌ URL required aahe','error'); return; }
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    toast('❌ URL http:// kiva https:// ne suruvat pahije','error'); return;
+  }
+  if (interval < 2) { toast('❌ Minimum interval 2 seconds aahe','error'); return; }
+  const btn = document.getElementById('addURLBtn');
+  btn.disabled=true; btn.textContent='⏳ Adding...';
+  try {
+    const res = await api('/urlmonitor', {method:'POST', body:JSON.stringify({url, label, interval_seconds:interval})});
+    const d = await res.json();
+    if (!res.ok) { toast('❌ '+(d.error||'Error'),'error'); return; }
+    toast('✅ URL monitor madhe add kela! Ping chalu zala.');
+    document.getElementById('um-url').value='';
+    document.getElementById('um-label').value='';
+    document.getElementById('um-interval').value='30';
+    loadURLMonitor();
+  } catch(e){ toast('❌ Network error','error'); }
+  finally { btn.disabled=false; btn.textContent='➕ URL Monitor Madhe Add Kara'; }
+}
+
+async function loadURLMonitor() {
+  const wrap = document.getElementById('um-list-body');
+  try {
+    const res = await api('/urlmonitor');
+    const list = await res.json();
+
+    // Update summary stats
+    const total = list.length;
+    let up=0, down=0, unknown=0;
+    list.forEach(u => {
+      if (!u.last_result) { unknown++; return; }
+      if (u.last_result.is_up) up++; else down++;
+    });
+    document.getElementById('um-total').textContent = total;
+    document.getElementById('um-up').textContent = up;
+    document.getElementById('um-down').textContent = down;
+    document.getElementById('um-unknown').textContent = unknown;
+    const summaryGrid = document.getElementById('um-summary-grid');
+    if (summaryGrid) summaryGrid.style.display = total > 0 ? 'grid' : 'none';
+
+    if (!list.length) {
+      wrap.innerHTML='<div class="empty"><div class="empty-icon">🔗</div>Koni URL add kele nahi yet<br><span style="font-size:12px">Varti form madhe URL add kara</span></div>';
+      return;
+    }
+
+    let h = '<div class="table-wrap"><table><thead><tr><th>Status</th><th>Label / URL</th><th>Interval</th><th>Last Ping</th><th>Latency</th><th>Uptime %</th><th style="min-width:220px">Actions</th></tr></thead><tbody>';
+
+    list.forEach(u => {
+      const lr = u.last_result;
+      let statusBadge, dotClass;
+      if (!lr) {
+        statusBadge = '<span class="badge badge-gray">⚪ Unknown</span>';
+        dotClass = 'ping-dot-unknown';
+      } else if (lr.is_up) {
+        statusBadge = `<span class="badge badge-green">🟢 UP ${lr.status_code}</span>`;
+        dotClass = 'ping-dot-up';
+      } else {
+        statusBadge = `<span class="badge badge-red">🔴 DOWN${lr.status_code?' '+lr.status_code:''}</span>`;
+        dotClass = 'ping-dot-down';
+      }
+
+      const lastPing = lr ? fmtTime(lr.timestamp) : '—';
+      const latency = lr ? lr.latency_ms+'ms' : '—';
+      const uptime = u.uptime_pct > 0 ? u.uptime_pct.toFixed(1)+'%' : (lr ? '0%' : '—');
+      const uptimeColor = u.uptime_pct >= 90 ? '#2e7d32' : u.uptime_pct >= 50 ? '#e65100' : '#c62828';
+
+      const label = u.label || '';
+      const shortURL = u.url.length > 45 ? u.url.slice(0,45)+'…' : u.url;
+
+      h += `<tr>
+        <td>${statusBadge}</td>
+        <td>
+          ${label ? `<div class="um-label-cell">${esc(label)}</div>` : ''}
+          <div class="um-url-cell" title="${esc(u.url)}">${esc(shortURL)}</div>
+        </td>
+        <td><span class="badge badge-purple">⏱ ${u.interval_seconds}s</span></td>
+        <td style="font-size:12px;color:#888">${lastPing}</td>
+        <td style="font-size:12px;font-family:monospace">${latency}</td>
+        <td style="font-weight:600;color:${uptimeColor}">${uptime}</td>
+        <td>
+          <div class="um-actions">
+            <button class="btn btn-info btn-sm" onclick="showHistory('${u.id}','${esc(u.label||u.url)}')">📊 History</button>
+            <button class="btn btn-warning btn-sm" onclick="manualCheck('${u.id}','${esc(u.label||shortURL)}')">⚡ Check</button>
+            <button class="btn btn-danger btn-sm" onclick="removeURL('${u.id}','${esc(u.label||shortURL)}')">🗑 Remove</button>
+          </div>
+        </td>
+      </tr>`;
+    });
+
+    h += '</tbody></table></div>';
+    wrap.innerHTML = h;
+
+  } catch(e){
+    wrap.innerHTML='<div class="empty"><div class="empty-icon">❌</div>URL Monitor load hovu shakla nahi</div>';
+  }
+}
+
+async function manualCheck(id, label) {
+  toast('⚡ '+label+' — manual check chalu...','info');
+  try {
+    const res = await api('/urlmonitor/'+id+'/check', {method:'POST'});
+    const d = await res.json();
+    if (!res.ok) { toast('❌ '+(d.error||'Error'),'error'); return; }
+    const status = d.is_up ? '🟢 UP ('+d.status_code+')' : '🔴 DOWN';
+    toast('✅ '+label+' — '+status+' | '+d.latency_ms+'ms');
+    loadURLMonitor();
+  } catch(e){ toast('❌ Network error','error'); }
+}
+
+async function showHistory(id, label) {
+  document.getElementById('history-modal-title').textContent = '📊 '+label+' — Last 50 Pings';
+  document.getElementById('history-modal-body').innerHTML = '<div class="loading">⏳ Loading...</div>';
+  document.getElementById('historyModal').classList.add('open');
+  try {
+    const res = await api('/urlmonitor/'+id+'/history');
+    const history = await res.json();
+    if (!history || !history.length) {
+      document.getElementById('history-modal-body').innerHTML = '<div class="empty"><div class="empty-icon">📭</div>Abhi koni ping results nahi</div>';
+      return;
+    }
+    // Reverse — newest first
+    const sorted = [...history].reverse();
+    let h = '<div class="history-table-wrap"><table><thead><tr><th>#</th><th>Time</th><th>Status</th><th>Code</th><th>Latency</th><th>Error</th></tr></thead><tbody>';
+    sorted.forEach((p, i) => {
+      const statusDot = p.is_up
+        ? '<span class="ping-dot ping-dot-up"></span>UP'
+        : '<span class="ping-dot ping-dot-down"></span>DOWN';
+      const latencyColor = p.latency_ms < 300 ? '#2e7d32' : p.latency_ms < 1000 ? '#e65100' : '#c62828';
+      h += `<tr>
+        <td style="color:#bbb;font-size:11px">${sorted.length - i}</td>
+        <td style="font-size:12px;white-space:nowrap">${fmtTimeFull(p.timestamp)}</td>
+        <td>${statusDot}</td>
+        <td style="font-family:monospace;font-size:12px">${p.status_code||'—'}</td>
+        <td style="font-family:monospace;font-size:12px;color:${latencyColor}">${p.latency_ms}ms</td>
+        <td style="font-size:11px;color:#e53935;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.error||'')}">${esc(p.error||'—')}</td>
+      </tr>`;
+    });
+    h += '</tbody></table></div>';
+    document.getElementById('history-modal-body').innerHTML = h;
+  } catch(e){
+    document.getElementById('history-modal-body').innerHTML = '<div class="empty"><div class="empty-icon">❌</div>History load hovu shakli nahi</div>';
+  }
+}
+
+function removeURL(id, label) {
+  openModal('URL Remove kara?', `"${label}" remove kelyavar tyachi monitoring band hoil ani Mongo madhun delete hoil. Memory madhe saglya results pan jatil.`, async()=>{
+    try {
+      const res = await api('/urlmonitor/'+id, {method:'DELETE'});
+      if (res.ok){ toast('✅ '+label+' remove kela'); loadURLMonitor(); }
+      else{ const d=await res.json(); toast('❌ '+(d.error||'Error'),'error'); }
+    } catch{ toast('❌ Network error','error'); }
+  });
+}
+
+// ─── Time helpers ────────────────────────────────────────────────────────────
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const now = new Date();
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 5) return 'Just now';
+  if (diff < 60) return diff+'s ago';
+  if (diff < 3600) return Math.floor(diff/60)+'m ago';
+  return d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'});
+}
+
+function fmtTimeFull(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) + ' ' +
+         d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
 </script>
 </body>
