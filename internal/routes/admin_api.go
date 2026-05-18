@@ -3,16 +3,19 @@ package routes
 
 import (
 	"EverythingSuckz/fsb/internal/auth"
+	"EverythingSuckz/fsb/internal/commands"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/utils"
 	"context"
 	"encoding/base64"
+	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"go.mongodb.org/mongo-driver/bson"
+	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -83,11 +86,14 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	api.POST("/courses", adminAddCourse)
 	api.DELETE("/courses/:id", adminDeleteCourse)
 
+	// Sync — background goroutine using bot's Telegram client
+	api.POST("/sync", adminSyncChannel)
+
 	// Sessions
 	api.GET("/sessions", adminListSessions)
 	api.POST("/sessions/kill", adminKillSession)
 
-	// Access
+	// Access — accepts user_id directly from dropdown
 	api.POST("/access/grant", adminGrantAccess)
 	api.POST("/access/revoke", adminRevokeAccess)
 }
@@ -181,7 +187,6 @@ func adminAddUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
 	c.JSON(http.StatusOK, user)
 }
 
@@ -195,7 +200,6 @@ func adminDeleteUser(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	// Kill all active sessions for this user
 	_ = db.DeleteAllSessionsForUser(id)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -263,6 +267,158 @@ func adminDeleteCourse(c *gin.Context) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// SYNC CHANNEL — background goroutine, bot's Telegram client directly
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func adminSyncChannel(c *gin.Context) {
+	var req struct {
+		CourseID string `json:"course_id"`
+		Start    int    `json:"start"`
+		End      int    `json:"end"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if req.CourseID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Course ID required"})
+		return
+	}
+	if req.Start < 1 || req.End < req.Start {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Start ≥ 1 ani End ≥ Start pahije"})
+		return
+	}
+
+	courseID, err := primitive.ObjectIDFromHex(req.CourseID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	course, err := db.GetCourseByID(courseID)
+	if err != nil || course == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+	if course.ChannelID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ya course la Telegram channel set nahi"})
+		return
+	}
+
+	client := commands.MainBotClient
+	if client == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Bot client ready nahi — bot started aahe ka check kara"})
+		return
+	}
+
+	startID := req.Start
+	endID := req.End
+
+	// Background goroutine — API immediately return karto
+	go func() {
+		ctx := context.Background()
+		const batchSize = 100
+
+		channel, err := utils.GetChannelPeer(ctx, client.API(), client.PeerStorage, course.ChannelID)
+		if err != nil {
+			log.Printf("[AdminSync] GetChannelPeer failed for %s: %v", course.Title, err)
+			return
+		}
+
+		total := 0
+		skipped := 0
+
+		for batchStart := startID; batchStart <= endID; batchStart += batchSize {
+			batchEnd := batchStart + batchSize - 1
+			if batchEnd > endID {
+				batchEnd = endID
+			}
+
+			ids := make([]tg.InputMessageClass, 0, batchEnd-batchStart+1)
+			for id := batchStart; id <= batchEnd; id++ {
+				ids = append(ids, &tg.InputMessageID{ID: id})
+			}
+
+			res, fetchErr := client.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+				Channel: channel,
+				ID:      ids,
+			})
+			if fetchErr != nil {
+				log.Printf("[AdminSync] Fetch failed: %v", fetchErr)
+				break
+			}
+
+			messages, ok := res.(*tg.MessagesChannelMessages)
+			if !ok {
+				log.Printf("[AdminSync] Unexpected Telegram response type")
+				break
+			}
+
+			for _, rawMsg := range messages.Messages {
+				msg, ok := rawMsg.(*tg.Message)
+				if !ok || msg.Media == nil {
+					skipped++
+					continue
+				}
+
+				file, err := utils.FileFromMedia(msg.Media)
+				if err != nil {
+					skipped++
+					continue
+				}
+
+				caption := strings.TrimSpace(msg.Message)
+				title := caption
+				if title == "" {
+					title = adminStripExt(file.FileName)
+				}
+
+				sortOrder, _ := db.HighestSortOrder(courseID)
+				cached := &db.CachedFile{
+					MessageID: msg.ID,
+					ChannelID: course.ChannelID,
+					CourseID:  courseID,
+					Title:     title,
+					Caption:   caption,
+					FileName:  file.FileName,
+					MimeType:  file.MimeType,
+					FileSize:  file.FileSize,
+					SortOrder: sortOrder + 1,
+					CreatedAt: time.Now(),
+				}
+				if err := db.UpsertCachedFile(cached); err != nil {
+					skipped++
+					continue
+				}
+				total++
+			}
+
+			// Rate limit टाळण्यासाठी pause
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		log.Printf("[AdminSync] ✅ Done — Course: %s | Range: %d→%d | Cached: %d | Skipped: %d",
+			course.Title, startID, endID, total, skipped)
+	}()
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "started",
+		"message": "Sync background madhe chalu zali! Thodyach velat files count update hoil.",
+		"course":  course.Title,
+	})
+}
+
+// adminStripExt — filename madhun extension kadhto
+func adminStripExt(name string) string {
+	for i := len(name) - 1; i >= 0; i-- {
+		if name[i] == '.' {
+			return name[:i]
+		}
+	}
+	return name
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // SESSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -275,8 +431,8 @@ type sessionRow struct {
 	IP        string `json:"ip"`
 	UserAgent string `json:"user_agent"`
 	ExpiresAt string `json:"expires_at"`
-	Token     string `json:"token"` // full token — used for kill request
-	TokenHint string `json:"token_hint"` // last 8 chars — for display only
+	Token     string `json:"token"`      // full token — for kill
+	TokenHint string `json:"token_hint"` // last 8 chars — display only
 }
 
 func adminListSessions(c *gin.Context) {
@@ -332,77 +488,82 @@ func adminKillSession(c *gin.Context) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ACCESS CONTROL
+// ACCESS CONTROL — user_id aani course_id dropdown madhuun directly येतात
 // ═══════════════════════════════════════════════════════════════════════════════
 
 func adminGrantAccess(c *gin.Context) {
 	var req struct {
-		Identifier string `json:"identifier"` // mobile or email
-		CourseID   string `json:"course_id"`
-		Months     int    `json:"months"` // 0 = permanent
+		UserID   string `json:"user_id"`
+		CourseID string `json:"course_id"`
+		Months   int    `json:"months"` // 0 = permanent
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
-	if req.Identifier == "" || req.CourseID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Identifier and Course ID are required"})
+	if req.UserID == "" || req.CourseID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User ani Course select kara"})
 		return
 	}
 
-	user, err := db.GetUserByMobileOrEmail(strings.ToLower(strings.TrimSpace(req.Identifier)))
-	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found with this mobile/email"})
+	userID, err := primitive.ObjectIDFromHex(req.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
 		return
 	}
-
 	courseID, err := primitive.ObjectIDFromHex(req.CourseID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
 	}
 
-	if err := db.GrantAccess(user.ID, courseID, 0, req.Months); err != nil {
+	user, err := db.GetUserByID(userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	if err := db.GrantAccess(userID, courseID, 0, req.Months); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username, "full_name": user.FullName})
 }
 
 func adminRevokeAccess(c *gin.Context) {
 	var req struct {
-		Identifier string `json:"identifier"`
-		CourseID   string `json:"course_id"`
+		UserID   string `json:"user_id"`
+		CourseID string `json:"course_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
-	if req.Identifier == "" || req.CourseID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Identifier and Course ID are required"})
+	if req.UserID == "" || req.CourseID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User ani Course select kara"})
 		return
 	}
 
-	user, err := db.GetUserByMobileOrEmail(strings.ToLower(strings.TrimSpace(req.Identifier)))
-	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found with this mobile/email"})
+	userID, err := primitive.ObjectIDFromHex(req.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
 		return
 	}
-
 	courseID, err := primitive.ObjectIDFromHex(req.CourseID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
 	}
 
-	if err := db.RevokeAccess(user.ID, courseID); err != nil {
+	user, err := db.GetUserByID(userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	if err := db.RevokeAccess(userID, courseID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username, "full_name": user.FullName})
 }
-
-// ─── unused import guard ──────────────────────────────────────────────────────
-var _ = context.Background
-var _ = bson.M{}
-var _ = time.Now
