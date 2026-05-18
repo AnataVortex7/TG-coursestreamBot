@@ -5,6 +5,7 @@ import (
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/commands"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/email"
 	"EverythingSuckz/fsb/internal/urlmonitor"
 	"EverythingSuckz/fsb/internal/utils"
 	"context"
@@ -97,6 +98,9 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// Access — accepts user_id directly from dropdown
 	api.POST("/access/grant", adminGrantAccess)
 	api.POST("/access/revoke", adminRevokeAccess)
+
+	// Messaging — admin user la message pathavto
+	api.POST("/send-message", adminSendMessageToUser)
 
 	// ─── URL Monitor ─────────────────────────────────────────────────────────
 	api.GET("/urlmonitor", adminURLMonitorList)
@@ -666,4 +670,61 @@ func adminURLMonitorCheck(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MESSAGING — Admin → User email
+// POST /api/admin/send-message
+// Body: { "user_id": "...", "subject": "...", "message": "..." }
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func adminSendMessageToUser(c *gin.Context) {
+	var req struct {
+		UserID  string `json:"user_id"`
+		Subject string `json:"subject"`
+		Message string `json:"message"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	req.Subject = strings.TrimSpace(req.Subject)
+	req.Message = strings.TrimSpace(req.Message)
+	if req.UserID == "" || req.Subject == "" || req.Message == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User, subject ani message sagale bharave"})
+		return
+	}
+
+	userID, err := primitive.ObjectIDFromHex(req.UserID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	user, err := db.GetUserByID(userID)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	if user.Email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Ya user kade email address nahi, message pathavta yet nahi"})
+		return
+	}
+
+	appName := os.Getenv("BREVO_FROM_NAME")
+	if appName == "" {
+		appName = "CourseStream"
+	}
+
+	if err := email.SendAdminToUserMessage(user.Email, user.FullName, req.Subject, req.Message, appName); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Email pathavta ala nahi: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       true,
+		"username": user.Username,
+		"email":    user.Email,
+	})
 }
