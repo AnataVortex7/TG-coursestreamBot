@@ -9,20 +9,18 @@
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f5f7;color:#1a1a1a;min-height:100vh}
   a{text-decoration:none;color:inherit}
 
-  /* ── Login ── */
   .login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f4f5f7}
   .login-card{background:#fff;border-radius:16px;padding:40px 36px;width:100%;max-width:380px;box-shadow:0 2px 16px rgba(0,0,0,.08)}
-  .login-logo{font-size:22px;font-weight:700;margin-bottom:4px;color:#1a1a1a}
+  .login-logo{font-size:22px;font-weight:700;margin-bottom:4px}
   .login-sub{font-size:13px;color:#666;margin-bottom:28px}
   .login-card label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
-  .login-card input{width:100%;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;color:#1a1a1a;background:#fafafa;margin-bottom:14px;outline:none;transition:border .15s}
+  .login-card input{width:100%;padding:10px 12px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;background:#fafafa;margin-bottom:14px;outline:none;transition:border .15s}
   .login-card input:focus{border-color:#6c63ff;background:#fff}
   .login-btn{width:100%;padding:11px;background:#6c63ff;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px;transition:opacity .15s}
   .login-btn:hover{opacity:.88}
   .login-btn:disabled{opacity:.5;cursor:not-allowed}
   .login-err{font-size:12px;color:#e53935;margin-top:8px;display:none}
 
-  /* ── Layout ── */
   .layout{display:flex;min-height:100vh}
   .sidebar{width:220px;min-width:220px;background:#1e1e2d;display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;z-index:10}
   .sidebar-logo{padding:20px 20px 14px;border-bottom:1px solid rgba(255,255,255,.07)}
@@ -38,37 +36,30 @@
   .logout-btn:hover{color:#ff5252}
 
   .main{margin-left:220px;flex:1;padding:28px 28px 40px;min-height:100vh}
-  .page{display:none}
-  .page.active{display:block}
-
+  .page{display:none}.page.active{display:block}
   .page-header{margin-bottom:24px}
-  .page-title{font-size:20px;font-weight:700;color:#1a1a1a}
+  .page-title{font-size:20px;font-weight:700}
   .page-sub{font-size:13px;color:#888;margin-top:3px}
 
-  /* ── Cards ── */
   .card{background:#fff;border-radius:12px;border:1px solid #ebebeb;margin-bottom:20px;overflow:hidden}
   .card-head{padding:14px 18px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;justify-content:space-between}
-  .card-title{font-size:14px;font-weight:600;color:#1a1a1a;display:flex;align-items:center;gap:8px}
+  .card-title{font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
   .card-body{padding:18px}
 
-  /* ── Stats ── */
   .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
   .stat-card{background:#fff;border-radius:12px;border:1px solid #ebebeb;padding:16px 18px}
   .stat-label{font-size:12px;color:#888;font-weight:500;margin-bottom:6px}
-  .stat-value{font-size:26px;font-weight:700;color:#1a1a1a}
+  .stat-value{font-size:26px;font-weight:700}
   .stat-icon{font-size:20px;margin-bottom:8px}
 
-  /* ── Forms ── */
   .form-row{margin-bottom:14px}
   .form-row label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
-  .form-row input,.form-row select,.form-row textarea{width:100%;padding:9px 12px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:13px;color:#1a1a1a;background:#fafafa;outline:none;transition:border .15s}
-  .form-row input:focus,.form-row select:focus,.form-row textarea:focus{border-color:#6c63ff;background:#fff}
+  .form-row input,.form-row select{width:100%;padding:9px 12px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:13px;background:#fafafa;outline:none;transition:border .15s}
+  .form-row input:focus,.form-row select:focus{border-color:#6c63ff;background:#fff}
   .form-hint{font-size:11px;color:#999;margin-top:4px}
-  .required-star{color:#e53935;margin-left:2px}
+  .req{color:#e53935;margin-left:2px}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 
-  /* ── Buttons ── */
   .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid #e0e0e0;background:#fff;color:#333;transition:all .15s}
   .btn:hover{background:#f5f5f5}
   .btn:active{transform:scale(.98)}
@@ -82,64 +73,63 @@
   .btn-warning{background:#fff;color:#e65100;border-color:#ffe0b2}
   .btn-warning:hover{background:#fff3e0;border-color:#e65100}
   .btn-sm{padding:5px 10px;font-size:12px}
-  .btn-icon{padding:6px 8px;border-radius:6px}
 
-  /* ── Table ── */
-  .table-wrap{overflow-x:auto}
   table{width:100%;border-collapse:collapse}
+  .table-wrap{overflow-x:auto}
   table th{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;padding:10px 14px;border-bottom:1px solid #f0f0f0;background:#fafafa;text-align:left}
-  table td{font-size:13px;padding:12px 14px;border-bottom:1px solid #f7f7f7;vertical-align:middle;color:#1a1a1a}
+  table td{font-size:13px;padding:12px 14px;border-bottom:1px solid #f7f7f7;vertical-align:middle}
   table tr:last-child td{border-bottom:none}
   table tr:hover td{background:#fafafa}
+  /* Sync expand row */
+  .sync-row{display:none;background:#f8f8ff}
+  .sync-row.open{display:table-row}
+  .sync-inner{padding:14px 18px;display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+  .sync-field{display:flex;flex-direction:column;gap:4px;min-width:120px}
+  .sync-field label{font-size:11px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.4px}
+  .sync-field input{padding:7px 10px;border:1.5px solid #e5e5e5;border-radius:7px;font-size:13px;background:#fff;outline:none;transition:border .15s;width:130px}
+  .sync-field input:focus{border-color:#6c63ff}
+  .sync-status{font-size:12px;color:#2e7d32;font-weight:600;align-self:center;display:none}
 
-  /* ── Badges ── */
   .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}
   .badge-green{background:#e8f5e9;color:#2e7d32}
   .badge-red{background:#ffebee;color:#c62828}
   .badge-blue{background:#e3f2fd;color:#1565c0}
   .badge-orange{background:#fff3e0;color:#e65100}
-  .badge-purple{background:#ede7f6;color:#4527a0}
 
-  /* ── Toast ── */
   .toast{position:fixed;bottom:24px;right:24px;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;animation:slideUp .25s ease;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,.12)}
   .toast-success{background:#2e7d32;color:#fff}
   .toast-error{background:#c62828;color:#fff}
   .toast-info{background:#1565c0;color:#fff}
   @keyframes slideUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 
-  /* ── Modal ── */
   .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100;align-items:center;justify-content:center}
   .modal-overlay.open{display:flex}
   .modal{background:#fff;border-radius:14px;padding:28px;width:100%;max-width:420px;margin:16px;box-shadow:0 8px 40px rgba(0,0,0,.15)}
-  .modal-title{font-size:16px;font-weight:700;color:#1a1a1a;margin-bottom:8px}
+  .modal-title{font-size:16px;font-weight:700;margin-bottom:8px}
   .modal-msg{font-size:13px;color:#666;line-height:1.6}
   .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
 
-  /* ── Empty / Loading ── */
   .empty{text-align:center;padding:36px;color:#aaa;font-size:13px}
   .empty-icon{font-size:32px;margin-bottom:8px}
   .loading{text-align:center;padding:24px;color:#aaa;font-size:13px}
 
-  /* ── Session row ── */
   .session-item{display:flex;align-items:flex-start;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #f5f5f5;gap:12px}
   .session-item:last-child{border-bottom:none}
-  .session-info .uname{font-size:13px;font-weight:600;color:#1a1a1a}
+  .session-info .uname{font-size:13px;font-weight:600}
   .session-info .meta{font-size:11px;color:#888;margin-top:3px}
   .session-info .token{font-size:11px;font-family:monospace;color:#bbb;margin-top:2px}
 
-  /* ── Quick actions ── */
   .quick-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
   .quick-btn{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 12px;border-radius:10px;border:1.5px solid #ebebeb;background:#fff;cursor:pointer;transition:all .15s;font-size:12px;font-weight:600;color:#555}
   .quick-btn:hover{border-color:#6c63ff;color:#6c63ff;background:#f5f4ff}
   .quick-btn .qi{font-size:22px}
 
-  /* ── Stats detail grid ── */
   .stats-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
 </style>
 </head>
 <body>
 
-<!-- ══════════════════════════════════ LOGIN ══════════════════════════════════ -->
+<!-- LOGIN -->
 <div class="login-screen" id="loginScreen">
   <div class="login-card">
     <div class="login-logo">🤖 Admin Panel</div>
@@ -153,10 +143,8 @@
   </div>
 </div>
 
-<!-- ══════════════════════════════════ PANEL ══════════════════════════════════ -->
+<!-- PANEL -->
 <div class="layout" id="panelScreen" style="display:none">
-
-  <!-- Sidebar -->
   <div class="sidebar">
     <div class="sidebar-logo">
       <div class="name">🤖 Akshay Panel</div>
@@ -165,44 +153,36 @@
     <div style="flex:1;overflow-y:auto">
       <div class="nav-section">Overview</div>
       <div class="nav-item active" id="nav-dashboard" onclick="goto('dashboard',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-        Dashboard
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Dashboard
       </div>
       <div class="nav-section">Management</div>
       <div class="nav-item" id="nav-users" onclick="goto('users',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        Users
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Users
       </div>
       <div class="nav-item" id="nav-courses" onclick="goto('courses',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        Courses
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Courses
       </div>
       <div class="nav-item" id="nav-access" onclick="goto('access',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
-        Access Control
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>Access Control
       </div>
       <div class="nav-section">System</div>
       <div class="nav-item" id="nav-sessions" onclick="goto('sessions',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        Sessions
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Sessions
       </div>
       <div class="nav-item" id="nav-stats" onclick="goto('stats',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-        Stats
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Stats
       </div>
     </div>
     <div class="nav-bottom">
       <button class="logout-btn" onclick="doLogout()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        Logout
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>Logout
       </button>
     </div>
   </div>
 
-  <!-- Main -->
   <div class="main">
 
-    <!-- ── DASHBOARD ── -->
+    <!-- DASHBOARD -->
     <div class="page active" id="page-dashboard">
       <div class="page-header">
         <div class="page-title">Dashboard</div>
@@ -223,29 +203,25 @@
             <div class="quick-btn" onclick="goto('access',document.getElementById('nav-access'))"><div class="qi">🔑</div>Grant Access</div>
             <div class="quick-btn" onclick="goto('sessions',document.getElementById('nav-sessions'))"><div class="qi">💀</div>Kill Session</div>
             <div class="quick-btn" onclick="goto('stats',document.getElementById('nav-stats'))"><div class="qi">📊</div>View Stats</div>
-            <div class="quick-btn" onclick="loadStats();toast('✅ Stats refresh kele!')"><div class="qi">🔄</div>Refresh</div>
+            <div class="quick-btn" onclick="loadStats();toast('✅ Refresh kele!')"><div class="qi">🔄</div>Refresh</div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ── USERS ── -->
+    <!-- USERS -->
     <div class="page" id="page-users">
       <div class="page-header">
         <div class="page-title">Users</div>
         <div class="page-sub">Add, view ani disable users</div>
       </div>
-
-      <!-- Add User Form -->
       <div class="card">
         <div class="card-head"><div class="card-title">➕ Nava User Add Kara</div></div>
         <div class="card-body">
-          <!-- Row 1: Full Name -->
           <div class="form-row">
-            <label>Full Name <span class="required-star">*</span></label>
+            <label>Full Name <span class="req">*</span></label>
             <input type="text" id="au-name" placeholder="Rahul Sharma" autocomplete="off" />
           </div>
-          <!-- Row 2: Mobile + Email -->
           <div class="two-col">
             <div class="form-row">
               <label>Mobile Number</label>
@@ -255,28 +231,24 @@
             <div class="form-row">
               <label>Email Address</label>
               <input type="email" id="au-email" placeholder="user@gmail.com" autocomplete="off" />
-              <div class="form-hint">Email optional aahe, mobile असल्यास</div>
             </div>
           </div>
-          <!-- Row 3: Password + Confirm -->
           <div class="two-col">
             <div class="form-row">
-              <label>Password <span class="required-star">*</span></label>
+              <label>Password <span class="req">*</span></label>
               <input type="password" id="au-pass" placeholder="Minimum 6 characters" autocomplete="new-password" />
             </div>
             <div class="form-row">
-              <label>Confirm Password <span class="required-star">*</span></label>
+              <label>Confirm Password <span class="req">*</span></label>
               <input type="password" id="au-cpass" placeholder="Password repeat kara" autocomplete="new-password" />
             </div>
           </div>
-          <div style="margin-top:6px;display:flex;gap:10px;align-items:center">
+          <div style="display:flex;gap:10px;align-items:center;margin-top:6px">
             <button class="btn btn-primary" id="addUserBtn" onclick="execAddUser()">➕ User Add Kara</button>
             <span style="font-size:12px;color:#999">* Required fields</span>
           </div>
         </div>
       </div>
-
-      <!-- Users List -->
       <div class="card">
         <div class="card-head">
           <div class="card-title">📋 All Users</div>
@@ -286,20 +258,18 @@
       </div>
     </div>
 
-    <!-- ── COURSES ── -->
+    <!-- COURSES -->
     <div class="page" id="page-courses">
       <div class="page-header">
         <div class="page-title">Courses</div>
-        <div class="page-sub">Add, view ani delete courses</div>
+        <div class="page-sub">Add, view, sync ani delete courses</div>
       </div>
-
-      <!-- Add Course Form -->
       <div class="card">
         <div class="card-head"><div class="card-title">➕ Nava Course Add Kara</div></div>
         <div class="card-body">
           <div class="two-col">
             <div class="form-row">
-              <label>Course Title <span class="required-star">*</span></label>
+              <label>Course Title <span class="req">*</span></label>
               <input type="text" id="ac-title" placeholder="Python Basics" />
             </div>
             <div class="form-row">
@@ -317,19 +287,16 @@
             <div class="form-row">
               <label>Thumbnail URL</label>
               <input type="text" id="ac-thumb" placeholder="https://example.com/image.jpg" />
-              <div class="form-hint">Optional — course image URL</div>
             </div>
             <div class="form-row">
-              <label>Telegram Channel ID <span class="required-star">*</span></label>
+              <label>Telegram Channel ID <span class="req">*</span></label>
               <input type="text" id="ac-ch" placeholder="-1001234567890" />
-              <div class="form-hint">@userinfobot la channel madhe forward kara — ID milel</div>
+              <div class="form-hint">@userinfobot la forward kara — ID milel</div>
             </div>
           </div>
           <button class="btn btn-primary" id="addCourseBtn" style="margin-top:6px" onclick="execAddCourse()">➕ Course Add Kara</button>
         </div>
       </div>
-
-      <!-- Courses List -->
       <div class="card">
         <div class="card-head">
           <div class="card-title">📋 All Courses</div>
@@ -339,46 +306,47 @@
       </div>
     </div>
 
-    <!-- ── ACCESS ── -->
+    <!-- ACCESS CONTROL -->
     <div class="page" id="page-access">
       <div class="page-header">
         <div class="page-title">Access Control</div>
         <div class="page-sub">User la course access grant / revoke kara</div>
       </div>
       <div class="two-col">
-        <!-- Grant -->
         <div class="card">
           <div class="card-head"><div class="card-title">✅ Access Grant Kara</div></div>
           <div class="card-body">
             <div class="form-row">
-              <label>Mobile / Email <span class="required-star">*</span></label>
-              <input type="text" id="ga-user" placeholder="9876543210 or user@gmail.com" />
-              <div class="form-hint">User cha registered mobile kiva email</div>
+              <label>User Select Kara <span class="req">*</span></label>
+              <select id="ga-user">
+                <option value="">-- User select kara --</option>
+              </select>
             </div>
             <div class="form-row">
-              <label>Course Select Kara <span class="required-star">*</span></label>
+              <label>Course Select Kara <span class="req">*</span></label>
               <select id="ga-course">
                 <option value="">-- Course select kara --</option>
               </select>
             </div>
             <div class="form-row">
               <label>Months (0 = Permanent)</label>
-              <input type="number" id="ga-months" value="0" min="0" placeholder="0" />
-              <div class="form-hint">0 = lifetime access; 1, 3, 6, 12 = tewdhe mahine</div>
+              <input type="number" id="ga-months" value="0" min="0" />
+              <div class="form-hint">0 = lifetime; 1, 3, 6, 12 = tewdhe mahine</div>
             </div>
             <button class="btn btn-success" style="margin-top:6px" onclick="execGrant()">✅ Grant Access</button>
           </div>
         </div>
-        <!-- Revoke -->
         <div class="card">
           <div class="card-head"><div class="card-title">❌ Access Revoke Kara</div></div>
           <div class="card-body">
             <div class="form-row">
-              <label>Mobile / Email <span class="required-star">*</span></label>
-              <input type="text" id="ra-user" placeholder="9876543210 or user@gmail.com" />
+              <label>User Select Kara <span class="req">*</span></label>
+              <select id="ra-user">
+                <option value="">-- User select kara --</option>
+              </select>
             </div>
             <div class="form-row">
-              <label>Course Select Kara <span class="required-star">*</span></label>
+              <label>Course Select Kara <span class="req">*</span></label>
               <select id="ra-course">
                 <option value="">-- Course select kara --</option>
               </select>
@@ -389,7 +357,7 @@
       </div>
     </div>
 
-    <!-- ── SESSIONS ── -->
+    <!-- SESSIONS -->
     <div class="page" id="page-sessions">
       <div class="page-header">
         <div class="page-title">Active Sessions</div>
@@ -404,7 +372,7 @@
       </div>
     </div>
 
-    <!-- ── STATS ── -->
+    <!-- STATS -->
     <div class="page" id="page-stats">
       <div class="page-header">
         <div class="page-title">Stats</div>
@@ -415,23 +383,21 @@
           <div class="card-title">📊 Live Stats</div>
           <button class="btn btn-primary btn-sm" onclick="loadDetailStats()">🔄 Refresh</button>
         </div>
-        <div class="card-body" id="stats-result">
-          <div class="loading">⏳ Loading...</div>
-        </div>
+        <div class="card-body" id="stats-result"><div class="loading">⏳ Loading...</div></div>
       </div>
     </div>
 
   </div>
 </div>
 
-<!-- Delete Confirm Modal -->
+<!-- Delete Modal -->
 <div class="modal-overlay" id="delModal">
   <div class="modal">
-    <div class="modal-title" id="modal-title">Delete confirm kara</div>
-    <div class="modal-msg" id="modal-msg">He action undo honu shaknar nahi.</div>
+    <div class="modal-title" id="modal-title">Confirm kara</div>
+    <div class="modal-msg" id="modal-msg"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-danger" id="modal-ok">🗑 Delete</button>
+      <button class="btn btn-danger" id="modal-ok">Delete</button>
     </div>
   </div>
 </div>
@@ -439,19 +405,15 @@
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let adminToken = '';
-let cachedCourses = []; // for dropdowns
+let cachedCourses = [];
+let cachedUsers = [];
 
 // ─── API Helper ───────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
-  const res = await fetch('/api/admin' + path, {
+  return fetch('/api/admin' + path, {
     ...opts,
-    headers: {
-      'Authorization': 'Basic ' + adminToken,
-      'Content-Type': 'application/json',
-      ...(opts.headers || {})
-    }
+    headers: { 'Authorization': 'Basic ' + adminToken, 'Content-Type': 'application/json', ...(opts.headers||{}) }
   });
-  return res;
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -460,415 +422,351 @@ async function doLogin() {
   const p = document.getElementById('loginPass').value.trim();
   const err = document.getElementById('loginErr');
   const btn = document.getElementById('loginBtn');
-
-  if (!u || !p) { err.style.display = 'block'; err.textContent = '❌ User ID ani Password bhara'; return; }
-
-  btn.disabled = true;
-  btn.textContent = '⏳ Verifying...';
-  err.style.display = 'none';
-
+  if (!u || !p) { err.style.display='block'; err.textContent='❌ User ID ani Password bhara'; return; }
+  btn.disabled=true; btn.textContent='⏳ Verifying...'; err.style.display='none';
   try {
     const token = btoa(u + ':' + p);
-    const res = await fetch('/api/admin/ping', {
-      headers: { 'Authorization': 'Basic ' + token }
-    });
-
+    const res = await fetch('/api/admin/ping', { headers: {'Authorization':'Basic '+token} });
     if (res.ok) {
       adminToken = token;
-      document.getElementById('loginScreen').style.display = 'none';
-      document.getElementById('panelScreen').style.display = 'flex';
-      // Auto-load dashboard data
-      loadStats();
-      loadCourses(); // cache for dropdowns
-    } else {
-      err.style.display = 'block';
-      err.textContent = '❌ Chukicha User ID kiva Password';
-    }
-  } catch (e) {
-    err.style.display = 'block';
-    err.textContent = '❌ Server connect hovu shaklo nahi';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '🔐 Login';
-  }
+      document.getElementById('loginScreen').style.display='none';
+      document.getElementById('panelScreen').style.display='flex';
+      loadStats(); loadUsers(); loadCourses();
+    } else { err.style.display='block'; err.textContent='❌ Chukicha User ID kiva Password'; }
+  } catch(e) { err.style.display='block'; err.textContent='❌ Server connect hovu shaklo nahi'; }
+  finally { btn.disabled=false; btn.textContent='🔐 Login'; }
 }
 
 function doLogout() {
-  adminToken = '';
-  cachedCourses = [];
-  document.getElementById('panelScreen').style.display = 'none';
-  document.getElementById('loginScreen').style.display = 'flex';
-  document.getElementById('loginUser').value = '';
-  document.getElementById('loginPass').value = '';
-  document.getElementById('loginErr').style.display = 'none';
+  adminToken=''; cachedCourses=[]; cachedUsers=[];
+  document.getElementById('panelScreen').style.display='none';
+  document.getElementById('loginScreen').style.display='flex';
+  document.getElementById('loginUser').value=''; document.getElementById('loginPass').value='';
+  document.getElementById('loginErr').style.display='none';
 }
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
 function goto(name, el) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('page-' + name).classList.add('active');
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
   if (el) el.classList.add('active');
-
-  // Auto-load on navigate
-  if (name === 'users') loadUsers();
-  if (name === 'courses') loadCourses();
-  if (name === 'sessions') loadSessions();
-  if (name === 'stats') loadDetailStats();
-  if (name === 'access') loadCourses(); // refresh dropdown
+  if (name==='users') loadUsers();
+  if (name==='courses') loadCourses();
+  if (name==='sessions') loadSessions();
+  if (name==='stats') loadDetailStats();
+  if (name==='access') { loadUsers(); loadCourses(); }
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
-function toast(msg, type = 'success') {
-  const t = document.createElement('div');
-  t.className = 'toast toast-' + type;
-  t.textContent = msg;
-  document.body.appendChild(t);
-  setTimeout(() => t.remove(), 3200);
+function toast(msg, type='success') {
+  const t=document.createElement('div');
+  t.className='toast toast-'+type; t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),3200);
 }
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-let pendingConfirm = null;
+let pendingConfirm=null;
 function openModal(title, msg, onConfirm) {
-  pendingConfirm = onConfirm;
-  document.getElementById('modal-title').textContent = title;
-  document.getElementById('modal-msg').textContent = msg;
-  document.getElementById('modal-ok').onclick = () => { closeModal(); if (pendingConfirm) pendingConfirm(); };
+  pendingConfirm=onConfirm;
+  document.getElementById('modal-title').textContent=title;
+  document.getElementById('modal-msg').textContent=msg;
+  document.getElementById('modal-ok').onclick=()=>{closeModal();if(pendingConfirm)pendingConfirm();};
   document.getElementById('delModal').classList.add('open');
 }
-function closeModal() { document.getElementById('delModal').classList.remove('open'); pendingConfirm = null; }
+function closeModal(){document.getElementById('delModal').classList.remove('open');pendingConfirm=null;}
+
+// ─── Escape helper ────────────────────────────────────────────────────────────
+function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // STATS
 // ═══════════════════════════════════════════════════════════════════════════════
-
 async function loadStats() {
   try {
-    const res = await api('/stats');
-    const d = await res.json();
-    document.getElementById('s-users').textContent = d.users ?? '—';
-    document.getElementById('s-courses').textContent = d.courses ?? '—';
-    document.getElementById('s-files').textContent = d.files ?? '—';
-    document.getElementById('s-sessions').textContent = d.sessions ?? '—';
-  } catch (e) {
-    console.error('Stats load failed:', e);
-  }
+    const res=await api('/stats'); const d=await res.json();
+    document.getElementById('s-users').textContent=d.users??'—';
+    document.getElementById('s-courses').textContent=d.courses??'—';
+    document.getElementById('s-files').textContent=d.files??'—';
+    document.getElementById('s-sessions').textContent=d.sessions??'—';
+  } catch(e){}
 }
 
 async function loadDetailStats() {
-  const el = document.getElementById('stats-result');
-  el.innerHTML = '<div class="loading">⏳ Loading...</div>';
+  const el=document.getElementById('stats-result');
+  el.innerHTML='<div class="loading">⏳ Loading...</div>';
   try {
-    const res = await api('/stats');
-    const d = await res.json();
-    const inactive = (d.users || 0) - (d.active_users || 0);
-    el.innerHTML = `
-      <div class="stats-grid-3">
-        <div class="stat-card"><div class="stat-label">Total Users</div><div class="stat-value">${d.users || 0}</div></div>
-        <div class="stat-card"><div class="stat-label">Active Users</div><div class="stat-value" style="color:#2e7d32">${d.active_users || 0}</div></div>
-        <div class="stat-card"><div class="stat-label">Inactive Users</div><div class="stat-value" style="color:#c62828">${inactive}</div></div>
-        <div class="stat-card"><div class="stat-label">Total Courses</div><div class="stat-value">${d.courses || 0}</div></div>
-        <div class="stat-card"><div class="stat-label">Cached Files</div><div class="stat-value">${d.files || 0}</div></div>
-        <div class="stat-card"><div class="stat-label">Active Sessions</div><div class="stat-value">${d.sessions || 0}</div></div>
-      </div>`;
-  } catch (e) {
-    el.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Stats load hovu shakla nahi</div>';
-  }
+    const res=await api('/stats'); const d=await res.json();
+    const inactive=(d.users||0)-(d.active_users||0);
+    el.innerHTML=`<div class="stats-grid-3">
+      <div class="stat-card"><div class="stat-label">Total Users</div><div class="stat-value">${d.users||0}</div></div>
+      <div class="stat-card"><div class="stat-label">Active Users</div><div class="stat-value" style="color:#2e7d32">${d.active_users||0}</div></div>
+      <div class="stat-card"><div class="stat-label">Inactive Users</div><div class="stat-value" style="color:#c62828">${inactive}</div></div>
+      <div class="stat-card"><div class="stat-label">Total Courses</div><div class="stat-value">${d.courses||0}</div></div>
+      <div class="stat-card"><div class="stat-label">Cached Files</div><div class="stat-value">${d.files||0}</div></div>
+      <div class="stat-card"><div class="stat-label">Active Sessions</div><div class="stat-value">${d.sessions||0}</div></div>
+    </div>`;
+  } catch(e){ el.innerHTML='<div class="empty"><div class="empty-icon">❌</div>Stats load hovu shakle nahi</div>'; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // USERS
 // ═══════════════════════════════════════════════════════════════════════════════
-
 async function execAddUser() {
-  const name   = document.getElementById('au-name').value.trim();
-  const mobile = document.getElementById('au-mobile').value.trim();
-  const email  = document.getElementById('au-email').value.trim();
-  const pass   = document.getElementById('au-pass').value;
-  const cpass  = document.getElementById('au-cpass').value;
-
-  if (!name)                { toast('❌ Full Name required aahe', 'error'); return; }
-  if (!mobile && !email)    { toast('❌ Mobile kiva Email yepaikhi ek bhara', 'error'); return; }
-  if (pass.length < 6)      { toast('❌ Password minimum 6 characters pahije', 'error'); return; }
-  if (pass !== cpass)       { toast('❌ Passwords match hot nahit', 'error'); return; }
-
-  const btn = document.getElementById('addUserBtn');
-  btn.disabled = true; btn.textContent = '⏳ Adding...';
-
+  const name=document.getElementById('au-name').value.trim();
+  const mobile=document.getElementById('au-mobile').value.trim();
+  const email=document.getElementById('au-email').value.trim();
+  const pass=document.getElementById('au-pass').value;
+  const cpass=document.getElementById('au-cpass').value;
+  if (!name)             { toast('❌ Full Name required aahe','error'); return; }
+  if (!mobile && !email) { toast('❌ Mobile kiva Email yepaikhi ek bhara','error'); return; }
+  if (pass.length<6)     { toast('❌ Password minimum 6 characters pahije','error'); return; }
+  if (pass!==cpass)      { toast('❌ Passwords match hot nahit','error'); return; }
+  const btn=document.getElementById('addUserBtn');
+  btn.disabled=true; btn.textContent='⏳ Adding...';
   try {
-    const res = await api('/users', {
-      method: 'POST',
-      body: JSON.stringify({ full_name: name, mobile, email, password: pass, confirm_password: cpass })
-    });
-    const d = await res.json();
-    if (!res.ok) { toast('❌ ' + (d.error || 'User add hovu shakla nahi'), 'error'); return; }
-
-    toast('✅ User add kela: ' + (d.username || name));
-    // Clear form
-    ['au-name','au-mobile','au-email','au-pass','au-cpass'].forEach(id => document.getElementById(id).value = '');
-    loadUsers();
-    loadStats();
-  } catch (e) {
-    toast('❌ Network error', 'error');
-  } finally {
-    btn.disabled = false; btn.textContent = '➕ User Add Kara';
-  }
+    const res=await api('/users',{method:'POST',body:JSON.stringify({full_name:name,mobile,email,password:pass,confirm_password:cpass})});
+    const d=await res.json();
+    if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); return; }
+    toast('✅ User add kela: '+(d.full_name||name));
+    ['au-name','au-mobile','au-email','au-pass','au-cpass'].forEach(id=>document.getElementById(id).value='');
+    loadUsers(); loadStats();
+  } catch(e){ toast('❌ Network error','error'); }
+  finally{ btn.disabled=false; btn.textContent='➕ User Add Kara'; }
 }
 
 async function loadUsers() {
-  const wrap = document.getElementById('users-body');
-  wrap.innerHTML = '<div class="loading">⏳ Loading users...</div>';
+  const wrap=document.getElementById('users-body');
+  if (wrap) wrap.innerHTML='<div class="loading">⏳ Loading users...</div>';
   try {
-    const res = await api('/users');
-    const users = await res.json();
-    if (!users || !users.length) {
-      wrap.innerHTML = '<div class="empty"><div class="empty-icon">👥</div>Koni user nahi yet</div>';
-      return;
-    }
-    let h = '<div class="table-wrap"><table><thead><tr><th>Full Name</th><th>Username</th><th>Mobile</th><th>Email</th><th>Status</th><th>Joined</th><th style="width:100px">Action</th></tr></thead><tbody>';
-    users.forEach(u => {
-      const badge = u.is_active
-        ? '<span class="badge badge-green">Active</span>'
-        : '<span class="badge badge-red">Disabled</span>';
-      const joined = u.created_at ? new Date(u.created_at).toLocaleDateString('en-IN') : '—';
-      h += `<tr>
-        <td><strong>${esc(u.full_name || '—')}</strong></td>
+    const res=await api('/users'); const users=await res.json();
+    cachedUsers=users||[];
+    populateUserDropdowns();
+    if (!wrap) return;
+    if (!cachedUsers.length){ wrap.innerHTML='<div class="empty"><div class="empty-icon">👥</div>Koni user nahi yet</div>'; return; }
+    let h='<div class="table-wrap"><table><thead><tr><th>Full Name</th><th>Username</th><th>Mobile</th><th>Email</th><th>Status</th><th>Joined</th><th style="width:100px">Action</th></tr></thead><tbody>';
+    cachedUsers.forEach(u=>{
+      const badge=u.is_active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Disabled</span>';
+      const joined=u.created_at?new Date(u.created_at).toLocaleDateString('en-IN'):'—';
+      h+=`<tr>
+        <td><strong>${esc(u.full_name||'—')}</strong></td>
         <td style="font-family:monospace;font-size:12px;color:#888">${esc(u.username)}</td>
-        <td>${esc(u.mobile || '—')}</td>
-        <td>${esc(u.email || '—')}</td>
+        <td>${esc(u.mobile||'—')}</td>
+        <td>${esc(u.email||'—')}</td>
         <td>${badge}</td>
         <td style="font-size:12px;color:#888">${joined}</td>
-        <td>
-          ${u.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Disable</button>` : '<span class="badge badge-red">Disabled</span>'}
-        </td>
+        <td>${u.is_active?`<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Disable</button>`:'<span style="font-size:12px;color:#bbb">Disabled</span>'}</td>
       </tr>`;
     });
-    h += '</tbody></table></div>';
-    wrap.innerHTML = h;
-  } catch (e) {
-    wrap.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Users load hovu shakle nahi</div>';
-  }
+    h+='</tbody></table></div>';
+    wrap.innerHTML=h;
+  } catch(e){ if(wrap) wrap.innerHTML='<div class="empty"><div class="empty-icon">❌</div>Users load hovu shakle nahi</div>'; }
+}
+
+function populateUserDropdowns() {
+  ['ga-user','ra-user'].forEach(id=>{
+    const sel=document.getElementById(id); if(!sel) return;
+    const cur=sel.value;
+    sel.innerHTML='<option value="">-- User select kara --</option>';
+    cachedUsers.forEach(u=>{
+      if (!u.is_active) return; // फक्त active users
+      const opt=document.createElement('option');
+      opt.value=u.id;
+      const contact=u.mobile||u.email||u.username;
+      opt.textContent=(u.full_name||u.username)+' ('+contact+')';
+      sel.appendChild(opt);
+    });
+    if (cur) sel.value=cur;
+  });
 }
 
 function deleteUser(id, name) {
-  openModal(
-    'User Disable kara?',
-    `"${name}" la disable kelyavar tyacha sarv sessions delete hotil ani login bund hoil.`,
-    async () => {
-      try {
-        const res = await api('/users/' + id, { method: 'DELETE' });
-        if (res.ok) { toast('✅ ' + name + ' disable kela'); loadUsers(); loadStats(); }
-        else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
-      } catch { toast('❌ Network error', 'error'); }
-    }
-  );
+  openModal('User Disable kara?',`"${name}" la disable kelyavar tyacha sarv sessions delete hotil ani login bund hoil.`,async()=>{
+    try {
+      const res=await api('/users/'+id,{method:'DELETE'});
+      if (res.ok){ toast('✅ '+name+' disable kela'); loadUsers(); loadStats(); }
+      else{ const d=await res.json(); toast('❌ '+(d.error||'Error'),'error'); }
+    } catch{ toast('❌ Network error','error'); }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// COURSES
+// COURSES + INLINE SYNC
 // ═══════════════════════════════════════════════════════════════════════════════
-
 async function execAddCourse() {
-  const title = document.getElementById('ac-title').value.trim();
-  const desc  = document.getElementById('ac-desc').value.trim();
-  const price = document.getElementById('ac-price').value.trim();
-  const link  = document.getElementById('ac-link').value.trim();
-  const thumb = document.getElementById('ac-thumb').value.trim();
-  const chRaw = document.getElementById('ac-ch').value.trim();
-  const channelId = parseInt(chRaw, 10);
-
-  if (!title)              { toast('❌ Course Title required aahe', 'error'); return; }
-  if (!chRaw || isNaN(channelId)) { toast('❌ Valid Channel ID bhara (e.g. -1001234567890)', 'error'); return; }
-
-  const btn = document.getElementById('addCourseBtn');
-  btn.disabled = true; btn.textContent = '⏳ Adding...';
-
+  const title=document.getElementById('ac-title').value.trim();
+  const desc=document.getElementById('ac-desc').value.trim();
+  const price=document.getElementById('ac-price').value.trim();
+  const link=document.getElementById('ac-link').value.trim();
+  const thumb=document.getElementById('ac-thumb').value.trim();
+  const chRaw=document.getElementById('ac-ch').value.trim();
+  const channelId=parseInt(chRaw,10);
+  if (!title){ toast('❌ Course Title required aahe','error'); return; }
+  if (!chRaw||isNaN(channelId)){ toast('❌ Valid Channel ID bhara (e.g. -1001234567890)','error'); return; }
+  const btn=document.getElementById('addCourseBtn');
+  btn.disabled=true; btn.textContent='⏳ Adding...';
   try {
-    const res = await api('/courses', {
-      method: 'POST',
-      body: JSON.stringify({ title, description: desc, thumbnail: thumb, price, buy_link: link, channel_id: channelId })
-    });
-    const d = await res.json();
-    if (!res.ok) { toast('❌ ' + (d.error || 'Course add hovu shakla nahi'), 'error'); return; }
-
-    toast('✅ Course add kela: ' + title);
-    ['ac-title','ac-desc','ac-price','ac-link','ac-thumb','ac-ch'].forEach(id => document.getElementById(id).value = '');
-    loadCourses();
-    loadStats();
-  } catch (e) {
-    toast('❌ Network error', 'error');
-  } finally {
-    btn.disabled = false; btn.textContent = '➕ Course Add Kara';
-  }
+    const res=await api('/courses',{method:'POST',body:JSON.stringify({title,description:desc,thumbnail:thumb,price,buy_link:link,channel_id:channelId})});
+    const d=await res.json();
+    if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); return; }
+    toast('✅ Course add kela: '+title);
+    ['ac-title','ac-desc','ac-price','ac-link','ac-thumb','ac-ch'].forEach(id=>document.getElementById(id).value='');
+    loadCourses(); loadStats();
+  } catch(e){ toast('❌ Network error','error'); }
+  finally{ btn.disabled=false; btn.textContent='➕ Course Add Kara'; }
 }
 
 async function loadCourses() {
-  const wrap = document.getElementById('courses-body');
-  if (wrap) wrap.innerHTML = '<div class="loading">⏳ Loading courses...</div>';
+  const wrap=document.getElementById('courses-body');
+  if (wrap) wrap.innerHTML='<div class="loading">⏳ Loading courses...</div>';
   try {
-    const res = await api('/courses');
-    const courses = await res.json();
-    cachedCourses = courses || [];
+    const res=await api('/courses'); const courses=await res.json();
+    cachedCourses=courses||[];
     populateCourseDropdowns();
-
     if (!wrap) return;
-    if (!courses || !courses.length) {
-      wrap.innerHTML = '<div class="empty"><div class="empty-icon">📚</div>Koni course nahi yet</div>';
-      return;
-    }
-    let h = '<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Channel ID</th><th>Course ID</th><th style="width:120px">Actions</th></tr></thead><tbody>';
-    courses.forEach(c => {
-      h += `<tr>
-        <td><strong>${esc(c.title)}</strong>${c.description ? `<br><span style="font-size:11px;color:#999">${esc(c.description.slice(0,60))}${c.description.length>60?'…':''}</span>` : ''}</td>
-        <td>${c.price ? `<span class="badge badge-blue">${esc(c.price)}</span>` : '<span class="badge badge-orange">Free</span>'}</td>
-        <td>${c.files || 0} files</td>
+    if (!cachedCourses.length){ wrap.innerHTML='<div class="empty"><div class="empty-icon">📚</div>Koni course nahi yet</div>'; return; }
+    let h='<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Channel ID</th><th style="width:180px">Actions</th></tr></thead><tbody>';
+    cachedCourses.forEach((c,i)=>{
+      const syncRowId='sync-row-'+i;
+      h+=`<tr>
+        <td><strong>${esc(c.title)}</strong>${c.description?`<br><span style="font-size:11px;color:#999">${esc(c.description.slice(0,60))}${c.description.length>60?'…':''}</span>`:''}</td>
+        <td>${c.price?`<span class="badge badge-blue">${esc(c.price)}</span>`:'<span class="badge badge-orange">Free</span>'}</td>
+        <td id="fc-${i}">${c.files||0} files</td>
         <td style="font-family:monospace;font-size:11px;color:#888">${c.channel_id}</td>
-        <td style="font-family:monospace;font-size:11px;color:#bbb" title="${c.id}">${c.id.slice(-12)}...</td>
-        <td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px">
+          <button class="btn btn-warning btn-sm" onclick="toggleSync('${syncRowId}')">🔄 Sync</button>
           <button class="btn btn-danger btn-sm" onclick="deleteCourse('${c.id}','${esc(c.title)}')">🗑 Delete</button>
+        </td>
+      </tr>
+      <tr class="sync-row" id="${syncRowId}">
+        <td colspan="5">
+          <div class="sync-inner">
+            <div class="sync-field"><label>Start Message ID</label><input type="number" id="s-start-${i}" value="1" min="1" /></div>
+            <div class="sync-field"><label>End Message ID</label><input type="number" id="s-end-${i}" min="1" placeholder="e.g. 500" /></div>
+            <button class="btn btn-primary btn-sm" onclick="execSync('${c.id}','${esc(c.title)}','${i}')">▶ Start Sync</button>
+            <span class="sync-status" id="sync-status-${i}">✅ Sync chalu zali!</span>
+          </div>
         </td>
       </tr>`;
     });
-    h += '</tbody></table></div>';
-    wrap.innerHTML = h;
-  } catch (e) {
-    if (wrap) wrap.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Courses load hovu shakle nahi</div>';
-  }
+    h+='</tbody></table></div>';
+    wrap.innerHTML=h;
+  } catch(e){ if(wrap) wrap.innerHTML='<div class="empty"><div class="empty-icon">❌</div>Courses load hovu shakle nahi</div>'; }
+}
+
+function toggleSync(rowId) {
+  const row=document.getElementById(rowId);
+  if (!row) return;
+  row.classList.toggle('open');
+}
+
+async function execSync(courseId, title, idx) {
+  const startEl=document.getElementById('s-start-'+idx);
+  const endEl=document.getElementById('s-end-'+idx);
+  const statusEl=document.getElementById('sync-status-'+idx);
+  const start=parseInt(startEl.value)||1;
+  const end=parseInt(endEl.value)||0;
+  if (end<start){ toast('❌ End ID, Start ID peksha kami aahe','error'); return; }
+  if (end<1){ toast('❌ End Message ID bhara','error'); return; }
+  try {
+    const res=await api('/sync',{method:'POST',body:JSON.stringify({course_id:courseId,start,end})});
+    const d=await res.json();
+    if (!res.ok){ toast('❌ '+(d.error||'Sync failed'),'error'); return; }
+    statusEl.style.display='inline';
+    toast('🔄 "'+title+'" sync background madhe chalu zali! (Range: '+start+'→'+end+')','info');
+    // 8 seconds nantar files count refresh kar
+    setTimeout(()=>loadCourses(), 8000);
+  } catch(e){ toast('❌ Network error','error'); }
 }
 
 function populateCourseDropdowns() {
-  ['ga-course', 'ra-course'].forEach(id => {
-    const sel = document.getElementById(id);
-    if (!sel) return;
-    const current = sel.value;
-    sel.innerHTML = '<option value="">-- Course select kara --</option>';
-    cachedCourses.forEach(c => {
-      const opt = document.createElement('option');
-      opt.value = c.id;
-      opt.textContent = c.title + (c.price ? ' (' + c.price + ')' : '');
+  ['ga-course','ra-course'].forEach(id=>{
+    const sel=document.getElementById(id); if(!sel) return;
+    const cur=sel.value;
+    sel.innerHTML='<option value="">-- Course select kara --</option>';
+    cachedCourses.forEach(c=>{
+      const opt=document.createElement('option');
+      opt.value=c.id;
+      opt.textContent=c.title+(c.price?' ('+c.price+')':'');
       sel.appendChild(opt);
     });
-    if (current) sel.value = current;
+    if (cur) sel.value=cur;
   });
 }
 
 function deleteCourse(id, title) {
-  openModal(
-    'Course Delete kara?',
-    `"${title}" delete kelyavar tyache sare cached files pan delete hotil. He permanent aahe.`,
-    async () => {
-      try {
-        const res = await api('/courses/' + id, { method: 'DELETE' });
-        if (res.ok) { toast('✅ Course delete kela: ' + title); loadCourses(); loadStats(); }
-        else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
-      } catch { toast('❌ Network error', 'error'); }
-    }
-  );
+  openModal('Course Delete kara?',`"${title}" delete kelyavar tyache sare cached files pan delete hotil. He permanent aahe.`,async()=>{
+    try {
+      const res=await api('/courses/'+id,{method:'DELETE'});
+      if (res.ok){ toast('✅ Course delete kela: '+title); loadCourses(); loadStats(); }
+      else{ const d=await res.json(); toast('❌ '+(d.error||'Error'),'error'); }
+    } catch{ toast('❌ Network error','error'); }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ACCESS CONTROL
 // ═══════════════════════════════════════════════════════════════════════════════
-
 async function execGrant() {
-  const user     = document.getElementById('ga-user').value.trim();
-  const courseId = document.getElementById('ga-course').value;
-  const months   = parseInt(document.getElementById('ga-months').value) || 0;
-
-  if (!user)     { toast('❌ Mobile kiva Email bhara', 'error'); return; }
-  if (!courseId) { toast('❌ Course select kara', 'error'); return; }
-
+  const userId=document.getElementById('ga-user').value;
+  const courseId=document.getElementById('ga-course').value;
+  const months=parseInt(document.getElementById('ga-months').value)||0;
+  if (!userId)  { toast('❌ User select kara','error'); return; }
+  if (!courseId){ toast('❌ Course select kara','error'); return; }
   try {
-    const res = await api('/access/grant', {
-      method: 'POST',
-      body: JSON.stringify({ identifier: user, course_id: courseId, months })
-    });
-    const d = await res.json();
-    if (!res.ok) { toast('❌ ' + (d.error || 'Access grant hovu shakla nahi'), 'error'); return; }
-    const label = months > 0 ? months + ' mahinyansathi' : 'Permanent';
-    toast('✅ ' + (d.username || user) + ' la ' + label + ' access dila!');
-    document.getElementById('ga-user').value = '';
-    document.getElementById('ga-course').value = '';
-    document.getElementById('ga-months').value = '0';
-  } catch { toast('❌ Network error', 'error'); }
+    const res=await api('/access/grant',{method:'POST',body:JSON.stringify({user_id:userId,course_id:courseId,months})});
+    const d=await res.json();
+    if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); return; }
+    const label=months>0?months+' mahinyansathi':'Permanent';
+    toast('✅ '+(d.full_name||d.username)+' la '+label+' access dila!');
+    document.getElementById('ga-user').value=''; document.getElementById('ga-course').value=''; document.getElementById('ga-months').value='0';
+  } catch{ toast('❌ Network error','error'); }
 }
 
 async function execRevoke() {
-  const user     = document.getElementById('ra-user').value.trim();
-  const courseId = document.getElementById('ra-course').value;
-
-  if (!user)     { toast('❌ Mobile kiva Email bhara', 'error'); return; }
-  if (!courseId) { toast('❌ Course select kara', 'error'); return; }
-
+  const userId=document.getElementById('ra-user').value;
+  const courseId=document.getElementById('ra-course').value;
+  if (!userId)  { toast('❌ User select kara','error'); return; }
+  if (!courseId){ toast('❌ Course select kara','error'); return; }
   try {
-    const res = await api('/access/revoke', {
-      method: 'POST',
-      body: JSON.stringify({ identifier: user, course_id: courseId })
-    });
-    const d = await res.json();
-    if (!res.ok) { toast('❌ ' + (d.error || 'Access revoke hovu shakla nahi'), 'error'); return; }
-    toast('✅ ' + (d.username || user) + ' cha access revoke kela!');
-    document.getElementById('ra-user').value = '';
-    document.getElementById('ra-course').value = '';
-  } catch { toast('❌ Network error', 'error'); }
+    const res=await api('/access/revoke',{method:'POST',body:JSON.stringify({user_id:userId,course_id:courseId})});
+    const d=await res.json();
+    if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); return; }
+    toast('✅ '+(d.full_name||d.username)+' cha access revoke kela!');
+    document.getElementById('ra-user').value=''; document.getElementById('ra-course').value='';
+  } catch{ toast('❌ Network error','error'); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SESSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
-
 async function loadSessions() {
-  const wrap = document.getElementById('sessions-body');
-  wrap.innerHTML = '<div class="loading">⏳ Loading sessions...</div>';
+  const wrap=document.getElementById('sessions-body');
+  wrap.innerHTML='<div class="loading">⏳ Loading sessions...</div>';
   try {
-    const res = await api('/sessions');
-    const sessions = await res.json();
-    if (!sessions || !sessions.length) {
-      wrap.innerHTML = '<div class="empty"><div class="empty-icon">🔐</div>Koni active session nahi</div>';
-      return;
-    }
-    let h = '';
-    sessions.forEach(s => {
-      h += `<div class="session-item">
+    const res=await api('/sessions'); const sessions=await res.json();
+    if (!sessions||!sessions.length){ wrap.innerHTML='<div class="empty"><div class="empty-icon">🔐</div>Koni active session nahi</div>'; return; }
+    let h='';
+    sessions.forEach(s=>{
+      h+=`<div class="session-item">
         <div class="session-info">
-          <div class="uname">👤 ${esc(s.full_name || s.username)} <span style="font-size:11px;font-weight:400;color:#888">(@${esc(s.username)})</span></div>
-          <div class="meta">
-            ${s.mobile ? '📱 ' + esc(s.mobile) + ' &nbsp;·&nbsp; ' : ''}
-            ${s.email ? '📧 ' + esc(s.email) + ' &nbsp;·&nbsp; ' : ''}
-            🌐 ${esc(s.ip)} &nbsp;·&nbsp; ⏰ Expires: ${esc(s.expires_at)}
-          </div>
+          <div class="uname">👤 ${esc(s.full_name||s.username)} <span style="font-size:11px;font-weight:400;color:#888">(@${esc(s.username)})</span></div>
+          <div class="meta">${s.mobile?'📱 '+esc(s.mobile)+' &nbsp;·&nbsp; ':''}${s.email?'📧 '+esc(s.email)+' &nbsp;·&nbsp; '  :''}🌐 ${esc(s.ip)} &nbsp;·&nbsp; ⏰ Expires: ${esc(s.expires_at)}</div>
           <div class="token">Token: ${esc(s.token_hint)}</div>
         </div>
-        <button class="btn btn-danger btn-sm" onclick="killSession(${JSON.stringify(s.token)}, '${esc(s.username)}')">💀 Kill</button>
+        <button class="btn btn-danger btn-sm" onclick="killSession(${JSON.stringify(s.token)},'${esc(s.username)}')">💀 Kill</button>
       </div>`;
     });
-    wrap.innerHTML = h;
-    loadStats();
-  } catch (e) {
-    wrap.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Sessions load hovu shakle nahi</div>';
-  }
+    wrap.innerHTML=h; loadStats();
+  } catch(e){ wrap.innerHTML='<div class="empty"><div class="empty-icon">❌</div>Sessions load hovu shakle nahi</div>'; }
 }
 
 async function killSession(token, username) {
   try {
-    const res = await api('/sessions/kill', {
-      method: 'POST',
-      body: JSON.stringify({ token })
-    });
-    if (res.ok) { toast('✅ ' + username + ' la logout kela!'); loadSessions(); }
-    else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
-  } catch { toast('❌ Network error', 'error'); }
-}
-
-// ─── Escape helper ────────────────────────────────────────────────────────────
-function esc(s) {
-  if (!s) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    const res=await api('/sessions/kill',{method:'POST',body:JSON.stringify({token})});
+    if (res.ok){ toast('✅ '+username+' la logout kela!'); loadSessions(); }
+    else{ const d=await res.json(); toast('❌ '+(d.error||'Error'),'error'); }
+  } catch{ toast('❌ Network error','error'); }
 }
 </script>
 </body>
