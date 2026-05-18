@@ -5,14 +5,12 @@ import (
 	"context"
 	"time"
 
+	"EverythingSuckz/fsb/internal/db"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
-
-// ColURLMonitors — set by db.Connect() in mongo.go
-var ColURLMonitors *mongo.Collection
 
 // SaveURL — insert new MonitorURL into MongoDB
 func SaveURL(url, label string, intervalSeconds int) (*MonitorURL, error) {
@@ -29,7 +27,7 @@ func SaveURL(url, label string, intervalSeconds int) (*MonitorURL, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := ColURLMonitors.InsertOne(ctx, doc)
+	_, err := db.ColURLMonitors.InsertOne(ctx, doc)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +38,7 @@ func SaveURL(url, label string, intervalSeconds int) (*MonitorURL, error) {
 func DeleteURL(id primitive.ObjectID) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := ColURLMonitors.DeleteOne(ctx, bson.M{"_id": id})
+	_, err := db.ColURLMonitors.DeleteOne(ctx, bson.M{"_id": id})
 	return err
 }
 
@@ -49,7 +47,7 @@ func ListURLs() ([]MonitorURL, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}})
-	cursor, err := ColURLMonitors.Find(ctx, bson.M{}, opts)
+	cursor, err := db.ColURLMonitors.Find(ctx, bson.M{}, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +64,7 @@ func GetURLByID(id primitive.ObjectID) (*MonitorURL, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var doc MonitorURL
-	err := ColURLMonitors.FindOne(ctx, bson.M{"_id": id}).Decode(&doc)
+	err := db.ColURLMonitors.FindOne(ctx, bson.M{"_id": id}).Decode(&doc)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +78,7 @@ func UpdateInterval(id primitive.ObjectID, intervalSeconds int) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, err := ColURLMonitors.UpdateOne(
+	_, err := db.ColURLMonitors.UpdateOne(
 		ctx,
 		bson.M{"_id": id},
 		bson.M{"$set": bson.M{"interval_seconds": intervalSeconds}},
