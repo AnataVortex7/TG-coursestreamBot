@@ -5,6 +5,7 @@ import (
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/commands"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/urlmonitor"
 	"EverythingSuckz/fsb/internal/utils"
 	"context"
 	"encoding/base64"
@@ -96,6 +97,13 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// Access — accepts user_id directly from dropdown
 	api.POST("/access/grant", adminGrantAccess)
 	api.POST("/access/revoke", adminRevokeAccess)
+
+	// ─── URL Monitor ─────────────────────────────────────────────────────────
+	api.GET("/urlmonitor", adminURLMonitorList)
+	api.POST("/urlmonitor", adminURLMonitorAdd)
+	api.DELETE("/urlmonitor/:id", adminURLMonitorRemove)
+	api.GET("/urlmonitor/:id/history", adminURLMonitorHistory)
+	api.POST("/urlmonitor/:id/check", adminURLMonitorCheck)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -566,4 +574,96 @@ func adminRevokeAccess(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username, "full_name": user.FullName})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// URL MONITOR
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// adminURLMonitorList — GET /api/admin/urlmonitor
+// Returns live status of all monitored URLs
+func adminURLMonitorList(c *gin.Context) {
+	statuses := urlmonitor.ListAllStatus()
+	if statuses == nil {
+		statuses = []urlmonitor.URLStatus{}
+	}
+	c.JSON(http.StatusOK, statuses)
+}
+
+// adminURLMonitorAdd — POST /api/admin/urlmonitor
+// Body: { "url": "https://...", "label": "My Site", "interval_seconds": 10 }
+func adminURLMonitorAdd(c *gin.Context) {
+	var req struct {
+		URL             string `json:"url"`
+		Label           string `json:"label"`
+		IntervalSeconds int    `json:"interval_seconds"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	req.URL = strings.TrimSpace(req.URL)
+	if req.URL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "URL required"})
+		return
+	}
+	if !strings.HasPrefix(req.URL, "http://") && !strings.HasPrefix(req.URL, "https://") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "URL must start with http:// or https://"})
+		return
+	}
+	if req.IntervalSeconds < 2 {
+		req.IntervalSeconds = 2
+	}
+
+	doc, err := urlmonitor.AddURL(req.URL, req.Label, req.IntervalSeconds)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "monitor": doc})
+}
+
+// adminURLMonitorRemove — DELETE /api/admin/urlmonitor/:id
+func adminURLMonitorRemove(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+	if err := urlmonitor.RemoveURL(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// adminURLMonitorHistory — GET /api/admin/urlmonitor/:id/history
+func adminURLMonitorHistory(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+	history, err := urlmonitor.GetHistory(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, history)
+}
+
+// adminURLMonitorCheck — POST /api/admin/urlmonitor/:id/check
+// Triggers one immediate ping and returns the result
+func adminURLMonitorCheck(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+	result, err := urlmonitor.ManualCheck(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
