@@ -321,7 +321,7 @@ func adminSyncChannel(c *gin.Context) {
 
 		channel, err := utils.GetChannelPeer(ctx, client.API(), client.PeerStorage, course.ChannelID)
 		if err != nil {
-			log.Printf("[AdminSync] GetChannelPeer failed for %s: %v", course.Title, err)
+			golog.Printf("[AdminSync] GetChannelPeer failed for %s: %v", course.Title, err)
 			return
 		}
 
@@ -344,13 +344,13 @@ func adminSyncChannel(c *gin.Context) {
 				ID:      ids,
 			})
 			if fetchErr != nil {
-				log.Printf("[AdminSync] Fetch failed: %v", fetchErr)
+				golog.Printf("[AdminSync] Fetch failed: %v", fetchErr)
 				break
 			}
 
 			messages, ok := res.(*tg.MessagesChannelMessages)
 			if !ok {
-				log.Printf("[AdminSync] Unexpected Telegram response type")
+				golog.Printf("[AdminSync] Unexpected Telegram response type")
 				break
 			}
 
@@ -397,7 +397,7 @@ func adminSyncChannel(c *gin.Context) {
 			time.Sleep(200 * time.Millisecond)
 		}
 
-		log.Printf("[AdminSync] ✅ Done — Course: %s | Range: %d→%d | Cached: %d | Skipped: %d",
+		golog.Printf("[AdminSync] ✅ Done — Course: %s | Range: %d→%d | Cached: %d | Skipped: %d",
 			course.Title, startID, endID, total, skipped)
 	}()
 
