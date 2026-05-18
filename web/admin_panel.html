@@ -19,6 +19,7 @@
   .login-card input:focus{border-color:#6c63ff;background:#fff}
   .login-btn{width:100%;padding:11px;background:#6c63ff;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px;transition:opacity .15s}
   .login-btn:hover{opacity:.88}
+  .login-btn:disabled{opacity:.5;cursor:not-allowed}
   .login-err{font-size:12px;color:#e53935;margin-top:8px;display:none}
 
   /* ── Layout ── */
@@ -60,9 +61,10 @@
   /* ── Forms ── */
   .form-row{margin-bottom:14px}
   .form-row label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
-  .form-row input,.form-row select{width:100%;padding:9px 12px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:13px;color:#1a1a1a;background:#fafafa;outline:none;transition:border .15s}
-  .form-row input:focus,.form-row select:focus{border-color:#6c63ff;background:#fff}
+  .form-row input,.form-row select,.form-row textarea{width:100%;padding:9px 12px;border:1.5px solid #e5e5e5;border-radius:8px;font-size:13px;color:#1a1a1a;background:#fafafa;outline:none;transition:border .15s}
+  .form-row input:focus,.form-row select:focus,.form-row textarea:focus{border-color:#6c63ff;background:#fff}
   .form-hint{font-size:11px;color:#999;margin-top:4px}
+  .required-star{color:#e53935;margin-left:2px}
   .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 
@@ -70,6 +72,7 @@
   .btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid #e0e0e0;background:#fff;color:#333;transition:all .15s}
   .btn:hover{background:#f5f5f5}
   .btn:active{transform:scale(.98)}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
   .btn-primary{background:#6c63ff;color:#fff;border-color:#6c63ff}
   .btn-primary:hover{background:#5a52e0;border-color:#5a52e0}
   .btn-danger{background:#fff;color:#e53935;border-color:#ffcdd2}
@@ -97,12 +100,6 @@
   .badge-orange{background:#fff3e0;color:#e65100}
   .badge-purple{background:#ede7f6;color:#4527a0}
 
-  /* ── Command preview ── */
-  .cmd-box{background:#1e1e2d;border-radius:8px;padding:10px 14px;font-family:'Courier New',monospace;font-size:12px;color:#a89fff;margin-top:12px;word-break:break-all;display:flex;align-items:center;justify-content:space-between;gap:10px}
-  .cmd-text{flex:1}
-  .cmd-copy{background:rgba(108,99,255,.2);color:#a89fff;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;flex-shrink:0}
-  .cmd-copy:hover{background:rgba(108,99,255,.35)}
-
   /* ── Toast ── */
   .toast{position:fixed;bottom:24px;right:24px;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;z-index:9999;animation:slideUp .25s ease;display:flex;align-items:center;gap:8px;box-shadow:0 4px 20px rgba(0,0,0,.12)}
   .toast-success{background:#2e7d32;color:#fff}
@@ -118,9 +115,10 @@
   .modal-msg{font-size:13px;color:#666;line-height:1.6}
   .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
 
-  /* ── Empty ── */
+  /* ── Empty / Loading ── */
   .empty{text-align:center;padding:36px;color:#aaa;font-size:13px}
   .empty-icon{font-size:32px;margin-bottom:8px}
+  .loading{text-align:center;padding:24px;color:#aaa;font-size:13px}
 
   /* ── Session row ── */
   .session-item{display:flex;align-items:flex-start;justify-content:space-between;padding:14px 18px;border-bottom:1px solid #f5f5f5;gap:12px}
@@ -134,6 +132,9 @@
   .quick-btn{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 12px;border-radius:10px;border:1.5px solid #ebebeb;background:#fff;cursor:pointer;transition:all .15s;font-size:12px;font-weight:600;color:#555}
   .quick-btn:hover{border-color:#6c63ff;color:#6c63ff;background:#f5f4ff}
   .quick-btn .qi{font-size:22px}
+
+  /* ── Stats detail grid ── */
+  .stats-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
 </style>
 </head>
 <body>
@@ -148,7 +149,7 @@
     <label>Password</label>
     <input type="password" id="loginPass" placeholder="Password enter kara" onkeydown="if(event.key==='Enter')doLogin()" />
     <div class="login-err" id="loginErr">❌ Chukicha User ID kiva Password</div>
-    <button class="login-btn" onclick="doLogin()">🔐 Login</button>
+    <button class="login-btn" id="loginBtn" onclick="doLogin()">🔐 Login</button>
   </div>
 </div>
 
@@ -163,33 +164,29 @@
     </div>
     <div style="flex:1;overflow-y:auto">
       <div class="nav-section">Overview</div>
-      <div class="nav-item active" onclick="goto('dashboard',this)">
+      <div class="nav-item active" id="nav-dashboard" onclick="goto('dashboard',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
         Dashboard
       </div>
       <div class="nav-section">Management</div>
-      <div class="nav-item" onclick="goto('users',this)">
+      <div class="nav-item" id="nav-users" onclick="goto('users',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Users
       </div>
-      <div class="nav-item" onclick="goto('courses',this)">
+      <div class="nav-item" id="nav-courses" onclick="goto('courses',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
         Courses
       </div>
-      <div class="nav-item" onclick="goto('access',this)">
+      <div class="nav-item" id="nav-access" onclick="goto('access',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
         Access Control
       </div>
       <div class="nav-section">System</div>
-      <div class="nav-item" onclick="goto('sync',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        Sync Channel
-      </div>
-      <div class="nav-item" onclick="goto('sessions',this)">
+      <div class="nav-item" id="nav-sessions" onclick="goto('sessions',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         Sessions
       </div>
-      <div class="nav-item" onclick="goto('stats',this)">
+      <div class="nav-item" id="nav-stats" onclick="goto('stats',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         Stats
       </div>
@@ -209,7 +206,7 @@
     <div class="page active" id="page-dashboard">
       <div class="page-header">
         <div class="page-title">Dashboard</div>
-        <div class="page-sub">Bot overview — sarv commands ekach jagi</div>
+        <div class="page-sub">Bot overview — real-time data</div>
       </div>
       <div class="stat-grid">
         <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-label">Total Users</div><div class="stat-value" id="s-users">—</div></div>
@@ -221,12 +218,12 @@
         <div class="card-head"><div class="card-title">⚡ Quick Actions</div></div>
         <div class="card-body">
           <div class="quick-grid">
-            <div class="quick-btn" onclick="goto('users',document.querySelectorAll('.nav-item')[1])"><div class="qi">➕</div>Add User</div>
-            <div class="quick-btn" onclick="goto('courses',document.querySelectorAll('.nav-item')[2])"><div class="qi">📖</div>Add Course</div>
-            <div class="quick-btn" onclick="goto('access',document.querySelectorAll('.nav-item')[3])"><div class="qi">🔑</div>Grant Access</div>
-            <div class="quick-btn" onclick="goto('sync',document.querySelectorAll('.nav-item')[4])"><div class="qi">🔄</div>Sync Channel</div>
-            <div class="quick-btn" onclick="goto('sessions',document.querySelectorAll('.nav-item')[5])"><div class="qi">💀</div>Kill Session</div>
-            <div class="quick-btn" onclick="goto('stats',document.querySelectorAll('.nav-item')[6])"><div class="qi">📊</div>View Stats</div>
+            <div class="quick-btn" onclick="goto('users',document.getElementById('nav-users'))"><div class="qi">➕</div>Add User</div>
+            <div class="quick-btn" onclick="goto('courses',document.getElementById('nav-courses'))"><div class="qi">📖</div>Add Course</div>
+            <div class="quick-btn" onclick="goto('access',document.getElementById('nav-access'))"><div class="qi">🔑</div>Grant Access</div>
+            <div class="quick-btn" onclick="goto('sessions',document.getElementById('nav-sessions'))"><div class="qi">💀</div>Kill Session</div>
+            <div class="quick-btn" onclick="goto('stats',document.getElementById('nav-stats'))"><div class="qi">📊</div>View Stats</div>
+            <div class="quick-btn" onclick="loadStats();toast('✅ Stats refresh kele!')"><div class="qi">🔄</div>Refresh</div>
           </div>
         </div>
       </div>
@@ -236,43 +233,56 @@
     <div class="page" id="page-users">
       <div class="page-header">
         <div class="page-title">Users</div>
-        <div class="page-sub">Add, view ani delete users — /adduser /deluser /listusers</div>
+        <div class="page-sub">Add, view ani disable users</div>
       </div>
-      <!-- Add User -->
+
+      <!-- Add User Form -->
       <div class="card">
-        <div class="card-head"><div class="card-title">➕ Add User — /adduser</div></div>
+        <div class="card-head"><div class="card-title">➕ Nava User Add Kara</div></div>
         <div class="card-body">
+          <!-- Row 1: Full Name -->
+          <div class="form-row">
+            <label>Full Name <span class="required-star">*</span></label>
+            <input type="text" id="au-name" placeholder="Rahul Sharma" autocomplete="off" />
+          </div>
+          <!-- Row 2: Mobile + Email -->
           <div class="two-col">
             <div class="form-row">
-              <label>Mobile / Email</label>
-              <input type="text" id="au-id" placeholder="9876543210 or user@gmail.com" oninput="buildCmd('adduser-cmd','au')" />
-              <div class="form-hint">Mobile number kiva email address</div>
+              <label>Mobile Number</label>
+              <input type="tel" id="au-mobile" placeholder="9876543210" autocomplete="off" />
+              <div class="form-hint">Mobile kiva Email — yepaikhi ek required</div>
             </div>
             <div class="form-row">
-              <label>Password</label>
-              <input type="text" id="au-pass" placeholder="minimum 6 characters" oninput="buildCmd('adduser-cmd','au')" />
-            </div>
-            <div class="form-row" style="grid-column:1/-1">
-              <label>Full Name (optional)</label>
-              <input type="text" id="au-name" placeholder="Rahul Sharma" oninput="buildCmd('adduser-cmd','au')" />
+              <label>Email Address</label>
+              <input type="email" id="au-email" placeholder="user@gmail.com" autocomplete="off" />
+              <div class="form-hint">Email optional aahe, mobile असल्यास</div>
             </div>
           </div>
-          <div class="cmd-box">
-            <span class="cmd-text" id="adduser-cmd">/adduser &lt;mobile&gt; &lt;password&gt;</span>
-            <button class="cmd-copy" onclick="copyCmd('adduser-cmd')">Copy</button>
+          <!-- Row 3: Password + Confirm -->
+          <div class="two-col">
+            <div class="form-row">
+              <label>Password <span class="required-star">*</span></label>
+              <input type="password" id="au-pass" placeholder="Minimum 6 characters" autocomplete="new-password" />
+            </div>
+            <div class="form-row">
+              <label>Confirm Password <span class="required-star">*</span></label>
+              <input type="password" id="au-cpass" placeholder="Password repeat kara" autocomplete="new-password" />
+            </div>
           </div>
-          <div style="margin-top:14px;display:flex;gap:10px">
-            <button class="btn btn-primary" onclick="execAddUser()">➕ Add User</button>
+          <div style="margin-top:6px;display:flex;gap:10px;align-items:center">
+            <button class="btn btn-primary" id="addUserBtn" onclick="execAddUser()">➕ User Add Kara</button>
+            <span style="font-size:12px;color:#999">* Required fields</span>
           </div>
         </div>
       </div>
+
       <!-- Users List -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">📋 All Users — /listusers</div>
-          <button class="btn btn-sm" onclick="renderUsers()">🔄 Refresh</button>
+          <div class="card-title">📋 All Users</div>
+          <button class="btn btn-sm" onclick="loadUsers()">🔄 Refresh</button>
         </div>
-        <div id="users-body"><div class="empty"><div class="empty-icon">👥</div>Refresh click kara users baghanyasathi</div></div>
+        <div id="users-body"><div class="loading">⏳ Loading...</div></div>
       </div>
     </div>
 
@@ -280,51 +290,52 @@
     <div class="page" id="page-courses">
       <div class="page-header">
         <div class="page-title">Courses</div>
-        <div class="page-sub">Add, view ani delete courses — /addcourse /delcourse /listcourses</div>
+        <div class="page-sub">Add, view ani delete courses</div>
       </div>
-      <!-- Add Course -->
+
+      <!-- Add Course Form -->
       <div class="card">
-        <div class="card-head"><div class="card-title">➕ Add Course — /addcourse</div></div>
+        <div class="card-head"><div class="card-title">➕ Nava Course Add Kara</div></div>
         <div class="card-body">
           <div class="two-col">
             <div class="form-row">
-              <label>Title</label>
-              <input type="text" id="ac-title" placeholder="Python Basics" oninput="buildCmd('addcourse-cmd','ac')" />
+              <label>Course Title <span class="required-star">*</span></label>
+              <input type="text" id="ac-title" placeholder="Python Basics" />
             </div>
             <div class="form-row">
               <label>Price</label>
-              <input type="text" id="ac-price" placeholder="₹999" oninput="buildCmd('addcourse-cmd','ac')" />
+              <input type="text" id="ac-price" placeholder="₹999" />
             </div>
             <div class="form-row">
               <label>Description</label>
-              <input type="text" id="ac-desc" placeholder="Course description" oninput="buildCmd('addcourse-cmd','ac')" />
+              <input type="text" id="ac-desc" placeholder="Course description" />
             </div>
             <div class="form-row">
               <label>Buy Link</label>
-              <input type="text" id="ac-link" placeholder="https://pay.example.com/python" oninput="buildCmd('addcourse-cmd','ac')" />
+              <input type="text" id="ac-link" placeholder="https://pay.example.com/course" />
             </div>
-            <div class="form-row" style="grid-column:1/-1">
-              <label>Channel ID</label>
-              <input type="text" id="ac-ch" placeholder="-1001234567890" oninput="buildCmd('addcourse-cmd','ac')" />
+            <div class="form-row">
+              <label>Thumbnail URL</label>
+              <input type="text" id="ac-thumb" placeholder="https://example.com/image.jpg" />
+              <div class="form-hint">Optional — course image URL</div>
+            </div>
+            <div class="form-row">
+              <label>Telegram Channel ID <span class="required-star">*</span></label>
+              <input type="text" id="ac-ch" placeholder="-1001234567890" />
               <div class="form-hint">@userinfobot la channel madhe forward kara — ID milel</div>
             </div>
           </div>
-          <div class="cmd-box">
-            <span class="cmd-text" id="addcourse-cmd">/addcourse title | desc | price | link | channel_id</span>
-            <button class="cmd-copy" onclick="copyCmd('addcourse-cmd')">Copy</button>
-          </div>
-          <div style="margin-top:14px">
-            <button class="btn btn-primary" onclick="execAddCourse()">➕ Add Course</button>
-          </div>
+          <button class="btn btn-primary" id="addCourseBtn" style="margin-top:6px" onclick="execAddCourse()">➕ Course Add Kara</button>
         </div>
       </div>
+
       <!-- Courses List -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">📋 All Courses — /listcourses</div>
-          <button class="btn btn-sm" onclick="renderCourses()">🔄 Refresh</button>
+          <div class="card-title">📋 All Courses</div>
+          <button class="btn btn-sm" onclick="loadCourses()">🔄 Refresh</button>
         </div>
-        <div id="courses-body"><div class="empty"><div class="empty-icon">📚</div>Refresh click kara courses baghanyasathi</div></div>
+        <div id="courses-body"><div class="loading">⏳ Loading...</div></div>
       </div>
     </div>
 
@@ -332,88 +343,47 @@
     <div class="page" id="page-access">
       <div class="page-header">
         <div class="page-title">Access Control</div>
-        <div class="page-sub">Grant / Revoke course access — /grantaccess /revokeaccess</div>
+        <div class="page-sub">User la course access grant / revoke kara</div>
       </div>
       <div class="two-col">
         <!-- Grant -->
         <div class="card">
-          <div class="card-head"><div class="card-title">✅ Grant Access — /grantaccess</div></div>
+          <div class="card-head"><div class="card-title">✅ Access Grant Kara</div></div>
           <div class="card-body">
             <div class="form-row">
-              <label>Mobile / Email</label>
-              <input type="text" id="ga-user" placeholder="9876543210 or email" oninput="buildGrantCmd()" />
+              <label>Mobile / Email <span class="required-star">*</span></label>
+              <input type="text" id="ga-user" placeholder="9876543210 or user@gmail.com" />
+              <div class="form-hint">User cha registered mobile kiva email</div>
             </div>
             <div class="form-row">
-              <label>Course ID</label>
-              <input type="text" id="ga-course" placeholder="507f1f77bcf86cd799439011" oninput="buildGrantCmd()" />
-              <div class="form-hint">/listcourses madhe Course ID bagha</div>
+              <label>Course Select Kara <span class="required-star">*</span></label>
+              <select id="ga-course">
+                <option value="">-- Course select kara --</option>
+              </select>
             </div>
             <div class="form-row">
               <label>Months (0 = Permanent)</label>
-              <input type="number" id="ga-months" value="0" min="0" oninput="buildGrantCmd()" />
+              <input type="number" id="ga-months" value="0" min="0" placeholder="0" />
+              <div class="form-hint">0 = lifetime access; 1, 3, 6, 12 = tewdhe mahine</div>
             </div>
-            <div class="cmd-box">
-              <span class="cmd-text" id="grant-cmd">/grantaccess &lt;user&gt; &lt;course_id&gt;</span>
-              <button class="cmd-copy" onclick="copyCmd('grant-cmd')">Copy</button>
-            </div>
-            <button class="btn btn-success" style="margin-top:14px" onclick="execGrant()">✅ Grant Access</button>
+            <button class="btn btn-success" style="margin-top:6px" onclick="execGrant()">✅ Grant Access</button>
           </div>
         </div>
         <!-- Revoke -->
         <div class="card">
-          <div class="card-head"><div class="card-title">❌ Revoke Access — /revokeaccess</div></div>
+          <div class="card-head"><div class="card-title">❌ Access Revoke Kara</div></div>
           <div class="card-body">
             <div class="form-row">
-              <label>Username</label>
-              <input type="text" id="ra-user" placeholder="rahul_sharma" oninput="buildRevokeCmd()" />
+              <label>Mobile / Email <span class="required-star">*</span></label>
+              <input type="text" id="ra-user" placeholder="9876543210 or user@gmail.com" />
             </div>
             <div class="form-row">
-              <label>Course ID</label>
-              <input type="text" id="ra-course" placeholder="507f1f77bcf86cd799439011" oninput="buildRevokeCmd()" />
+              <label>Course Select Kara <span class="required-star">*</span></label>
+              <select id="ra-course">
+                <option value="">-- Course select kara --</option>
+              </select>
             </div>
-            <div class="cmd-box">
-              <span class="cmd-text" id="revoke-cmd">/revokeaccess &lt;username&gt; &lt;course_id&gt;</span>
-              <button class="cmd-copy" onclick="copyCmd('revoke-cmd')">Copy</button>
-            </div>
-            <button class="btn btn-danger" style="margin-top:14px" onclick="execRevoke()">❌ Revoke Access</button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── SYNC ── -->
-    <div class="page" id="page-sync">
-      <div class="page-header">
-        <div class="page-title">Sync Channel</div>
-        <div class="page-sub">Channel madhil files MongoDB madhe index kara — /syncchannel</div>
-      </div>
-      <div class="card">
-        <div class="card-head"><div class="card-title">🔄 Sync Channel — /syncchannel</div></div>
-        <div class="card-body">
-          <div class="form-row">
-            <label>Course ID</label>
-            <input type="text" id="sy-course" placeholder="507f1f77bcf86cd799439011" oninput="buildSyncCmd()" />
-            <div class="form-hint">/listcourses madhe Course ID bagha</div>
-          </div>
-          <div class="two-col">
-            <div class="form-row">
-              <label>Start Message ID</label>
-              <input type="number" id="sy-start" value="1" min="1" oninput="buildSyncCmd()" />
-              <div class="form-hint">Pahili message cha ID (usually 1)</div>
-            </div>
-            <div class="form-row">
-              <label>End Message ID</label>
-              <input type="number" id="sy-end" placeholder="500" oninput="buildSyncCmd()" />
-              <div class="form-hint">Shevtacha message ID</div>
-            </div>
-          </div>
-          <div class="cmd-box">
-            <span class="cmd-text" id="sync-cmd">/syncchannel &lt;course_id&gt; &lt;start&gt; &lt;end&gt;</span>
-            <button class="cmd-copy" onclick="copyCmd('sync-cmd')">Copy</button>
-          </div>
-          <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
-            <button class="btn btn-primary" onclick="execSync()">🔄 Execute Sync</button>
-            <span style="font-size:12px;color:#888">Command copy houn Telegram bot madhe paste kara</span>
+            <button class="btn btn-danger" style="margin-top:34px" onclick="execRevoke()">❌ Revoke Access</button>
           </div>
         </div>
       </div>
@@ -422,31 +392,15 @@
     <!-- ── SESSIONS ── -->
     <div class="page" id="page-sessions">
       <div class="page-header">
-        <div class="page-title">Sessions</div>
-        <div class="page-sub">Active sessions bagha ani kill kara — /sessions /killsession</div>
+        <div class="page-title">Active Sessions</div>
+        <div class="page-sub">Live sessions bagha ani kill kara</div>
       </div>
-      <!-- Sessions list -->
       <div class="card">
         <div class="card-head">
-          <div class="card-title">🔐 Active Sessions — /sessions</div>
-          <button class="btn btn-sm" onclick="renderSessions()">🔄 Refresh</button>
+          <div class="card-title">🔐 Active Sessions</div>
+          <button class="btn btn-sm" onclick="loadSessions()">🔄 Refresh</button>
         </div>
-        <div id="sessions-body"><div class="empty"><div class="empty-icon">🔐</div>Refresh click kara sessions baghanyasathi</div></div>
-      </div>
-      <!-- Kill Session form -->
-      <div class="card">
-        <div class="card-head"><div class="card-title">💀 Kill Session — /killsession</div></div>
-        <div class="card-body">
-          <div class="form-row" style="max-width:360px">
-            <label>Username</label>
-            <input type="text" id="ks-user" placeholder="rahul_sharma" oninput="buildKillCmd()" />
-          </div>
-          <div class="cmd-box">
-            <span class="cmd-text" id="kill-cmd">/killsession &lt;username&gt;</span>
-            <button class="cmd-copy" onclick="copyCmd('kill-cmd')">Copy</button>
-          </div>
-          <button class="btn btn-danger" style="margin-top:14px" onclick="execKill()">💀 Kill Session</button>
-        </div>
+        <div id="sessions-body"><div class="loading">⏳ Loading...</div></div>
       </div>
     </div>
 
@@ -454,15 +408,15 @@
     <div class="page" id="page-stats">
       <div class="page-header">
         <div class="page-title">Stats</div>
-        <div class="page-sub">Bot statistics — /stats</div>
+        <div class="page-sub">Real-time bot statistics</div>
       </div>
       <div class="card">
         <div class="card-head">
-          <div class="card-title">📊 /stats</div>
-          <button class="btn btn-primary btn-sm" onclick="execStats()">▶ Run Stats</button>
+          <div class="card-title">📊 Live Stats</div>
+          <button class="btn btn-primary btn-sm" onclick="loadDetailStats()">🔄 Refresh</button>
         </div>
         <div class="card-body" id="stats-result">
-          <div class="empty"><div class="empty-icon">📊</div>Run Stats button click kara</div>
+          <div class="loading">⏳ Loading...</div>
         </div>
       </div>
     </div>
@@ -475,347 +429,447 @@
   <div class="modal">
     <div class="modal-title" id="modal-title">Delete confirm kara</div>
     <div class="modal-msg" id="modal-msg">He action undo honu shaknar nahi.</div>
-    <div class="cmd-box" style="margin-top:14px"><span class="cmd-text" id="modal-cmd"></span></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-danger" id="modal-ok" onclick="doDelete()">🗑 Delete</button>
+      <button class="btn btn-danger" id="modal-ok">🗑 Delete</button>
     </div>
   </div>
 </div>
 
 <script>
-// ─── Auth ─────────────────────────────────────────────────────────────────────
-const CREDS={user:'Akshay',pass:'Akshay1181'};
+// ─── State ────────────────────────────────────────────────────────────────────
+let adminToken = '';
+let cachedCourses = []; // for dropdowns
 
-function doLogin(){
-  const u=document.getElementById('loginUser').value.trim();
-  const p=document.getElementById('loginPass').value.trim();
-  const err=document.getElementById('loginErr');
-  if(u===CREDS.user && p===CREDS.pass){
-    document.getElementById('loginScreen').style.display='none';
-    document.getElementById('panelScreen').style.display='flex';
-    updateStats();
-  } else {
-    err.style.display='block';
-    document.getElementById('loginPass').value='';
+// ─── API Helper ───────────────────────────────────────────────────────────────
+async function api(path, opts = {}) {
+  const res = await fetch('/api/admin' + path, {
+    ...opts,
+    headers: {
+      'Authorization': 'Basic ' + adminToken,
+      'Content-Type': 'application/json',
+      ...(opts.headers || {})
+    }
+  });
+  return res;
+}
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+async function doLogin() {
+  const u = document.getElementById('loginUser').value.trim();
+  const p = document.getElementById('loginPass').value.trim();
+  const err = document.getElementById('loginErr');
+  const btn = document.getElementById('loginBtn');
+
+  if (!u || !p) { err.style.display = 'block'; err.textContent = '❌ User ID ani Password bhara'; return; }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ Verifying...';
+  err.style.display = 'none';
+
+  try {
+    const token = btoa(u + ':' + p);
+    const res = await fetch('/api/admin/ping', {
+      headers: { 'Authorization': 'Basic ' + token }
+    });
+
+    if (res.ok) {
+      adminToken = token;
+      document.getElementById('loginScreen').style.display = 'none';
+      document.getElementById('panelScreen').style.display = 'flex';
+      // Auto-load dashboard data
+      loadStats();
+      loadCourses(); // cache for dropdowns
+    } else {
+      err.style.display = 'block';
+      err.textContent = '❌ Chukicha User ID kiva Password';
+    }
+  } catch (e) {
+    err.style.display = 'block';
+    err.textContent = '❌ Server connect hovu shaklo nahi';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔐 Login';
   }
 }
 
-function doLogout(){
-  document.getElementById('panelScreen').style.display='none';
-  document.getElementById('loginScreen').style.display='flex';
-  document.getElementById('loginUser').value='';
-  document.getElementById('loginPass').value='';
-  document.getElementById('loginErr').style.display='none';
+function doLogout() {
+  adminToken = '';
+  cachedCourses = [];
+  document.getElementById('panelScreen').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+  document.getElementById('loginErr').style.display = 'none';
 }
 
 // ─── Navigation ───────────────────────────────────────────────────────────────
-function goto(name,el){
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-  document.getElementById('page-'+name).classList.add('active');
-  if(el) el.classList.add('active');
-}
+function goto(name, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  if (el) el.classList.add('active');
 
-// ─── In-memory DB (replace with real API calls when wiring backend) ───────────
-const DB={
-  users:[
-    {id:'507f1f77bcf86cd799439001',username:'rahul_sharma',mobile:'9876543210',email:'',active:true},
-    {id:'507f1f77bcf86cd799439002',username:'priya_patel',mobile:'',email:'priya@gmail.com',active:true},
-    {id:'507f1f77bcf86cd799439003',username:'amit_joshi',mobile:'9898989898',email:'',active:false},
-  ],
-  courses:[
-    {id:'507f1f77bcf86cd799439011',title:'Python Basics',price:'₹999',channelId:'-1001234567890',files:42},
-    {id:'507f1f77bcf86cd799439012',title:'React Advanced',price:'₹1499',channelId:'-1001234567891',files:78},
-    {id:'507f1f77bcf86cd799439013',title:'Data Science',price:'₹1999',channelId:'-1001234567892',files:120},
-  ],
-  sessions:[
-    {username:'rahul_sharma',ip:'103.42.1.10',expires:'20 Jun 2025 09:00',token:'...a3f8b2c1'},
-    {username:'priya_patel',ip:'117.55.2.45',expires:'25 Jun 2025 14:30',token:'...d9e7f3a2'},
-  ]
-};
-
-// ─── Stats helper ─────────────────────────────────────────────────────────────
-function updateStats(){
-  const totalFiles=DB.courses.reduce((a,c)=>a+c.files,0);
-  document.getElementById('s-users').textContent=DB.users.length;
-  document.getElementById('s-courses').textContent=DB.courses.length;
-  document.getElementById('s-files').textContent=totalFiles;
-  document.getElementById('s-sessions').textContent=DB.sessions.length;
+  // Auto-load on navigate
+  if (name === 'users') loadUsers();
+  if (name === 'courses') loadCourses();
+  if (name === 'sessions') loadSessions();
+  if (name === 'stats') loadDetailStats();
+  if (name === 'access') loadCourses(); // refresh dropdown
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
-function toast(msg,type='success'){
-  const t=document.createElement('div');
-  t.className='toast toast-'+type;
-  t.textContent=msg;
+function toast(msg, type = 'success') {
+  const t = document.createElement('div');
+  t.className = 'toast toast-' + type;
+  t.textContent = msg;
   document.body.appendChild(t);
-  setTimeout(()=>t.remove(),3200);
-}
-
-// ─── Copy command ─────────────────────────────────────────────────────────────
-function copyCmd(id){
-  const text=document.getElementById(id).textContent;
-  navigator.clipboard.writeText(text)
-    .then(()=>toast('✅ Command copied: '+text))
-    .catch(()=>toast('❌ Copy failed','error'));
+  setTimeout(() => t.remove(), 3200);
 }
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
-let pendingDel=null;
-function openModal(title,msg,cmd,data){
-  pendingDel=data;
-  document.getElementById('modal-title').textContent=title;
-  document.getElementById('modal-msg').textContent=msg;
-  document.getElementById('modal-cmd').textContent=cmd;
+let pendingConfirm = null;
+function openModal(title, msg, onConfirm) {
+  pendingConfirm = onConfirm;
+  document.getElementById('modal-title').textContent = title;
+  document.getElementById('modal-msg').textContent = msg;
+  document.getElementById('modal-ok').onclick = () => { closeModal(); if (pendingConfirm) pendingConfirm(); };
   document.getElementById('delModal').classList.add('open');
 }
-function closeModal(){document.getElementById('delModal').classList.remove('open');pendingDel=null;}
-function doDelete(){
-  if(!pendingDel)return;
-  if(pendingDel.type==='user'){
-    const i=DB.users.findIndex(u=>u.id===pendingDel.id);
-    if(i>-1){DB.users.splice(i,1);toast('✅ User delete kela: '+pendingDel.username);renderUsers();}
-  } else if(pendingDel.type==='course'){
-    const i=DB.courses.findIndex(c=>c.id===pendingDel.id);
-    if(i>-1){DB.courses.splice(i,1);toast('✅ Course delete kela: '+pendingDel.title);renderCourses();}
+function closeModal() { document.getElementById('delModal').classList.remove('open'); pendingConfirm = null; }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STATS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadStats() {
+  try {
+    const res = await api('/stats');
+    const d = await res.json();
+    document.getElementById('s-users').textContent = d.users ?? '—';
+    document.getElementById('s-courses').textContent = d.courses ?? '—';
+    document.getElementById('s-files').textContent = d.files ?? '—';
+    document.getElementById('s-sessions').textContent = d.sessions ?? '—';
+  } catch (e) {
+    console.error('Stats load failed:', e);
   }
-  updateStats();
-  closeModal();
+}
+
+async function loadDetailStats() {
+  const el = document.getElementById('stats-result');
+  el.innerHTML = '<div class="loading">⏳ Loading...</div>';
+  try {
+    const res = await api('/stats');
+    const d = await res.json();
+    const inactive = (d.users || 0) - (d.active_users || 0);
+    el.innerHTML = `
+      <div class="stats-grid-3">
+        <div class="stat-card"><div class="stat-label">Total Users</div><div class="stat-value">${d.users || 0}</div></div>
+        <div class="stat-card"><div class="stat-label">Active Users</div><div class="stat-value" style="color:#2e7d32">${d.active_users || 0}</div></div>
+        <div class="stat-card"><div class="stat-label">Inactive Users</div><div class="stat-value" style="color:#c62828">${inactive}</div></div>
+        <div class="stat-card"><div class="stat-label">Total Courses</div><div class="stat-value">${d.courses || 0}</div></div>
+        <div class="stat-card"><div class="stat-label">Cached Files</div><div class="stat-value">${d.files || 0}</div></div>
+        <div class="stat-card"><div class="stat-label">Active Sessions</div><div class="stat-value">${d.sessions || 0}</div></div>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Stats load hovu shakla nahi</div>';
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // USERS
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildCmd(cmdId,prefix){
-  if(prefix==='au'){
-    const id=document.getElementById('au-id').value.trim()||'<mobile>';
-    const pw=document.getElementById('au-pass').value.trim()||'<password>';
-    const nm=document.getElementById('au-name').value.trim();
-    document.getElementById('adduser-cmd').textContent='/adduser '+id+' '+pw+(nm?' '+nm:'');
+
+async function execAddUser() {
+  const name   = document.getElementById('au-name').value.trim();
+  const mobile = document.getElementById('au-mobile').value.trim();
+  const email  = document.getElementById('au-email').value.trim();
+  const pass   = document.getElementById('au-pass').value;
+  const cpass  = document.getElementById('au-cpass').value;
+
+  if (!name)                { toast('❌ Full Name required aahe', 'error'); return; }
+  if (!mobile && !email)    { toast('❌ Mobile kiva Email yepaikhi ek bhara', 'error'); return; }
+  if (pass.length < 6)      { toast('❌ Password minimum 6 characters pahije', 'error'); return; }
+  if (pass !== cpass)       { toast('❌ Passwords match hot nahit', 'error'); return; }
+
+  const btn = document.getElementById('addUserBtn');
+  btn.disabled = true; btn.textContent = '⏳ Adding...';
+
+  try {
+    const res = await api('/users', {
+      method: 'POST',
+      body: JSON.stringify({ full_name: name, mobile, email, password: pass, confirm_password: cpass })
+    });
+    const d = await res.json();
+    if (!res.ok) { toast('❌ ' + (d.error || 'User add hovu shakla nahi'), 'error'); return; }
+
+    toast('✅ User add kela: ' + (d.username || name));
+    // Clear form
+    ['au-name','au-mobile','au-email','au-pass','au-cpass'].forEach(id => document.getElementById(id).value = '');
+    loadUsers();
+    loadStats();
+  } catch (e) {
+    toast('❌ Network error', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '➕ User Add Kara';
   }
 }
 
-function execAddUser(){
-  const id=document.getElementById('au-id').value.trim();
-  const pw=document.getElementById('au-pass').value.trim();
-  const nm=document.getElementById('au-name').value.trim();
-  if(!id||!pw){toast('❌ Mobile/Email ani Password bhara','error');return;}
-  if(pw.length<6){toast('❌ Password minimum 6 characters pahije','error');return;}
-  const uname=(nm||id).toLowerCase().replace(/[^a-z0-9]/g,'_').replace(/__+/g,'_');
-  DB.users.push({id:'507f'+Date.now(),username:uname,mobile:id.includes('@')?'':id,email:id.includes('@')?id:'',active:true});
-  toast('✅ User add kela! /adduser command execute kara bot madhe.');
-  document.getElementById('au-id').value='';
-  document.getElementById('au-pass').value='';
-  document.getElementById('au-name').value='';
-  document.getElementById('adduser-cmd').textContent='/adduser <mobile> <password>';
-  updateStats();
-  renderUsers();
+async function loadUsers() {
+  const wrap = document.getElementById('users-body');
+  wrap.innerHTML = '<div class="loading">⏳ Loading users...</div>';
+  try {
+    const res = await api('/users');
+    const users = await res.json();
+    if (!users || !users.length) {
+      wrap.innerHTML = '<div class="empty"><div class="empty-icon">👥</div>Koni user nahi yet</div>';
+      return;
+    }
+    let h = '<div class="table-wrap"><table><thead><tr><th>Full Name</th><th>Username</th><th>Mobile</th><th>Email</th><th>Status</th><th>Joined</th><th style="width:100px">Action</th></tr></thead><tbody>';
+    users.forEach(u => {
+      const badge = u.is_active
+        ? '<span class="badge badge-green">Active</span>'
+        : '<span class="badge badge-red">Disabled</span>';
+      const joined = u.created_at ? new Date(u.created_at).toLocaleDateString('en-IN') : '—';
+      h += `<tr>
+        <td><strong>${esc(u.full_name || '—')}</strong></td>
+        <td style="font-family:monospace;font-size:12px;color:#888">${esc(u.username)}</td>
+        <td>${esc(u.mobile || '—')}</td>
+        <td>${esc(u.email || '—')}</td>
+        <td>${badge}</td>
+        <td style="font-size:12px;color:#888">${joined}</td>
+        <td>
+          ${u.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Disable</button>` : '<span class="badge badge-red">Disabled</span>'}
+        </td>
+      </tr>`;
+    });
+    h += '</tbody></table></div>';
+    wrap.innerHTML = h;
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Users load hovu shakle nahi</div>';
+  }
 }
 
-function renderUsers(){
-  const wrap=document.getElementById('users-body');
-  if(!DB.users.length){wrap.innerHTML='<div class="empty"><div class="empty-icon">👥</div>Koni user nahi yet</div>';return;}
-  let h='<div class="table-wrap"><table><thead><tr><th>Username</th><th>Mobile / Email</th><th>Status</th><th style="width:160px">Actions</th></tr></thead><tbody>';
-  DB.users.forEach(u=>{
-    const contact=u.mobile||u.email||'—';
-    const badge=u.active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Disabled</span>';
-    h+=`<tr>
-      <td><strong>${u.username}</strong><br><span style="font-size:11px;color:#bbb;font-family:monospace">${u.id.slice(-10)}...</span></td>
-      <td>${contact}</td>
-      <td>${badge}</td>
-      <td>
-        <button class="btn btn-danger btn-sm" onclick="openModal('User Delete kara?','${u.username} la disable kelyavar sarv sessions delete hotil.','/deluser ${u.username}',{type:'user',id:'${u.id}',username:'${u.username}'})">🗑 Delete</button>
-      </td>
-    </tr>`;
-  });
-  h+='</tbody></table></div>';
-  wrap.innerHTML=h;
+function deleteUser(id, name) {
+  openModal(
+    'User Disable kara?',
+    `"${name}" la disable kelyavar tyacha sarv sessions delete hotil ani login bund hoil.`,
+    async () => {
+      try {
+        const res = await api('/users/' + id, { method: 'DELETE' });
+        if (res.ok) { toast('✅ ' + name + ' disable kela'); loadUsers(); loadStats(); }
+        else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
+      } catch { toast('❌ Network error', 'error'); }
+    }
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COURSES
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildCmd(cmdId,prefix){
-  if(prefix==='au'){
-    const id=document.getElementById('au-id').value.trim()||'<mobile>';
-    const pw=document.getElementById('au-pass').value.trim()||'<password>';
-    const nm=document.getElementById('au-name').value.trim();
-    document.getElementById('adduser-cmd').textContent='/adduser '+id+' '+pw+(nm?' '+nm:'');
-  } else if(prefix==='ac'){
-    const t=document.getElementById('ac-title').value.trim()||'<title>';
-    const d=document.getElementById('ac-desc').value.trim()||'<description>';
-    const p=document.getElementById('ac-price').value.trim()||'<price>';
-    const l=document.getElementById('ac-link').value.trim()||'<buy_link>';
-    const ch=document.getElementById('ac-ch').value.trim()||'<channel_id>';
-    document.getElementById('addcourse-cmd').textContent='/addcourse '+t+' | '+d+' | '+p+' | '+l+' | '+ch;
+
+async function execAddCourse() {
+  const title = document.getElementById('ac-title').value.trim();
+  const desc  = document.getElementById('ac-desc').value.trim();
+  const price = document.getElementById('ac-price').value.trim();
+  const link  = document.getElementById('ac-link').value.trim();
+  const thumb = document.getElementById('ac-thumb').value.trim();
+  const chRaw = document.getElementById('ac-ch').value.trim();
+  const channelId = parseInt(chRaw, 10);
+
+  if (!title)              { toast('❌ Course Title required aahe', 'error'); return; }
+  if (!chRaw || isNaN(channelId)) { toast('❌ Valid Channel ID bhara (e.g. -1001234567890)', 'error'); return; }
+
+  const btn = document.getElementById('addCourseBtn');
+  btn.disabled = true; btn.textContent = '⏳ Adding...';
+
+  try {
+    const res = await api('/courses', {
+      method: 'POST',
+      body: JSON.stringify({ title, description: desc, thumbnail: thumb, price, buy_link: link, channel_id: channelId })
+    });
+    const d = await res.json();
+    if (!res.ok) { toast('❌ ' + (d.error || 'Course add hovu shakla nahi'), 'error'); return; }
+
+    toast('✅ Course add kela: ' + title);
+    ['ac-title','ac-desc','ac-price','ac-link','ac-thumb','ac-ch'].forEach(id => document.getElementById(id).value = '');
+    loadCourses();
+    loadStats();
+  } catch (e) {
+    toast('❌ Network error', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '➕ Course Add Kara';
   }
 }
 
-function execAddCourse(){
-  const t=document.getElementById('ac-title').value.trim();
-  const d=document.getElementById('ac-desc').value.trim();
-  const p=document.getElementById('ac-price').value.trim();
-  const l=document.getElementById('ac-link').value.trim();
-  const ch=document.getElementById('ac-ch').value.trim();
-  if(!t||!ch){toast('❌ Title ani Channel ID bhara','error');return;}
-  DB.courses.push({id:'507f'+Date.now(),title:t,price:p||'Free',channelId:ch,files:0});
-  toast('✅ Course add kela! /addcourse command execute kara bot madhe.');
-  ['ac-title','ac-desc','ac-price','ac-link','ac-ch'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('addcourse-cmd').textContent='/addcourse title | desc | price | link | channel_id';
-  updateStats();
-  renderCourses();
+async function loadCourses() {
+  const wrap = document.getElementById('courses-body');
+  if (wrap) wrap.innerHTML = '<div class="loading">⏳ Loading courses...</div>';
+  try {
+    const res = await api('/courses');
+    const courses = await res.json();
+    cachedCourses = courses || [];
+    populateCourseDropdowns();
+
+    if (!wrap) return;
+    if (!courses || !courses.length) {
+      wrap.innerHTML = '<div class="empty"><div class="empty-icon">📚</div>Koni course nahi yet</div>';
+      return;
+    }
+    let h = '<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Channel ID</th><th>Course ID</th><th style="width:120px">Actions</th></tr></thead><tbody>';
+    courses.forEach(c => {
+      h += `<tr>
+        <td><strong>${esc(c.title)}</strong>${c.description ? `<br><span style="font-size:11px;color:#999">${esc(c.description.slice(0,60))}${c.description.length>60?'…':''}</span>` : ''}</td>
+        <td>${c.price ? `<span class="badge badge-blue">${esc(c.price)}</span>` : '<span class="badge badge-orange">Free</span>'}</td>
+        <td>${c.files || 0} files</td>
+        <td style="font-family:monospace;font-size:11px;color:#888">${c.channel_id}</td>
+        <td style="font-family:monospace;font-size:11px;color:#bbb" title="${c.id}">${c.id.slice(-12)}...</td>
+        <td>
+          <button class="btn btn-danger btn-sm" onclick="deleteCourse('${c.id}','${esc(c.title)}')">🗑 Delete</button>
+        </td>
+      </tr>`;
+    });
+    h += '</tbody></table></div>';
+    wrap.innerHTML = h;
+  } catch (e) {
+    if (wrap) wrap.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Courses load hovu shakle nahi</div>';
+  }
 }
 
-function renderCourses(){
-  const wrap=document.getElementById('courses-body');
-  if(!DB.courses.length){wrap.innerHTML='<div class="empty"><div class="empty-icon">📚</div>Koni course nahi yet</div>';return;}
-  let h='<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Channel ID</th><th>Course ID</th><th style="width:200px">Actions</th></tr></thead><tbody>';
-  DB.courses.forEach(c=>{
-    h+=`<tr>
-      <td><strong>${c.title}</strong></td>
-      <td><span class="badge badge-blue">${c.price}</span></td>
-      <td>${c.files} files</td>
-      <td style="font-family:monospace;font-size:12px;color:#888">${c.channelId}</td>
-      <td style="font-family:monospace;font-size:11px;color:#bbb">${c.id.slice(-12)}...</td>
-      <td style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-warning btn-sm" title="Sync kara" onclick="prefillSync('${c.id}','${c.title}')">🔄 Sync</button>
-        <button class="btn btn-danger btn-sm" onclick="openModal('Course Delete kara?','&quot;${c.title}&quot; delete kelyavar cached files pan delete hotil.','/delcourse ${c.id}',{type:'course',id:'${c.id}',title:'${c.title}'})">🗑 Delete</button>
-      </td>
-    </tr>`;
+function populateCourseDropdowns() {
+  ['ga-course', 'ra-course'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const current = sel.value;
+    sel.innerHTML = '<option value="">-- Course select kara --</option>';
+    cachedCourses.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.title + (c.price ? ' (' + c.price + ')' : '');
+      sel.appendChild(opt);
+    });
+    if (current) sel.value = current;
   });
-  h+='</tbody></table></div>';
-  wrap.innerHTML=h;
 }
 
-function prefillSync(id,title){
-  document.getElementById('sy-course').value=id;
-  buildSyncCmd();
-  goto('sync',document.querySelectorAll('.nav-item')[4]);
-  toast('ℹ️ "'+title+'" sync sathi ready — start ani end message ID bhara','info');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ACCESS
-// ═══════════════════════════════════════════════════════════════════════════════
-function buildGrantCmd(){
-  const u=document.getElementById('ga-user').value.trim()||'<user>';
-  const c=document.getElementById('ga-course').value.trim()||'<course_id>';
-  const m=parseInt(document.getElementById('ga-months').value)||0;
-  document.getElementById('grant-cmd').textContent='/grantaccess '+u+' '+c+(m>0?' '+m:'');
-}
-function buildRevokeCmd(){
-  const u=document.getElementById('ra-user').value.trim()||'<username>';
-  const c=document.getElementById('ra-course').value.trim()||'<course_id>';
-  document.getElementById('revoke-cmd').textContent='/revokeaccess '+u+' '+c;
-}
-
-function execGrant(){
-  const u=document.getElementById('ga-user').value.trim();
-  const c=document.getElementById('ga-course').value.trim();
-  const m=parseInt(document.getElementById('ga-months').value)||0;
-  if(!u||!c){toast('❌ User ani Course ID bhara','error');return;}
-  const cmd='/grantaccess '+u+' '+c+(m>0?' '+m:'');
-  navigator.clipboard.writeText(cmd).catch(()=>{});
-  toast('✅ '+(m>0?m+' mahinyansathi':'Permanent')+' access dila! Command copied.');
-}
-function execRevoke(){
-  const u=document.getElementById('ra-user').value.trim();
-  const c=document.getElementById('ra-course').value.trim();
-  if(!u||!c){toast('❌ Username ani Course ID bhara','error');return;}
-  const cmd='/revokeaccess '+u+' '+c;
-  navigator.clipboard.writeText(cmd).catch(()=>{});
-  toast('✅ Access revoke command copied!');
+function deleteCourse(id, title) {
+  openModal(
+    'Course Delete kara?',
+    `"${title}" delete kelyavar tyache sare cached files pan delete hotil. He permanent aahe.`,
+    async () => {
+      try {
+        const res = await api('/courses/' + id, { method: 'DELETE' });
+        if (res.ok) { toast('✅ Course delete kela: ' + title); loadCourses(); loadStats(); }
+        else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
+      } catch { toast('❌ Network error', 'error'); }
+    }
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SYNC
+// ACCESS CONTROL
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildSyncCmd(){
-  const c=document.getElementById('sy-course').value.trim()||'<course_id>';
-  const s=document.getElementById('sy-start').value||'1';
-  const e=document.getElementById('sy-end').value||'<end>';
-  document.getElementById('sync-cmd').textContent='/syncchannel '+c+' '+s+' '+e;
+
+async function execGrant() {
+  const user     = document.getElementById('ga-user').value.trim();
+  const courseId = document.getElementById('ga-course').value;
+  const months   = parseInt(document.getElementById('ga-months').value) || 0;
+
+  if (!user)     { toast('❌ Mobile kiva Email bhara', 'error'); return; }
+  if (!courseId) { toast('❌ Course select kara', 'error'); return; }
+
+  try {
+    const res = await api('/access/grant', {
+      method: 'POST',
+      body: JSON.stringify({ identifier: user, course_id: courseId, months })
+    });
+    const d = await res.json();
+    if (!res.ok) { toast('❌ ' + (d.error || 'Access grant hovu shakla nahi'), 'error'); return; }
+    const label = months > 0 ? months + ' mahinyansathi' : 'Permanent';
+    toast('✅ ' + (d.username || user) + ' la ' + label + ' access dila!');
+    document.getElementById('ga-user').value = '';
+    document.getElementById('ga-course').value = '';
+    document.getElementById('ga-months').value = '0';
+  } catch { toast('❌ Network error', 'error'); }
 }
-function execSync(){
-  const c=document.getElementById('sy-course').value.trim();
-  const e=document.getElementById('sy-end').value;
-  if(!c||!e){toast('❌ Course ID ani End message ID bhara','error');return;}
-  const cmd=document.getElementById('sync-cmd').textContent;
-  navigator.clipboard.writeText(cmd).catch(()=>{});
-  toast('✅ Sync command copied! Telegram bot madhe paste kara.');
+
+async function execRevoke() {
+  const user     = document.getElementById('ra-user').value.trim();
+  const courseId = document.getElementById('ra-course').value;
+
+  if (!user)     { toast('❌ Mobile kiva Email bhara', 'error'); return; }
+  if (!courseId) { toast('❌ Course select kara', 'error'); return; }
+
+  try {
+    const res = await api('/access/revoke', {
+      method: 'POST',
+      body: JSON.stringify({ identifier: user, course_id: courseId })
+    });
+    const d = await res.json();
+    if (!res.ok) { toast('❌ ' + (d.error || 'Access revoke hovu shakla nahi'), 'error'); return; }
+    toast('✅ ' + (d.username || user) + ' cha access revoke kela!');
+    document.getElementById('ra-user').value = '';
+    document.getElementById('ra-course').value = '';
+  } catch { toast('❌ Network error', 'error'); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SESSIONS
 // ═══════════════════════════════════════════════════════════════════════════════
-function buildKillCmd(){
-  const u=document.getElementById('ks-user').value.trim()||'<username>';
-  document.getElementById('kill-cmd').textContent='/killsession '+u;
-}
 
-function renderSessions(){
-  const wrap=document.getElementById('sessions-body');
-  if(!DB.sessions.length){wrap.innerHTML='<div class="empty"><div class="empty-icon">🔐</div>Koni active session nahi</div>';return;}
-  let h='';
-  DB.sessions.forEach(s=>{
-    h+=`<div class="session-item">
-      <div class="session-info">
-        <div class="uname">👤 ${s.username}</div>
-        <div class="meta">🌐 IP: ${s.ip} &nbsp;·&nbsp; ⏰ Expires: ${s.expires}</div>
-        <div class="token">Token: ${s.token}</div>
-      </div>
-      <button class="btn btn-danger btn-sm" onclick="killOne('${s.username}')">💀 Kill</button>
-    </div>`;
-  });
-  wrap.innerHTML=h;
-}
-
-function killOne(username){
-  const i=DB.sessions.findIndex(s=>s.username===username);
-  if(i>-1){
-    DB.sessions.splice(i,1);
-    toast('✅ '+username+' la logout kela!');
-    renderSessions();
-    updateStats();
+async function loadSessions() {
+  const wrap = document.getElementById('sessions-body');
+  wrap.innerHTML = '<div class="loading">⏳ Loading sessions...</div>';
+  try {
+    const res = await api('/sessions');
+    const sessions = await res.json();
+    if (!sessions || !sessions.length) {
+      wrap.innerHTML = '<div class="empty"><div class="empty-icon">🔐</div>Koni active session nahi</div>';
+      return;
+    }
+    let h = '';
+    sessions.forEach(s => {
+      h += `<div class="session-item">
+        <div class="session-info">
+          <div class="uname">👤 ${esc(s.full_name || s.username)} <span style="font-size:11px;font-weight:400;color:#888">(@${esc(s.username)})</span></div>
+          <div class="meta">
+            ${s.mobile ? '📱 ' + esc(s.mobile) + ' &nbsp;·&nbsp; ' : ''}
+            ${s.email ? '📧 ' + esc(s.email) + ' &nbsp;·&nbsp; ' : ''}
+            🌐 ${esc(s.ip)} &nbsp;·&nbsp; ⏰ Expires: ${esc(s.expires_at)}
+          </div>
+          <div class="token">Token: ${esc(s.token_hint)}</div>
+        </div>
+        <button class="btn btn-danger btn-sm" onclick="killSession(${JSON.stringify(s.token)}, '${esc(s.username)}')">💀 Kill</button>
+      </div>`;
+    });
+    wrap.innerHTML = h;
+    loadStats();
+  } catch (e) {
+    wrap.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Sessions load hovu shakle nahi</div>';
   }
 }
 
-function execKill(){
-  const u=document.getElementById('ks-user').value.trim();
-  if(!u){toast('❌ Username bhara','error');return;}
-  const i=DB.sessions.findIndex(s=>s.username===u);
-  if(i>-1){
-    DB.sessions.splice(i,1);
-    toast('✅ '+u+' la logout kela!');
-    renderSessions();
-    updateStats();
-  } else {
-    const cmd='/killsession '+u;
-    navigator.clipboard.writeText(cmd).catch(()=>{});
-    toast('ℹ️ Session sapat nahi — command copied: '+cmd,'info');
-  }
+async function killSession(token, username) {
+  try {
+    const res = await api('/sessions/kill', {
+      method: 'POST',
+      body: JSON.stringify({ token })
+    });
+    if (res.ok) { toast('✅ ' + username + ' la logout kela!'); loadSessions(); }
+    else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
+  } catch { toast('❌ Network error', 'error'); }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// STATS
-// ═══════════════════════════════════════════════════════════════════════════════
-function execStats(){
-  const active=DB.users.filter(u=>u.active).length;
-  const totalFiles=DB.courses.reduce((a,c)=>a+c.files,0);
-  document.getElementById('stats-result').innerHTML=`
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px">
-      <div class="stat-card"><div class="stat-label">Total Users</div><div class="stat-value">${DB.users.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Active Users</div><div class="stat-value">${active}</div></div>
-      <div class="stat-card"><div class="stat-label">Inactive</div><div class="stat-value">${DB.users.length-active}</div></div>
-      <div class="stat-card"><div class="stat-label">Total Courses</div><div class="stat-value">${DB.courses.length}</div></div>
-      <div class="stat-card"><div class="stat-label">Cached Files</div><div class="stat-value">${totalFiles}</div></div>
-      <div class="stat-card"><div class="stat-label">Active Sessions</div><div class="stat-value">${DB.sessions.length}</div></div>
-    </div>
-    <div class="cmd-box"><span class="cmd-text">/stats</span><button class="cmd-copy" onclick="copyCmd2('/stats')">Copy</button></div>`;
-  toast('📊 Stats load kele!');
+// ─── Escape helper ────────────────────────────────────────────────────────────
+function esc(s) {
+  if (!s) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
-function copyCmd2(t){navigator.clipboard.writeText(t).then(()=>toast('✅ Copied: '+t)).catch(()=>{});}
 </script>
 </body>
 </html>
