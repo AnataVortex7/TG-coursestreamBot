@@ -34,7 +34,7 @@ const (
 	StreamTokenTTL = 2 * time.Hour
 	// Worker tokens are short-lived — they carry no session data,
 	// just enough to authorize one stream on the worker.
-	WorkerTokenTTL = 5 * time.Minute
+	WorkerTokenTTL = 80 * time.Minute
 )
 
 // ─── Main stream token payload ───────────────────────────────────────────────
