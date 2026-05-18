@@ -28,6 +28,7 @@ var (
 	ColWorkers      *mongo.Collection // external streaming workers
 	ColOTPs         *mongo.Collection // email OTP login records (TTL: 10 min)
 	ColPendingRegs  *mongo.Collection // unverified registration records (TTL: 10 min)
+	ColURLMonitors  *mongo.Collection // url monitor — persisted monitored URLs
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -151,8 +152,9 @@ func Connect() {
 	ColChannelCache = Database.Collection("channel_cache")
 	ColStreamNonces = Database.Collection("stream_nonces")
 	ColWorkers      = Database.Collection("workers")
-	ColOTPs         = Database.Collection("otp_records")        // ← OTP login records
-	ColPendingRegs  = Database.Collection("pending_registrations") // ← unverified registrations
+	ColOTPs         = Database.Collection("otp_records")             // ← OTP login records
+	ColPendingRegs  = Database.Collection("pending_registrations")   // ← unverified registrations
+	ColURLMonitors  = Database.Collection("url_monitors")            // ← URL monitor
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -206,6 +208,10 @@ func createIndexes() {
 
 	ensureIndex(ctx, ColPendingRegs, bson.D{{Key: "email", Value: 1}}, false)
 	ensureTTLIndex(ctx, ColPendingRegs, "expires_at")
+
+	// url_monitors: unique URL — ek URL ek velach add hota yeil
+	ensureIndex(ctx, ColURLMonitors, bson.D{{Key: "url", Value: 1}}, true)
+	ensureIndex(ctx, ColURLMonitors, bson.D{{Key: "enabled", Value: 1}}, false)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
