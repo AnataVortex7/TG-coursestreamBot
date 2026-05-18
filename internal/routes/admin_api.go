@@ -8,7 +8,7 @@ import (
 	"EverythingSuckz/fsb/internal/utils"
 	"context"
 	"encoding/base64"
-	"golog"
+	golog "log"
 	"net/http"
 	"os"
 	"strings"
