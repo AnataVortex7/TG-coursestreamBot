@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/smtp"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -417,4 +418,168 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// ─── Send Admin → User Message ────────────────────────────────────────────────
+// Admin panel madhuun directly user la email pathavto
+
+func SendAdminToUserMessage(toEmail, fullName, subject, message, appName string) error {
+	if len(smtpProviders) == 0 {
+		return fmt.Errorf("smtp: no providers configured")
+	}
+	p := primaryProvider()
+	if appName == "" {
+		appName = p.fromName
+	}
+	htmlBody := buildAdminToUserEmail(appName, fullName, subject, message)
+	msg := buildMsg(p, toEmail, subject, htmlBody)
+	return sendMail(toEmail, msg)
+}
+
+func buildAdminToUserEmail(appName, fullName, subject, message string) string {
+	// \n → <br> for HTML rendering
+	htmlMessage := ""
+	for _, line := range splitLines(message) {
+		if line == "" {
+			htmlMessage += "<br>"
+		} else {
+			htmlMessage += "<p style=\"color:#c8cad8;font-size:14px;line-height:1.7;margin:0 0 8px;\">" + escapeHTML(line) + "</p>"
+		}
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;margin:0;padding:40px 16px;">
+  <div style="max-width:520px;margin:0 auto;background:#1a1d27;border-radius:16px;border:1px solid #2a2d3a;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#6c63ff,#4f46e5);padding:28px 32px;text-align:center;">
+      <div style="font-size:38px;margin-bottom:10px;">📩</div>
+      <h1 style="color:#fff;font-size:20px;font-weight:700;margin:0 0 4px;">Message from %s</h1>
+      <p style="color:rgba(255,255,255,.75);font-size:13px;margin:0;">Hi %s, you have a new message</p>
+    </div>
+    <div style="padding:28px 32px;">
+      <div style="background:#12141c;border-left:3px solid #6c63ff;border-radius:0 10px 10px 0;padding:18px 20px;margin-bottom:20px;">
+        <p style="color:#7a7d8e;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:0 0 10px;">📋 Subject</p>
+        <p style="color:#e8e9f0;font-size:15px;font-weight:600;margin:0;">%s</p>
+      </div>
+      <div style="background:#12141c;border-radius:10px;padding:20px 22px;margin-bottom:20px;">
+        <p style="color:#7a7d8e;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:0 0 12px;">💬 Message</p>
+        %s
+      </div>
+      <div style="text-align:center;padding:10px 0;">
+        <p style="color:#4a4d5e;font-size:11px;margin:0;">This message was sent by the %s admin team.</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`, appName, escapeHTML(fullName), escapeHTML(subject), htmlMessage, appName)
+}
+
+// ─── Send User → Admin Contact Message ───────────────────────────────────────
+// User site vartun admin la contact karto
+
+type UserContactInfo struct {
+	UserFullName string
+	UserMobile   string
+	UserEmail    string
+	Username     string
+	Subject      string
+	Message      string
+}
+
+func SendUserContactToAdmin(adminEmail string, info UserContactInfo) error {
+	if len(smtpProviders) == 0 {
+		return fmt.Errorf("smtp: no providers configured")
+	}
+	if adminEmail == "" {
+		return fmt.Errorf("smtp: ADMIN_EMAIL not set")
+	}
+	p := primaryProvider()
+	subject := fmt.Sprintf("📬 New Message from %s — %s", info.UserFullName, info.Subject)
+	htmlBody := buildUserContactEmail(p.fromName, info)
+	msg := buildMsg(p, adminEmail, subject, htmlBody)
+	return sendMail(adminEmail, msg)
+}
+
+func buildUserContactEmail(appName string, info UserContactInfo) string {
+	htmlMessage := ""
+	for _, line := range splitLines(info.Message) {
+		if line == "" {
+			htmlMessage += "<br>"
+		} else {
+			htmlMessage += "<p style=\"color:#c8cad8;font-size:14px;line-height:1.7;margin:0 0 8px;\">" + escapeHTML(line) + "</p>"
+		}
+	}
+	identifier := info.UserMobile
+	if identifier == "" {
+		identifier = info.UserEmail
+	}
+	if identifier == "" {
+		identifier = info.Username
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;margin:0;padding:32px 16px;">
+  <div style="max-width:540px;margin:0 auto;background:#1a1d27;border-radius:16px;border:1px solid #2a2d3a;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#059669,#047857);padding:24px 28px;text-align:center;">
+      <div style="font-size:36px;margin-bottom:8px;">📬</div>
+      <h1 style="color:#fff;font-size:20px;font-weight:700;margin:0 0 4px;">User Contact Message</h1>
+      <p style="color:rgba(255,255,255,.8);font-size:13px;margin:0;">%s kडून navi message aali ahe</p>
+    </div>
+    <div style="padding:24px 28px;">
+      <h3 style="color:#a5b4fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:0 0 10px;">👤 User Information</h3>
+      <table style="width:100%%;border-collapse:collapse;background:#12141c;border-radius:10px;overflow:hidden;margin-bottom:20px;">
+        <tr>
+          <td style="padding:10px 16px;border-bottom:1px solid #2a2d3a;color:#7a7d8e;font-size:13px;white-space:nowrap;">Full Name</td>
+          <td style="padding:10px 16px;border-bottom:1px solid #2a2d3a;color:#e8e9f0;font-size:13px;font-weight:600;">%s</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 16px;border-bottom:1px solid #2a2d3a;color:#7a7d8e;font-size:13px;">📱 Mobile</td>
+          <td style="padding:10px 16px;border-bottom:1px solid #2a2d3a;color:#e8e9f0;font-size:13px;">%s</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 16px;border-bottom:1px solid #2a2d3a;color:#7a7d8e;font-size:13px;">📧 Email</td>
+          <td style="padding:10px 16px;border-bottom:1px solid #2a2d3a;color:#e8e9f0;font-size:13px;">%s</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 16px;color:#7a7d8e;font-size:13px;">👤 Username</td>
+          <td style="padding:10px 16px;color:#e8e9f0;font-size:13px;font-family:monospace;">%s</td>
+        </tr>
+      </table>
+      <h3 style="color:#a5b4fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:0 0 10px;">📋 Subject</h3>
+      <div style="background:#12141c;border-left:3px solid #6c63ff;border-radius:0 10px 10px 0;padding:14px 18px;margin-bottom:20px;">
+        <p style="color:#e8e9f0;font-size:14px;font-weight:600;margin:0;">%s</p>
+      </div>
+      <h3 style="color:#a5b4fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:0 0 10px;">💬 Message</h3>
+      <div style="background:#12141c;border-radius:10px;padding:18px 20px;margin-bottom:20px;">
+        %s
+      </div>
+      <p style="color:#4a4d5e;font-size:11px;text-align:center;margin:0;">%s Admin Panel · User Contact</p>
+    </div>
+  </div>
+</body>
+</html>`,
+		escapeHTML(info.UserFullName),
+		escapeHTML(info.UserFullName),
+		orDash(info.UserMobile),
+		orDash(info.UserEmail),
+		info.Username,
+		escapeHTML(info.Subject),
+		htmlMessage,
+		appName,
+	)
+}
+
+// ─── HTML helpers ─────────────────────────────────────────────────────────────
+
+func escapeHTML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
+}
+
+func splitLines(s string) []string {
+	return strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
 }
