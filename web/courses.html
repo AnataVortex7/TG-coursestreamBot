@@ -280,6 +280,7 @@
   </div>
   <div class="nav-right">
     <span class="nav-user">👤 {{ .username }}</span>
+    <button onclick="openContactModal()" style="background:#6c63ff;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px;">📩 Contact Admin</button>
     <form method="POST" action="/logout" style="margin:0">
       <button type="submit" class="btn-logout">Sign out</button>
     </form>
@@ -525,6 +526,87 @@
       errEl.style.display = 'block';
       btn.disabled = false;
       btn.textContent = '📤 Submit';
+    }
+  }
+</script>
+
+<!-- ══════════════ CONTACT ADMIN MODAL ══════════════ -->
+<div id="contact-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;display:none;align-items:center;justify-content:center;">
+  <div style="background:#1a1d27;border-radius:16px;padding:32px;width:100%;max-width:440px;border:1px solid #2a2d3a;margin:16px;">
+    <h3 style="color:#e8e9f0;margin:0 0 6px;font-size:18px;">📩 Contact Admin</h3>
+    <p style="color:#7a7d8e;font-size:13px;margin:0 0 20px;">Tumcha message admin cha email var pathavla jaail.</p>
+
+    <label style="color:#a5b4fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Subject *</label>
+    <input id="ct-subject" type="text" placeholder="Subject lihaa..." maxlength="100"
+      style="width:100%;box-sizing:border-box;background:#12141c;border:1px solid #2a2d3a;border-radius:8px;padding:10px 14px;color:#e8e9f0;font-size:14px;margin-bottom:14px;outline:none;">
+
+    <label style="color:#a5b4fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Message *</label>
+    <textarea id="ct-message" rows="5" placeholder="Tumcha message lihaa..."
+      style="width:100%;box-sizing:border-box;background:#12141c;border:1px solid #2a2d3a;border-radius:8px;padding:10px 14px;color:#e8e9f0;font-size:14px;resize:vertical;margin-bottom:14px;outline:none;font-family:inherit;"></textarea>
+
+    <div id="ct-status" style="display:none;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;"></div>
+
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button onclick="closeContactModal()"
+        style="background:transparent;border:1px solid #3a3d4a;color:#7a7d8e;padding:10px 20px;border-radius:8px;font-size:14px;cursor:pointer;">Cancel</button>
+      <button id="ct-submit-btn" onclick="submitContact()"
+        style="background:#6c63ff;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">📤 Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function openContactModal() {
+    document.getElementById('ct-subject').value = '';
+    document.getElementById('ct-message').value = '';
+    document.getElementById('ct-status').style.display = 'none';
+    const modal = document.getElementById('contact-modal');
+    modal.style.display = 'flex';
+  }
+  function closeContactModal() {
+    document.getElementById('contact-modal').style.display = 'none';
+  }
+  document.getElementById('contact-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeContactModal();
+  });
+  async function submitContact() {
+    const subject = document.getElementById('ct-subject').value.trim();
+    const message = document.getElementById('ct-message').value.trim();
+    const statusEl = document.getElementById('ct-status');
+    const btn = document.getElementById('ct-submit-btn');
+
+    statusEl.style.display = 'none';
+    if (!subject || !message) {
+      statusEl.style.cssText = 'display:block;background:#1f1215;border:1px solid #ff5c5c;color:#ff5c5c;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;';
+      statusEl.textContent = '❌ Subject ani message dono bharane aavashyak aahe.';
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Sending...';
+    try {
+      const res = await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subject, message })
+      });
+      const data = await res.json();
+      if (data.ok) {
+        statusEl.style.cssText = 'display:block;background:#0d1f12;border:1px solid #22c55e;color:#4ade80;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;';
+        statusEl.textContent = '✅ Message admin la pathavla gela!';
+        btn.textContent = '✅ Sent!';
+        setTimeout(() => closeContactModal(), 2500);
+      } else {
+        statusEl.style.cssText = 'display:block;background:#1f1215;border:1px solid #ff5c5c;color:#ff5c5c;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;';
+        statusEl.textContent = '❌ ' + (data.error || 'Message pathavta ala nahi.');
+        btn.disabled = false;
+        btn.textContent = '📤 Send';
+      }
+    } catch (e) {
+      statusEl.style.cssText = 'display:block;background:#1f1215;border:1px solid #ff5c5c;color:#ff5c5c;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;';
+      statusEl.textContent = '❌ Network error. Internet connection check kara.';
+      btn.disabled = false;
+      btn.textContent = '📤 Send';
     }
   }
 </script>
