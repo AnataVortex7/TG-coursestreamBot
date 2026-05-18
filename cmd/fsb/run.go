@@ -8,6 +8,7 @@ import (
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/routes"
 	"EverythingSuckz/fsb/internal/types"
+	"EverythingSuckz/fsb/internal/urlmonitor"
 	"EverythingSuckz/fsb/internal/utils"
 	workerreg "EverythingSuckz/fsb/internal/worker"
 	"fmt"
@@ -41,6 +42,10 @@ func runApp(cmd *cobra.Command, args []string) {
 	db.Connect()
 	defer db.Disconnect()
 	mainLogger.Info("MongoDB connected")
+
+	// ── Start URL Monitor (standalone — no dependency on bot or stream) ───────
+	urlmonitor.Init(log)
+	defer urlmonitor.StopAll()
 
 	// ── Build router (loads HTML templates) ──────────────────────────────────
 	router := getRouter(log)
