@@ -528,7 +528,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				FileName:  file.FileName,
 				MimeType:  file.MimeType,
 				FileSize:  file.FileSize,
-				SortOrder: messageID, 
+				SortOrder: msg.ID, 
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
