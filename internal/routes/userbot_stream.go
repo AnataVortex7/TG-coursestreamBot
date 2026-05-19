@@ -1,19 +1,44 @@
 package routes
 
 import (
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/stream"
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
+	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strconv"
+	"sync"
 
 	range_parser "github.com/quantumsheep/range-parser"
+	"go.uber.org/zap"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gotd/td/tg"
 )
+
+// ── Duplicate-copy guard ──────────────────────────────────────────────────────
+// Ek (chatID, messageID) pair fakt ekdach LOG_CHANNEL la copy hoto.
+// Bot restart zhala ki fresh start hoto — that's fine.
+var (
+	copiedOnce   = make(map[string]struct{})
+	copiedOnceMu sync.Mutex
+)
+
+func markCopied(chatID int64, messageID int) bool {
+	key := fmt.Sprintf("%d:%d", chatID, messageID)
+	copiedOnceMu.Lock()
+	defer copiedOnceMu.Unlock()
+	if _, already := copiedOnce[key]; already {
+		return false // already copied
+	}
+	copiedOnce[key] = struct{}{}
+	return true // first time — copy karawa
+}
 
 // LoadUserbotStream registers the userbot stream route.
 // Route: GET /dl/:chatID/:messageID
@@ -61,7 +86,15 @@ func userbotStreamHandler(ctx *gin.Context) {
 		return
 	}
 
-	// ── 4. Fetch file metadata via userbot ──────────────────────────────────
+	// ── 4. Fetch full tg.Message (file + caption) via userbot ───────────────
+	tgMsg, err := utils.GetTGMessageInChannel(ctx, userbotClient, messageID, chatID)
+	if err != nil {
+		log.Sugar().Errorf("Failed to get tg.Message: %v", err)
+		http.Error(w, "could not fetch message: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// ── 5. Fetch typed file metadata ────────────────────────────────────────
 	file, err := utils.TimeFuncWithResult(log, "UserbotFileFromMessage", func() (*types.File, error) {
 		return utils.FileFromMessageInChannel(ctx, userbotClient, messageID, chatID)
 	})
@@ -71,7 +104,14 @@ func userbotStreamHandler(ctx *gin.Context) {
 		return
 	}
 
-	// ── 5. Stream (same logic as /stream/:messageID) ─────────────────────────
+	// ── 6. Copy file to LOG_CHANNEL (once per chatID+messageID) ─────────────
+	// Forward protection ON ahe, tyamule MessagesForwardMessages kaam kart nahi.
+	// Mhanun MessagesSendMedia (copy) vaparli — caption preserve hoto.
+	if markCopied(chatID, messageID) {
+		go copyToLogChannel(tgMsg, file)
+	}
+
+	// ── 7. Stream (same logic as /stream/:messageID) ─────────────────────────
 	ctx.Header("Accept-Ranges", "bytes")
 
 	var start, end int64
@@ -123,3 +163,72 @@ func userbotStreamHandler(ctx *gin.Context) {
 	}
 }
 
+// copyToLogChannel copies the file (with caption) to LOG_CHANNEL using
+// MessagesSendMedia. Forward protection la bypass karto — bot account ne
+// nadhi, userbot ne file re-send karto independently.
+// Bot client vaparatoy karan tyas LOG_CHANNEL admin/member access aahe.
+func copyToLogChannel(msg *tg.Message, file *types.File) {
+	botClient := bot.Bot
+	if botClient == nil {
+		log.Warn("Bot client not available — skipping log channel copy")
+		return
+	}
+
+	caption := msg.GetMessage() // Telegram caption field
+
+	// Background goroutine mhanun ctx nahi — botClient.API() la context.Background() pathava
+	bgCtx := context.Background()
+
+	logCh, err := utils.GetLogChannelPeer(bgCtx, botClient.API(), botClient.PeerStorage)
+	if err != nil {
+		log.Error("copyToLogChannel: GetLogChannelPeer failed", zap.Error(err))
+		return
+	}
+
+	toPeer := &tg.InputPeerChannel{
+		ChannelID:  logCh.ChannelID,
+		AccessHash: logCh.AccessHash,
+	}
+
+	// InputDocument build karnya saathi file metadata vapar
+	// (userbot ne fetch keleli — forward nahi, direct send)
+	var media tg.InputMediaClass
+	if file.FileType == "photo" {
+		media = &tg.InputMediaPhoto{
+			ID: &tg.InputPhoto{
+				ID:            file.ID,
+				AccessHash:    file.AccessHash,
+				FileReference: file.FileReference,
+			},
+		}
+	} else {
+		media = &tg.InputMediaDocument{
+			ID: &tg.InputDocument{
+				ID:            file.ID,
+				AccessHash:    file.AccessHash,
+				FileReference: file.FileReference,
+			},
+		}
+	}
+
+	req := &tg.MessagesSendMediaRequest{
+		Peer:     toPeer,
+		Media:    media,
+		Message:  caption, // original caption
+		RandomID: rand.Int63(),
+		Silent:   true, // notification nako
+	}
+
+	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, req)
+	if sendErr != nil {
+		log.Error("copyToLogChannel: MessagesSendMedia failed",
+			zap.Error(sendErr),
+			zap.Int64("logChannel", config.ValueOf.LogChannelID),
+		)
+	} else {
+		log.Info("copyToLogChannel: file copied to log channel",
+			zap.String("fileName", file.FileName),
+			zap.Int64("fileSize", file.FileSize),
+		)
+	}
+}
