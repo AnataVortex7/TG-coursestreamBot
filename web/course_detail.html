@@ -56,6 +56,9 @@
   .caption-text{font-size:.82rem;color:var(--accent2);line-height:1.45;word-break:break-word;white-space:pre-wrap}
   .meta{display:flex;gap:12px;font-size:.75rem;color:var(--muted);flex-wrap:wrap}
   .meta span{display:flex;align-items:center;gap:4px}
+  .view-history{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+  .view-count-badge{font-size:.72rem;background:rgba(99,102,241,.15);color:#a5b4fc;padding:2px 8px;border-radius:20px;font-weight:600}
+  .last-viewed-badge{font-size:.72rem;background:rgba(16,185,129,.12);color:#6ee7b7;padding:2px 8px;border-radius:20px}
   .card-actions{padding:0 16px 14px;display:flex;gap:8px;flex-wrap:wrap}
   .btn{display:inline-flex;align-items:center;gap:6px;padding:7px 16px;border-radius:8px;font-size:.8rem;font-weight:600;text-decoration:none;transition:opacity .2s,transform .15s;cursor:pointer}
   .btn:hover{opacity:.88;transform:scale(.98)}
@@ -135,6 +138,12 @@
       {{ if .FileSize }}<span>💾 {{ .FileSize }}</span>{{ end }}
       {{ if .MimeType }}<span>🏷️ {{ .MimeType }}</span>{{ end }}
     </div>
+    {{ if .ViewCount }}
+    <div class="view-history">
+      <span class="view-count-badge">👁 {{ .ViewCount }} वेळा बघितलं</span>
+      {{ if .LastViewedAt }}<span class="last-viewed-badge">🕐 {{ .LastViewedAt }}</span>{{ end }}
+    </div>
+    {{ end }}
   </div>
   {{ if .HasMedia }}
   <div class="card-actions">
