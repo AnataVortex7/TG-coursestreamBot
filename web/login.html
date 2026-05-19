@@ -4,173 +4,59 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Login · CourseStream</title>
-
-<!-- Inter font -->
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
-
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --accent:   #ffffff;
-    --accent-h: #e0e0e0;
-    --text:     #ffffff;
-    --muted:    rgba(255,255,255,0.55);
+    --bg:       #0f1117;
+    --surface:  #1a1d27;
+    --border:   #2a2d3a;
+    --accent:   #6c63ff;
+    --accent-h: #574fd6;
+    --text:     #e8e9f0;
+    --muted:    #7a7d8e;
     --danger:   #ff5c5c;
     --success:  #4caf82;
     --warn:     #f0a500;
-    --radius:   14px;
-    --input-bg: rgba(255,255,255,0.07);
-    --border:   rgba(255,255,255,0.15);
+    --radius:   12px;
+    --input-bg: #12141c;
   }
 
   body {
-    background: #000;
+    background: var(--bg);
     color: var(--text);
-    font-family: 'Inter', sans-serif;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     min-height: 100vh;
-    overflow-x: hidden;
-  }
-
-  /* ── Video Background ── */
-  .video-bg {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    pointer-events: none;
-  }
-
-  /* ── Page Layout ── */
-  .page-wrap {
-    position: relative;
-    z-index: 1;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    padding: 0 1.5rem;
-  }
-
-  /* ── Liquid Glass ── */
-  .liquid-glass {
-    background: rgba(0, 0, 0, 0.4);
-    background-blend-mode: luminosity;
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
-    border: none;
-    box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
-    position: relative;
-    overflow: hidden;
-  }
-  .liquid-glass::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    padding: 1.4px;
-    background: linear-gradient(180deg,
-      rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.1) 20%,
-      rgba(255,255,255,0) 40%, rgba(255,255,255,0) 60%,
-      rgba(255,255,255,0.1) 80%, rgba(255,255,255,0.3) 100%);
-    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-    pointer-events: none;
-  }
-
-  /* ── Navbar ── */
-  nav {
-    padding: 1.5rem 0 0;
-  }
-  .nav-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    border-radius: 14px;
-    padding: 0.55rem 1rem;
-  }
-  .nav-logo {
-    font-size: 1.35rem;
-    font-weight: 600;
-    letter-spacing: -0.04em;
-    color: #fff;
-    text-decoration: none;
-  }
-  .nav-links {
-    display: none;
-    gap: 2rem;
-    list-style: none;
-  }
-  @media (min-width: 768px) {
-    .nav-links { display: flex; }
-    .page-wrap { padding: 0 3rem; }
-  }
-  @media (min-width: 1024px) {
-    .page-wrap { padding: 0 4rem; }
-  }
-  .nav-links a {
-    color: rgba(255,255,255,0.8);
-    text-decoration: none;
-    font-size: 0.85rem;
-    transition: color 0.15s;
-  }
-  .nav-links a:hover { color: rgba(255,255,255,0.5); }
-  .nav-cta {
-    background: #fff;
-    color: #000;
-    border: none;
-    border-radius: 8px;
-    padding: 0.45rem 1.2rem;
-    font-size: 0.85rem;
-    font-weight: 500;
-    font-family: 'Inter', sans-serif;
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  .nav-cta:hover { background: #e0e0e0; }
-
-  /* ── Main content area ── */
-  .main-area {
-    flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 2rem 0 3rem;
+    padding: 1rem;
   }
 
-  /* ── Card ── */
   .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 2.5rem 2rem;
     width: 100%;
     max-width: 420px;
-    border: 1px solid rgba(255,255,255,0.12);
   }
 
-  /* ── Logo mark ── */
+  /* ── Logo ── */
   .logo {
-    width: 44px; height: 44px;
-    background: rgba(255,255,255,0.15);
-    border: 1px solid rgba(255,255,255,0.2);
+    width: 48px; height: 48px;
+    background: var(--accent);
     border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
     margin-bottom: 1.5rem;
-    backdrop-filter: blur(4px);
   }
-  .logo svg { width: 24px; height: 24px; fill: #fff; }
+  .logo svg { width: 26px; height: 26px; fill: #fff; }
 
   /* ── Tabs ── */
   .tabs {
     display: flex;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 10px;
+    background: var(--input-bg);
+    border-radius: 9px;
     padding: 4px;
     margin-bottom: 1.75rem;
     gap: 4px;
@@ -180,67 +66,48 @@
     background: transparent;
     border: none;
     border-radius: 7px;
-    color: rgba(255,255,255,0.5);
-    font-size: 0.88rem;
+    color: var(--muted);
+    font-size: 0.9rem;
     font-weight: 500;
-    font-family: 'Inter', sans-serif;
     padding: 0.55rem 0;
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
   }
-  .tab-btn.active {
-    background: rgba(255,255,255,0.18);
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.2);
-  }
-  .tab-btn:not(.active):hover { color: #fff; }
+  .tab-btn.active { background: var(--accent); color: #fff; }
+  .tab-btn:not(.active):hover { color: var(--text); }
 
   /* ── Form panels ── */
   .form-panel { display: none; }
   .form-panel.active { display: block; }
 
-  h2 {
-    font-size: 1.2rem;
-    font-weight: 600;
-    margin-bottom: 0.3rem;
-    letter-spacing: -0.3px;
-    color: #fff;
-  }
-  .subtitle {
-    font-size: 0.83rem;
-    color: var(--muted);
-    margin-bottom: 1.5rem;
-  }
+  h2 { font-size: 1.25rem; font-weight: 600; margin-bottom: 0.3rem; letter-spacing: -0.3px; }
+  .subtitle { font-size: 0.85rem; color: var(--muted); margin-bottom: 1.5rem; }
 
   .field { margin-bottom: 1.1rem; }
 
   label {
     display: block;
-    font-size: 0.75rem;
+    font-size: 0.78rem;
     font-weight: 500;
-    color: rgba(255,255,255,0.45);
+    color: var(--muted);
     text-transform: uppercase;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.5px;
     margin-bottom: 0.45rem;
   }
 
   input[type="text"], input[type="email"], input[type="password"], input[type="tel"] {
     width: 100%;
-    background: rgba(255,255,255,0.07);
-    border: 1px solid rgba(255,255,255,0.12);
-    border-radius: 9px;
-    color: #fff;
-    font-size: 0.93rem;
-    font-family: 'Inter', sans-serif;
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.95rem;
     padding: 0.65rem 0.9rem;
     outline: none;
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s;
   }
-  input:focus {
-    border-color: rgba(255,255,255,0.4);
-    background: rgba(255,255,255,0.1);
-  }
-  input::placeholder { color: rgba(255,255,255,0.3); font-size: 0.88rem; }
+  input:focus { border-color: var(--accent); }
+  input::placeholder { color: var(--muted); font-size: 0.88rem; }
 
   /* ── 4-digit OTP boxes ── */
   .otp-boxes {
@@ -251,29 +118,25 @@
   }
   .otp-box {
     width: 62px; height: 72px;
-    background: rgba(255,255,255,0.07);
-    border: 2px solid rgba(255,255,255,0.15);
+    background: var(--input-bg);
+    border: 2px solid var(--border);
     border-radius: 12px;
-    color: #fff;
+    color: var(--text);
     font-size: 2rem;
     font-weight: 700;
     font-family: 'Courier New', monospace;
     text-align: center;
     outline: none;
-    transition: border-color 0.15s, transform 0.1s, background 0.15s;
-    caret-color: rgba(255,255,255,0.7);
+    transition: border-color 0.15s, transform 0.1s;
+    caret-color: var(--accent);
   }
-  .otp-box:focus {
-    border-color: rgba(255,255,255,0.6);
-    background: rgba(255,255,255,0.12);
-    transform: scale(1.05);
-  }
-  .otp-box.filled { border-color: rgba(255,255,255,0.5); }
+  .otp-box:focus { border-color: var(--accent); transform: scale(1.05); }
+  .otp-box.filled { border-color: var(--accent); }
 
   /* ── Alerts ── */
   .alert {
-    border-radius: 9px;
-    font-size: 0.85rem;
+    border-radius: 8px;
+    font-size: 0.875rem;
     padding: 0.65rem 0.9rem;
     margin-bottom: 1.1rem;
     display: flex;
@@ -282,44 +145,41 @@
     line-height: 1.45;
   }
   .alert svg { flex-shrink: 0; width: 16px; height: 16px; margin-top: 1px; }
-  .alert-error   { background: rgba(255,92,92,.12);   border: 1px solid rgba(255,92,92,.3);   color: #ff8080; }
-  .alert-error   svg { fill: #ff8080; }
-  .alert-success { background: rgba(76,175,130,.12);  border: 1px solid rgba(76,175,130,.3);  color: #5ee0a8; }
-  .alert-success svg { fill: #5ee0a8; }
-  .alert-warn    { background: rgba(240,165,0,.12);   border: 1px solid rgba(240,165,0,.3);   color: #f0c040; }
-  .alert-warn    svg { fill: #f0c040; }
+  .alert-error   { background: rgba(255,92,92,.1);   border: 1px solid rgba(255,92,92,.3);   color: var(--danger);  }
+  .alert-error   svg { fill: var(--danger); }
+  .alert-success { background: rgba(76,175,130,.1);  border: 1px solid rgba(76,175,130,.3);  color: var(--success); }
+  .alert-success svg { fill: var(--success); }
+  .alert-warn    { background: rgba(240,165,0,.1);   border: 1px solid rgba(240,165,0,.3);   color: var(--warn);    }
+  .alert-warn    svg { fill: var(--warn); }
 
   /* ── Buttons ── */
   .btn-primary {
     width: 100%;
-    background: #fff;
-    color: #000;
+    background: var(--accent);
+    color: #fff;
     border: none;
-    border-radius: 9px;
-    font-size: 0.93rem;
+    border-radius: 8px;
+    font-size: 0.95rem;
     font-weight: 600;
-    font-family: 'Inter', sans-serif;
     padding: 0.75rem;
     cursor: pointer;
     transition: background 0.15s, transform 0.1s, opacity 0.15s;
     margin-top: 0.4rem;
   }
-  .btn-primary:hover  { background: #e8e8e8; }
+  .btn-primary:hover  { background: var(--accent-h); }
   .btn-primary:active { transform: scale(0.98); }
-  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+  .btn-primary:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 
   .btn-link {
     background: none;
     border: none;
-    color: rgba(255,255,255,0.7);
-    font-size: 0.83rem;
-    font-family: 'Inter', sans-serif;
+    color: var(--accent);
+    font-size: 0.85rem;
     cursor: pointer;
     padding: 0;
     text-decoration: underline;
-    text-underline-offset: 2px;
   }
-  .btn-link:disabled { color: rgba(255,255,255,0.3); text-decoration: none; cursor: not-allowed; }
+  .btn-link:disabled { color: var(--muted); text-decoration: none; cursor: not-allowed; }
 
   /* ── Resend timer ── */
   .resend-row {
@@ -327,7 +187,7 @@
     align-items: center;
     justify-content: space-between;
     margin-top: 0.75rem;
-    font-size: 0.8rem;
+    font-size: 0.82rem;
     color: var(--muted);
   }
 
@@ -336,259 +196,208 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    font-size: 0.73rem;
-    padding: 3px 10px;
+    font-size: 0.75rem;
+    padding: 3px 8px;
     border-radius: 20px;
     margin-bottom: 1.1rem;
   }
   .service-badge .dot {
-    width: 6px; height: 6px;
+    width: 7px; height: 7px;
     border-radius: 50%;
   }
-  .badge-up       { background: rgba(76,175,130,.15);  color: #5ee0a8; border: 1px solid rgba(76,175,130,.3); }
-  .badge-up       .dot { background: #5ee0a8; }
-  .badge-down     { background: rgba(255,92,92,.12);   color: #ff8080; border: 1px solid rgba(255,92,92,.3); }
-  .badge-down     .dot { background: #ff8080; }
-  .badge-checking { background: rgba(255,255,255,.08); color: var(--muted); border: 1px solid rgba(255,255,255,.1); }
+  .badge-up   { background: rgba(76,175,130,.15); color: var(--success); border: 1px solid rgba(76,175,130,.3); }
+  .badge-up   .dot { background: var(--success); }
+  .badge-down { background: rgba(255,92,92,.12);  color: var(--danger);  border: 1px solid rgba(255,92,92,.3);  }
+  .badge-down .dot { background: var(--danger); }
+  .badge-checking { background: rgba(122,125,142,.12); color: var(--muted); border: 1px solid var(--border); }
   .badge-checking .dot { background: var(--muted); animation: pulse 1s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
 
   /* OR divider */
   .or-row {
     display: flex; align-items: center; gap: 0.75rem;
-    margin: 0.2rem 0 1.1rem;
-    color: var(--muted);
-    font-size: 0.76rem;
+    margin: 0.2rem 0 1.1rem; color: var(--muted); font-size: 0.78rem;
   }
-  .or-row::before, .or-row::after {
-    content:""; flex:1; height:1px;
-    background: rgba(255,255,255,0.1);
-  }
+  .or-row::before, .or-row::after { content:""; flex:1; height:1px; background:var(--border); }
 
-  .footer-note {
-    text-align:center;
-    font-size:0.78rem;
-    color: var(--muted);
-    margin-top:1.5rem;
-  }
-  .footer-note a {
-    color: rgba(255,255,255,0.8);
-    text-decoration: underline;
-    text-underline-offset: 2px;
-  }
-  .footer-note a:hover { color: #fff; }
+  .footer-note { text-align:center; font-size:0.8rem; color:var(--muted); margin-top:1.5rem; }
+  .footer-note a { color: var(--accent); text-decoration: none; }
+  .footer-note a:hover { text-decoration: underline; }
 
   /* Steps */
   .step { display: none; }
   .step.active { display: block; }
 
-  /* Spinner */
+  /* Spinner inside button */
   .spinner {
     display: inline-block; width:14px; height:14px;
-    border: 2px solid rgba(0,0,0,0.25);
-    border-top-color: #000;
+    border: 2px solid rgba(255,255,255,0.35);
+    border-top-color: #fff;
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
     vertical-align: middle; margin-right: 6px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* Card entrance animation */
-  @keyframes cardIn {
-    from { opacity: 0; transform: translateY(20px) scale(0.98); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  .card {
-    animation: cardIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both;
-  }
 </style>
 </head>
 <body>
 
-<!-- Video Background -->
-<video class="video-bg" autoplay loop muted playsinline>
-  <source src="https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260403_050628_c4e32401-fab4-4a27-b7a8-6e9291cd5959.mp4" type="video/mp4">
-</video>
+<div class="card">
+  <!-- Logo -->
+  <div class="logo">
+    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+  </div>
 
-<div class="page-wrap">
+  <!-- Tab switcher -->
+  <div class="tabs">
+    <button class="tab-btn {{ if eq .tab `register` }}{{ else }}active{{ end }}" onclick="switchTab('login')">Sign In</button>
+    <button class="tab-btn {{ if eq .tab `register` }}active{{ end }}"           onclick="switchTab('register')">Register</button>
+  </div>
 
-  <!-- Navbar -->
-  <nav>
-    <div class="nav-bar liquid-glass">
-      <a href="/" class="nav-logo">VEX</a>
-      <ul class="nav-links">
-        <li><a href="#">Story</a></li>
-        <li><a href="#">Investing</a></li>
-        <li><a href="#">Building</a></li>
-        <li><a href="#">Advisory</a></li>
-      </ul>
-      <button class="nav-cta">Start a Chat</button>
+  <!-- ═══════════════ LOGIN PANEL ═══════════════ -->
+  <div id="panel-login" class="form-panel {{ if eq .tab `register` }}{{ else }}active{{ end }}">
+    <h2>Welcome back</h2>
+    <p class="subtitle">Sign in to access your courses</p>
+
+    <!-- Service status badge -->
+    <span id="svc-badge" class="service-badge badge-checking">
+      <span class="dot"></span><span id="svc-text">Checking service…</span>
+    </span>
+
+    <!-- Server-side error (from Go template, only for non-OTP legacy login) -->
+    {{ if .error }}{{ if ne .tab "register" }}
+    <div class="alert alert-error">
+      <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+      {{ .error }}
     </div>
-  </nav>
+    {{ end }}{{ end }}
 
-  <!-- Main area: centered login card -->
-  <div class="main-area">
-    <div class="card liquid-glass">
+    <!-- JS-driven alert box -->
+    <div id="login-alert" class="alert" style="display:none;"></div>
 
-      <!-- Logo mark -->
-      <div class="logo">
-        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14H9V8h2v8zm4 0h-2V8h2v8z"/></svg>
+    <!-- ── STEP 1 : Email input ── -->
+    <div id="step-email" class="step active">
+      <div class="field">
+        <label for="otp-email">Email Address</label>
+        <input id="otp-email" type="email" placeholder="you@example.com" autocomplete="email" autofocus />
+      </div>
+      <button id="btn-send-otp" class="btn-primary" onclick="sendOTP()">Send OTP →</button>
+    </div>
+
+    <!-- ── STEP 2 : OTP entry ── -->
+    <div id="step-otp" class="step">
+      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="otp-email-display" style="color:var(--text);"></strong></p>
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>
+
+      <div class="otp-boxes">
+        <input class="otp-box" id="d0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />
+        <input class="otp-box" id="d1" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
+        <input class="otp-box" id="d2" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
+        <input class="otp-box" id="d3" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
       </div>
 
-      <!-- Tab switcher -->
-      <div class="tabs">
-        <button class="tab-btn {{ if eq .tab `register` }}{{ else }}active{{ end }}" onclick="switchTab('login')">Sign In</button>
-        <button class="tab-btn {{ if eq .tab `register` }}active{{ end }}"           onclick="switchTab('register')">Register</button>
+      <button id="btn-verify" class="btn-primary" onclick="verifyOTP()">Verify & Sign In →</button>
+
+      <div class="resend-row">
+        <span id="resend-timer">Resend in <strong id="resend-countdown">60</strong>s</span>
+        <button id="btn-resend" class="btn-link" onclick="sendOTP(true)" disabled>Resend OTP</button>
       </div>
 
-      <!-- ═══════════════ LOGIN PANEL ═══════════════ -->
-      <div id="panel-login" class="form-panel {{ if eq .tab `register` }}{{ else }}active{{ end }}">
-        <h2>Welcome back</h2>
-        <p class="subtitle">Sign in to access your courses</p>
+      <div style="margin-top:0.9rem;text-align:center;">
+        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToEmail()">← Change email</button>
+      </div>
+    </div>
 
-        <!-- Service status badge -->
-        <span id="svc-badge" class="service-badge badge-checking">
-          <span class="dot"></span><span id="svc-text">Checking service…</span>
-        </span>
+    <!-- ── STEP 3 : Password fallback (shown only when Brevo is down) ── -->
+    <div id="step-password" class="step">
+      <div class="alert alert-warn" style="display:flex;">
+        <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+        Email service is currently unavailable. Please sign in with your password.
+      </div>
+      <div class="field">
+        <label for="pass-identifier">Email / Mobile</label>
+        <input id="pass-identifier" type="text" placeholder="you@email.com or 9876543210" autocomplete="username" />
+      </div>
+      <div class="field">
+        <label for="pass-password">Password</label>
+        <input id="pass-password" type="password" placeholder="••••••••" autocomplete="current-password" />
+      </div>
+      <button class="btn-primary" onclick="doPasswordLogin()">Sign In →</button>
+    </div>
 
-        <!-- Server-side error -->
-        {{ if .error }}{{ if ne .tab "register" }}
-        <div class="alert alert-error">
-          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-          {{ .error }}
-        </div>
-        {{ end }}{{ end }}
+    <p class="footer-note">Don't have an account? <a href="#" onclick="switchTab('register');return false;">Register here</a></p>
+  </div>
 
-        <!-- JS-driven alert box -->
-        <div id="login-alert" class="alert" style="display:none;"></div>
+  <!-- ═══════════════ REGISTER PANEL ═══════════════ -->
+  <div id="panel-register" class="form-panel {{ if eq .tab `register` }}active{{ end }}">
 
-        <!-- ── STEP 1 : Email input ── -->
-        <div id="step-email" class="step active">
-          <div class="field">
-            <label for="otp-email">Email Address</label>
-            <input id="otp-email" type="email" placeholder="you@example.com" autocomplete="email" autofocus />
-          </div>
-          <button id="btn-send-otp" class="btn-primary" onclick="sendOTP()">Send OTP →</button>
-        </div>
+    <!-- JS-driven alert -->
+    <div id="reg-alert" class="alert" style="display:none;"></div>
 
-        <!-- ── STEP 2 : OTP entry ── -->
-        <div id="step-otp" class="step">
-          <p style="font-size:0.83rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="otp-email-display" style="color:#fff;"></strong></p>
-          <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>
+    <!-- Step 1: Registration form -->
+    <div id="reg-step-form" class="step active">
+      <h2>Create account</h2>
+      <p class="subtitle">Register with your email to get started</p>
 
-          <div class="otp-boxes">
-            <input class="otp-box" id="d0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />
-            <input class="otp-box" id="d1" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-            <input class="otp-box" id="d2" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-            <input class="otp-box" id="d3" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-          </div>
+      {{ if .error }}{{ if eq .tab "register" }}
+      <div class="alert alert-error">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        {{ .error }}
+      </div>
+      {{ end }}{{ end }}
 
-          <button id="btn-verify" class="btn-primary" onclick="verifyOTP()">Verify & Sign In →</button>
+      <div class="field">
+        <label for="reg-name">Full Name *</label>
+        <input id="reg-name" type="text" placeholder="Rahul Sharma" value="{{ .full_name }}" />
+      </div>
+      <div class="field">
+        <label for="reg-mobile">Mobile Number</label>
+        <input id="reg-mobile" type="tel" placeholder="9876543210" value="{{ .mobile }}" pattern="[6-9][0-9]{9}" />
+      </div>
+      <div class="or-row">or</div>
+      <div class="field">
+        <label for="reg-email">Email Address *</label>
+        <input id="reg-email" type="email" placeholder="you@example.com" value="{{ .email }}" />
+      </div>
+      <div class="field">
+        <label for="reg-pass">Password *</label>
+        <input id="reg-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password" />
+      </div>
+      <div class="field">
+        <label for="reg-confirm">Confirm Password *</label>
+        <input id="reg-confirm" type="password" placeholder="Repeat password" autocomplete="new-password" />
+      </div>
+      <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()">Create Account &#x2192;</button>
+    </div>
 
-          <div class="resend-row">
-            <span id="resend-timer">Resend in <strong id="resend-countdown">60</strong>s</span>
-            <button id="btn-resend" class="btn-link" onclick="sendOTP(true)" disabled>Resend OTP</button>
-          </div>
+    <!-- Step 2: OTP verification -->
+    <div id="reg-step-otp" class="step">
+      <h2>Verify your email</h2>
+      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="reg-email-display" style="color:var(--text);"></strong></p>
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>
 
-          <div style="margin-top:0.9rem;text-align:center;">
-            <button class="btn-link" style="font-size:0.78rem;" onclick="goBackToEmail()">← Change email</button>
-          </div>
-        </div>
-
-        <!-- ── STEP 3 : Password fallback ── -->
-        <div id="step-password" class="step">
-          <div class="alert alert-warn" style="display:flex;">
-            <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-            Email service is currently unavailable. Please sign in with your password.
-          </div>
-          <div class="field">
-            <label for="pass-identifier">Email / Mobile</label>
-            <input id="pass-identifier" type="text" placeholder="you@email.com or 9876543210" autocomplete="username" />
-          </div>
-          <div class="field">
-            <label for="pass-password">Password</label>
-            <input id="pass-password" type="password" placeholder="••••••••" autocomplete="current-password" />
-          </div>
-          <button class="btn-primary" onclick="doPasswordLogin()">Sign In →</button>
-        </div>
-
-        <p class="footer-note">Don't have an account? <a href="#" onclick="switchTab('register');return false;">Register here</a></p>
+      <div class="otp-boxes">
+        <input class="otp-box" id="rd0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />
+        <input class="otp-box" id="rd1" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
+        <input class="otp-box" id="rd2" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
+        <input class="otp-box" id="rd3" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
       </div>
 
-      <!-- ═══════════════ REGISTER PANEL ═══════════════ -->
-      <div id="panel-register" class="form-panel {{ if eq .tab `register` }}active{{ end }}">
+      <button id="btn-reg-verify" class="btn-primary" onclick="verifyRegOTP()">Verify &amp; Create Account &#x2192;</button>
 
-        <!-- JS-driven alert -->
-        <div id="reg-alert" class="alert" style="display:none;"></div>
-
-        <!-- Step 1: Registration form -->
-        <div id="reg-step-form" class="step active">
-          <h2>Create account</h2>
-          <p class="subtitle">Register with your email to get started</p>
-
-          {{ if .error }}{{ if eq .tab "register" }}
-          <div class="alert alert-error">
-            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-            {{ .error }}
-          </div>
-          {{ end }}{{ end }}
-
-          <div class="field">
-            <label for="reg-name">Full Name *</label>
-            <input id="reg-name" type="text" placeholder="Rahul Sharma" value="{{ .full_name }}" />
-          </div>
-          <div class="field">
-            <label for="reg-mobile">Mobile Number</label>
-            <input id="reg-mobile" type="tel" placeholder="9876543210" value="{{ .mobile }}" pattern="[6-9][0-9]{9}" />
-          </div>
-          <div class="or-row">or</div>
-          <div class="field">
-            <label for="reg-email">Email Address *</label>
-            <input id="reg-email" type="email" placeholder="you@example.com" value="{{ .email }}" />
-          </div>
-          <div class="field">
-            <label for="reg-pass">Password *</label>
-            <input id="reg-pass" type="password" placeholder="Min. 6 characters" autocomplete="new-password" />
-          </div>
-          <div class="field">
-            <label for="reg-confirm">Confirm Password *</label>
-            <input id="reg-confirm" type="password" placeholder="Repeat password" autocomplete="new-password" />
-          </div>
-          <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()">Create Account &#x2192;</button>
-        </div>
-
-        <!-- Step 2: OTP verification -->
-        <div id="reg-step-otp" class="step">
-          <h2>Verify your email</h2>
-          <p style="font-size:0.83rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="reg-email-display" style="color:#fff;"></strong></p>
-          <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>
-
-          <div class="otp-boxes">
-            <input class="otp-box" id="rd0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />
-            <input class="otp-box" id="rd1" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-            <input class="otp-box" id="rd2" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-            <input class="otp-box" id="rd3" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-          </div>
-
-          <button id="btn-reg-verify" class="btn-primary" onclick="verifyRegOTP()">Verify &amp; Create Account &#x2192;</button>
-
-          <div class="resend-row">
-            <span id="reg-resend-timer">Resend in <strong id="reg-resend-countdown">60</strong>s</span>
-            <button id="btn-reg-resend" class="btn-link" onclick="submitRegistration(true)" disabled>Resend OTP</button>
-          </div>
-
-          <div style="margin-top:0.9rem;text-align:center;">
-            <button class="btn-link" style="font-size:0.78rem;" onclick="goBackToRegForm()">&#x2190; Change details</button>
-          </div>
-        </div>
-
-        <p class="footer-note">Already have an account? <a href="#" onclick="switchTab('login');return false;">Sign in</a></p>
+      <div class="resend-row">
+        <span id="reg-resend-timer">Resend in <strong id="reg-resend-countdown">60</strong>s</span>
+        <button id="btn-reg-resend" class="btn-link" onclick="submitRegistration(true)" disabled>Resend OTP</button>
       </div>
 
-    </div><!-- /.card -->
-  </div><!-- /.main-area -->
+      <div style="margin-top:0.9rem;text-align:center;">
+        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToRegForm()">&#x2190; Change details</button>
+      </div>
+    </div>
 
-</div><!-- /.page-wrap -->
+    <p class="footer-note">Already have an account? <a href="#" onclick="switchTab('login');return false;">Sign in</a></p>
+  </div>
+</div>
 
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -673,6 +482,8 @@ async function sendOTP(isResend = false) {
     const data = await res.json();
 
     if (!res.ok) {
+      // 429 = rate-limited: a valid OTP was already sent to this address.
+      // Transition to OTP entry step so the user can enter the code they received.
       if (res.status === 429) {
         document.getElementById('otp-email-display').textContent = emailAddr;
         showStep('otp');
@@ -688,6 +499,7 @@ async function sendOTP(isResend = false) {
       return;
     }
 
+    // Move to OTP step
     document.getElementById('otp-email-display').textContent = emailAddr;
     showStep('otp');
     clearOTPBoxes();
@@ -740,6 +552,7 @@ document.addEventListener('DOMContentLoaded', () => {
       e.target.value = val ? val[val.length - 1] : '';
       e.target.classList.toggle('filled', !!e.target.value);
       if (val && i < 3) boxes[i + 1].focus();
+      // Auto-submit when all 4 filled
       if (boxes.every(b => b.value)) verifyOTP();
     });
 
@@ -753,6 +566,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.key === 'ArrowRight' && i < 3) { e.preventDefault(); boxes[i + 1].focus(); }
     });
 
+    // Handle paste of 4-digit OTP
     box.addEventListener('paste', e => {
       e.preventDefault();
       const text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g,'');
@@ -767,8 +581,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Run service check on load
   checkService();
 
+  // Register form validation
   const regForm = document.querySelector('form[action="/register"]');
   if (regForm) {
     regForm.addEventListener('submit', function(e) {
@@ -895,6 +711,7 @@ async function submitRegistration(isResend = false) {
 
     if (!res.ok) {
       if (res.status === 429) {
+        // Already sent — jump to OTP step
         document.getElementById('reg-email-display').textContent = regEmailAddr;
         showRegStep('otp');
         clearRegOTPBoxes();
@@ -908,6 +725,7 @@ async function submitRegistration(isResend = false) {
       return;
     }
 
+    // Success — show OTP step
     document.getElementById('reg-email-display').textContent = regEmailAddr;
     showRegStep('otp');
     clearRegOTPBoxes();
@@ -997,6 +815,7 @@ async function verifyRegOTP() {
 
 // ─── Registration OTP boxes keyboard UX ──────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // (existing DOMContentLoaded code is above — this adds reg boxes)
   const regBoxes = ['rd0','rd1','rd2','rd3'].map(id => document.getElementById(id));
 
   regBoxes.forEach((box, i) => {
