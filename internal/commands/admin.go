@@ -518,7 +518,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				title = stripExt(file.FileName)
 			}
 
-			sortOrder, _ := db.HighestSortOrder(courseID)
+			
 			cached := &db.CachedFile{
 				MessageID: msg.ID,
 				ChannelID: course.ChannelID,
@@ -528,7 +528,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				FileName:  file.FileName,
 				MimeType:  file.MimeType,
 				FileSize:  file.FileSize,
-				SortOrder: sortOrder + 1,
+				SortOrder: messageID,
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
@@ -667,7 +667,7 @@ func max(a, b int) int {
 // and we cache it here so /syncchannel doesn't need to be re-run.
 
 func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectID, caption, fileName, mimeType string, fileSize int64) error {
-	sortOrder, err := db.HighestSortOrder(courseID)
+	
 	if err != nil {
 		return err
 	}
@@ -687,7 +687,7 @@ func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectI
 		FileName:  fileName,
 		MimeType:  mimeType,
 		FileSize:  fileSize,
-		SortOrder: sortOrder + 1,
+		SortOrder: messageID,
 		CreatedAt: time.Now(),
 	}
 	return db.UpsertCachedFile(cached)
