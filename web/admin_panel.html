@@ -113,7 +113,6 @@
   .modal-msg{font-size:13px;color:#666;line-height:1.6}
   .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
 
-  /* History modal — wider */
   .modal-wide{max-width:780px}
   .history-table-wrap{max-height:420px;overflow-y:auto;border-radius:8px;border:1px solid #f0f0f0}
   .history-table-wrap table th{position:sticky;top:0;z-index:1}
@@ -135,7 +134,6 @@
 
   .stats-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}
 
-  /* ── URL Monitor specific ─────────────────────────────────────── */
   .um-stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
   .um-stat{background:#fff;border:1px solid #ebebeb;border-radius:10px;padding:14px 16px}
   .um-stat .label{font-size:11px;color:#888;font-weight:500;margin-bottom:4px}
@@ -156,6 +154,11 @@
   .auto-refresh-badge{font-size:11px;color:#888;display:flex;align-items:center;gap:5px}
   .auto-refresh-dot{width:7px;height:7px;border-radius:50%;background:#2e7d32;animation:blink 1.4s infinite}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+
+  /* TG Login steps */
+  .tg-step-info{border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px}
+  .tg-info-green{background:#e8f5e9;color:#2e7d32}
+  .tg-info-orange{background:#fff3e0;color:#e65100}
 </style>
 </head>
 <body>
@@ -195,6 +198,10 @@
       </div>
       <div class="nav-item" id="nav-access" onclick="goto('access',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>Access Control
+      </div>
+      <div class="nav-section">Telegram</div>
+      <div class="nav-item" id="nav-tglogin" onclick="goto('tglogin',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>TG Login
       </div>
       <div class="nav-section">System</div>
       <div class="nav-item" id="nav-sessions" onclick="goto('sessions',this)">
@@ -404,8 +411,6 @@
         <div class="page-title">🔗 URL Monitor</div>
         <div class="page-sub">URLs add kara, parallel ping chalu rahil, last 50 responses memory madhe</div>
       </div>
-
-      <!-- Add URL form -->
       <div class="card">
         <div class="card-head"><div class="card-title">➕ Nava URL Add Kara</div></div>
         <div class="card-body">
@@ -428,16 +433,12 @@
           <button class="btn btn-primary" id="addURLBtn" onclick="execAddURL()">➕ URL Monitor Madhe Add Kara</button>
         </div>
       </div>
-
-      <!-- Stats summary -->
       <div class="um-stat-grid" id="um-summary-grid" style="display:none">
         <div class="um-stat"><div class="label">Total URLs</div><div class="value" id="um-total">0</div></div>
         <div class="um-stat"><div class="label">🟢 UP</div><div class="value" style="color:#2e7d32" id="um-up">0</div></div>
         <div class="um-stat"><div class="label">🔴 DOWN</div><div class="value" style="color:#c62828" id="um-down">0</div></div>
         <div class="um-stat"><div class="label">⚪ Unknown</div><div class="value" style="color:#888" id="um-unknown">0</div></div>
       </div>
-
-      <!-- URL list -->
       <div class="card">
         <div class="card-head">
           <div class="card-title">📋 Monitored URLs</div>
@@ -449,6 +450,83 @@
           </div>
         </div>
         <div id="um-list-body"><div class="loading">⏳ Loading...</div></div>
+      </div>
+    </div>
+
+    <!-- TELEGRAM LOGIN -->
+    <div class="page" id="page-tglogin">
+      <div class="page-header">
+        <div class="page-title">📱 Telegram Account Login</div>
+        <div class="page-sub">Userbot login kara — restricted channels access saathi</div>
+      </div>
+
+      <!-- Status Card -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">📡 Userbot Status</div>
+          <button class="btn btn-sm" onclick="loadTGStatus()">🔄 Refresh</button>
+        </div>
+        <div class="card-body" id="tg-status-body">
+          <div class="loading">⏳ Status check kartoy...</div>
+        </div>
+      </div>
+
+      <!-- Login Card -->
+      <div class="card" id="tg-login-card" style="display:none">
+        <div class="card-head">
+          <div class="card-title">🔐 Telegram Phone Login</div>
+        </div>
+        <div class="card-body">
+
+          <!-- Step 1: Phone -->
+          <div id="tg-step-phone">
+            <div class="form-row">
+              <label>Phone Number <span class="req">*</span></label>
+              <input type="text" id="tg-phone" placeholder="+919876543210" style="max-width:280px"
+                     onkeydown="if(event.key==='Enter') tgSendCode()" />
+              <div class="form-hint">Country code sah enter kara — India saathi +91</div>
+            </div>
+            <button class="btn btn-primary" id="tg-send-btn" onclick="tgSendCode()">
+              📨 OTP Pathava
+            </button>
+          </div>
+
+          <!-- Step 2: OTP -->
+          <div id="tg-step-otp" style="display:none">
+            <div class="tg-step-info tg-info-green">
+              📩 OTP tumchya Telegram app var pathavla aahe — check kara
+            </div>
+            <div class="form-row">
+              <label>Telegram OTP <span class="req">*</span></label>
+              <input type="text" id="tg-code" placeholder="12345" maxlength="6"
+                     style="max-width:180px;letter-spacing:4px;font-size:20px;font-weight:700;text-align:center"
+                     onkeydown="if(event.key==='Enter') tgVerifyCode()" />
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn btn-primary" id="tg-verify-btn" onclick="tgVerifyCode()">✅ Verify Kara</button>
+              <button class="btn" onclick="tgResetLogin()">↩ Maghe</button>
+            </div>
+          </div>
+
+          <!-- Step 3: 2FA -->
+          <div id="tg-step-2fa" style="display:none">
+            <div class="tg-step-info tg-info-orange">
+              🔒 Tumchya account var 2-Step Verification (2FA) enabled aahe. Password enter kara.
+            </div>
+            <div class="form-row">
+              <label>2FA Password <span class="req">*</span></label>
+              <input type="password" id="tg-2fa" placeholder="Tumcha 2FA password"
+                     style="max-width:280px"
+                     onkeydown="if(event.key==='Enter') tgVerify2FA()" />
+              <div class="form-hint">Tumchi Telegram 2-Step Verification password</div>
+            </div>
+            <div style="display:flex;gap:10px;flex-wrap:wrap">
+              <button class="btn btn-primary" id="tg-2fa-btn" onclick="tgVerify2FA()">🔓 2FA Verify Kara</button>
+              <button class="btn" onclick="tgResetLogin()">↩ Maghe</button>
+            </div>
+          </div>
+
+        </div>
       </div>
     </div>
 
@@ -470,7 +548,7 @@
   </div>
 </div>
 
-<!-- Delete Modal -->
+<!-- Confirm Modal -->
 <div class="modal-overlay" id="delModal">
   <div class="modal">
     <div class="modal-title" id="modal-title">Confirm kara</div>
@@ -496,18 +574,20 @@
   </div>
 </div>
 
-<!-- Send Message to User Modal -->
+<!-- Send Message Modal -->
 <div class="modal-overlay" id="msgModal">
   <div class="modal" style="max-width:500px">
     <div class="modal-title">📩 Send Message to User</div>
     <p id="msg-modal-to" style="font-size:13px;color:#888;margin:4px 0 16px;"></p>
     <div style="margin-bottom:12px">
       <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:4px">Subject *</label>
-      <input id="msg-subject" type="text" placeholder="e.g. Course Access Regarding..." style="width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;box-sizing:border-box" maxlength="150" />
+      <input id="msg-subject" type="text" placeholder="e.g. Course Access Regarding..."
+             style="width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;box-sizing:border-box" maxlength="150" />
     </div>
     <div style="margin-bottom:16px">
       <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:4px">Message *</label>
-      <textarea id="msg-body" rows="6" placeholder="Tumcha message type kara..." style="width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box" maxlength="2000"></textarea>
+      <textarea id="msg-body" rows="6" placeholder="Tumcha message type kara..."
+                style="width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;resize:vertical;box-sizing:border-box" maxlength="2000"></textarea>
       <div style="font-size:11px;color:#bbb;text-align:right;margin-top:2px"><span id="msg-char-count">0</span>/2000</div>
     </div>
     <div class="modal-actions">
@@ -573,6 +653,7 @@ function goto(name, el) {
   if (name==='sessions') loadSessions();
   if (name==='stats') loadDetailStats();
   if (name==='access') { loadUsers(); loadCourses(); }
+  if (name==='tglogin') loadTGStatus();
   if (name==='urlmonitor') { loadURLMonitor(); startUMAutoRefresh(); }
   else stopUMAutoRefresh();
 }
@@ -746,15 +827,11 @@ async function sendMsgToUser() {
   if (!subject) { toast('❌ Subject bhara', 'error'); return; }
   if (!message) { toast('❌ Message bhara', 'error'); return; }
   if (!msgTargetUserID) { toast('❌ User not selected', 'error'); return; }
-
   const btn = document.getElementById('msg-send-btn');
-  btn.disabled = true;
-  btn.textContent = '⏳ Sending...';
-
+  btn.disabled = true; btn.textContent = '⏳ Sending...';
   try {
     const res = await api('/send-message', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user_id: msgTargetUserID, subject, message })
     });
     const d = await res.json();
@@ -763,13 +840,11 @@ async function sendMsgToUser() {
       closeMsgModal();
     } else {
       toast('❌ ' + (d.error || 'Message pathavta ala nahi'), 'error');
-      btn.disabled = false;
-      btn.textContent = '📤 Send Email';
+      btn.disabled = false; btn.textContent = '📤 Send Email';
     }
   } catch {
     toast('❌ Network error', 'error');
-    btn.disabled = false;
-    btn.textContent = '📤 Send Email';
+    btn.disabled = false; btn.textContent = '📤 Send Email';
   }
 }
 
@@ -954,7 +1029,6 @@ async function killSession(token, username) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // URL MONITOR
 // ═══════════════════════════════════════════════════════════════════════════════
-
 function startUMAutoRefresh() {
   stopUMAutoRefresh();
   umAutoRefreshTimer = setInterval(loadURLMonitor, 10000);
@@ -997,8 +1071,6 @@ async function loadURLMonitor() {
   try {
     const res = await api('/urlmonitor');
     const list = await res.json();
-
-    // Update summary stats
     const total = list.length;
     let up=0, down=0, unknown=0;
     list.forEach(u => {
@@ -1011,14 +1083,11 @@ async function loadURLMonitor() {
     document.getElementById('um-unknown').textContent = unknown;
     const summaryGrid = document.getElementById('um-summary-grid');
     if (summaryGrid) summaryGrid.style.display = total > 0 ? 'grid' : 'none';
-
     if (!list.length) {
       wrap.innerHTML='<div class="empty"><div class="empty-icon">🔗</div>Koni URL add kele nahi yet<br><span style="font-size:12px">Varti form madhe URL add kara</span></div>';
       return;
     }
-
     let h = '<div class="table-wrap"><table><thead><tr><th>Status</th><th>Label / URL</th><th>Interval</th><th>Last Ping</th><th>Latency</th><th>Uptime %</th><th style="min-width:220px">Actions</th></tr></thead><tbody>';
-
     list.forEach(u => {
       const lr = u.last_result;
       let statusBadge, dotClass;
@@ -1032,15 +1101,12 @@ async function loadURLMonitor() {
         statusBadge = `<span class="badge badge-red">🔴 DOWN${lr.status_code?' '+lr.status_code:''}</span>`;
         dotClass = 'ping-dot-down';
       }
-
       const lastPing = lr ? fmtTime(lr.timestamp) : '—';
       const latency = lr ? lr.latency_ms+'ms' : '—';
       const uptime = u.uptime_pct > 0 ? u.uptime_pct.toFixed(1)+'%' : (lr ? '0%' : '—');
       const uptimeColor = u.uptime_pct >= 90 ? '#2e7d32' : u.uptime_pct >= 50 ? '#e65100' : '#c62828';
-
       const label = u.label || '';
       const shortURL = u.url.length > 45 ? u.url.slice(0,45)+'…' : u.url;
-
       h += `<tr>
         <td>${statusBadge}</td>
         <td>
@@ -1060,10 +1126,8 @@ async function loadURLMonitor() {
         </td>
       </tr>`;
     });
-
     h += '</tbody></table></div>';
     wrap.innerHTML = h;
-
   } catch(e){
     wrap.innerHTML='<div class="empty"><div class="empty-icon">❌</div>URL Monitor load hovu shakla nahi</div>';
   }
@@ -1092,7 +1156,6 @@ async function showHistory(id, label) {
       document.getElementById('history-modal-body').innerHTML = '<div class="empty"><div class="empty-icon">📭</div>Abhi koni ping results nahi</div>';
       return;
     }
-    // Reverse — newest first
     const sorted = [...history].reverse();
     let h = '<div class="history-table-wrap"><table><thead><tr><th>#</th><th>Time</th><th>Status</th><th>Code</th><th>Latency</th><th>Error</th></tr></thead><tbody>';
     sorted.forEach((p, i) => {
@@ -1117,7 +1180,7 @@ async function showHistory(id, label) {
 }
 
 function removeURL(id, label) {
-  openModal('URL Remove kara?', `"${label}" remove kelyavar tyachi monitoring band hoil ani Mongo madhun delete hoil. Memory madhe saglya results pan jatil.`, async()=>{
+  openModal('URL Remove kara?', `"${label}" remove kelyavar tyachi monitoring band hoil ani Mongo madhun delete hoil.`, async()=>{
     try {
       const res = await api('/urlmonitor/'+id, {method:'DELETE'});
       if (res.ok){ toast('✅ '+label+' remove kela'); loadURLMonitor(); }
@@ -1126,7 +1189,7 @@ function removeURL(id, label) {
   });
 }
 
-// ─── Time helpers ────────────────────────────────────────────────────────────
+// ─── Time helpers ─────────────────────────────────────────────────────────────
 function fmtTime(ts) {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -1143,6 +1206,151 @@ function fmtTimeFull(ts) {
   const d = new Date(ts);
   return d.toLocaleDateString('en-IN',{day:'2-digit',month:'short'}) + ' ' +
          d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TELEGRAM LOGIN
+// ═══════════════════════════════════════════════════════════════════════════════
+let tgPhoneHash   = '';
+let tgPhoneNum    = '';
+let tgPendingCode = '';
+
+async function loadTGStatus() {
+  const body      = document.getElementById('tg-status-body');
+  const loginCard = document.getElementById('tg-login-card');
+  body.innerHTML  = '<div class="loading">⏳ Status check kartoy...</div>';
+  try {
+    const res = await api('/tg/status');
+    const d   = await res.json();
+    if (d.running) {
+      const uname = d.username ? '@'+esc(d.username) : '';
+      const name  = [d.first_name, d.last_name].filter(Boolean).map(esc).join(' ');
+      body.innerHTML = `
+        <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+          <div style="font-size:44px">✅</div>
+          <div>
+            <div style="font-size:16px;font-weight:700;color:#2e7d32">${name}</div>
+            ${uname ? '<div style="font-size:13px;color:#888">'+uname+'</div>' : ''}
+            ${d.phone ? '<div style="font-size:13px;color:#888">📱 '+esc(d.phone)+'</div>' : ''}
+            <div style="font-size:12px;color:#bbb;margin-top:4px">User ID: ${d.user_id||''}</div>
+          </div>
+          <div style="margin-left:auto">
+            <button class="btn btn-danger" onclick="tgLogout()">🚪 Logout</button>
+          </div>
+        </div>`;
+      loginCard.style.display = 'none';
+    } else {
+      let offlineInfo = '';
+      if (d.first_name || d.username) {
+        const name  = [d.first_name, d.last_name].filter(Boolean).map(esc).join(' ');
+        const uname = d.username ? '@'+esc(d.username) : '';
+        offlineInfo = `<div style="font-size:12px;color:#e65100;margin-top:6px">
+          Magcha account: ${name} ${uname}</div>`;
+      }
+      body.innerHTML = `
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="font-size:36px">🔴</div>
+          <div>
+            <div style="font-size:14px;font-weight:600;color:#c62828">Userbot chalu nahi</div>
+            <div style="font-size:12px;color:#888;margin-top:2px">Khali login kara</div>
+            ${offlineInfo}
+          </div>
+        </div>`;
+      loginCard.style.display = 'block';
+      tgShowStep('phone');
+    }
+  } catch(e) {
+    body.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Status load hovu shakla nahi</div>';
+  }
+}
+
+function tgShowStep(step) {
+  document.getElementById('tg-step-phone').style.display = step==='phone' ? '' : 'none';
+  document.getElementById('tg-step-otp').style.display   = step==='otp'   ? '' : 'none';
+  document.getElementById('tg-step-2fa').style.display   = step==='2fa'   ? '' : 'none';
+}
+
+async function tgSendCode() {
+  const phone = document.getElementById('tg-phone').value.trim();
+  if (!phone) { toast('❌ Phone number enter kara','error'); return; }
+  const btn = document.getElementById('tg-send-btn');
+  btn.disabled = true; btn.textContent = '⏳ Pathavtoy...';
+  try {
+    const res = await api('/tg/send-code', {method:'POST', body:JSON.stringify({phone})});
+    const d   = await res.json();
+    if (!res.ok) { toast('❌ '+d.error,'error'); return; }
+    tgPhoneHash = d.phone_hash;
+    tgPhoneNum  = phone;
+    toast('📨 OTP pathavla! Telegram var bagh.');
+    tgShowStep('otp');
+    setTimeout(()=>document.getElementById('tg-code').focus(), 100);
+  } catch(e) { toast('❌ Network error','error'); }
+  finally { btn.disabled=false; btn.textContent='📨 OTP Pathava'; }
+}
+
+async function tgVerifyCode() {
+  const code = document.getElementById('tg-code').value.trim();
+  if (!code) { toast('❌ OTP enter kara','error'); return; }
+  const btn = document.getElementById('tg-verify-btn');
+  btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
+  tgPendingCode = code;
+  try {
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
+      phone: tgPhoneNum, phone_hash: tgPhoneHash, code
+    })});
+    const d = await res.json();
+    if (res.status === 422 && d.needs_2fa) {
+      toast('🔒 2FA password required','info');
+      tgShowStep('2fa');
+      setTimeout(()=>document.getElementById('tg-2fa').focus(), 100);
+      return;
+    }
+    if (!res.ok) { toast('❌ '+d.error,'error'); return; }
+    toast('✅ Telegram login successful! '+((d.user&&d.user.first_name)||''));
+    loadTGStatus();
+  } catch(e) { toast('❌ Network error','error'); }
+  finally { btn.disabled=false; btn.textContent='✅ Verify Kara'; }
+}
+
+async function tgVerify2FA() {
+  const password = document.getElementById('tg-2fa').value;
+  if (!password) { toast('❌ 2FA password enter kara','error'); return; }
+  const btn = document.getElementById('tg-2fa-btn');
+  btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
+  try {
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
+      phone: tgPhoneNum, phone_hash: tgPhoneHash, code: tgPendingCode, password
+    })});
+    const d = await res.json();
+    if (!res.ok) { toast('❌ '+d.error,'error'); return; }
+    toast('✅ 2FA verify — login successful!');
+    loadTGStatus();
+  } catch(e) { toast('❌ Network error','error'); }
+  finally { btn.disabled=false; btn.textContent='🔓 2FA Verify Kara'; }
+}
+
+async function tgLogout() {
+  openModal(
+    'Telegram Logout?',
+    'Userbot band hoil. Restricted channel access band hoil. DB madhun session delete hoil.',
+    async () => {
+      try {
+        const res = await api('/tg/logout', {method:'POST'});
+        const d   = await res.json();
+        if (!res.ok) { toast('❌ '+d.error,'error'); return; }
+        toast('✅ Userbot logout kela!');
+        loadTGStatus();
+      } catch { toast('❌ Network error','error'); }
+    }
+  );
+}
+
+function tgResetLogin() {
+  tgPhoneHash=''; tgPhoneNum=''; tgPendingCode='';
+  document.getElementById('tg-phone').value='';
+  document.getElementById('tg-code').value='';
+  document.getElementById('tg-2fa').value='';
+  tgShowStep('phone');
 }
 </script>
 </body>
