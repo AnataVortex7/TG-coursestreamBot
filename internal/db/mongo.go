@@ -29,6 +29,7 @@ var (
 	ColOTPs         *mongo.Collection // email OTP login records (TTL: 10 min)
 	ColPendingRegs  *mongo.Collection // unverified registration records (TTL: 10 min)
 	ColURLMonitors  *mongo.Collection // url monitor — persisted monitored URLs
+	ColWatchHistory *mongo.Collection // user watch history + view counts
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -104,6 +105,17 @@ type Worker struct {
 	AddedAt  time.Time          `bson:"added_at"`
 }
 
+// WatchHistory — tracks which files a user has viewed and how many times.
+type WatchHistory struct {
+	ID           primitive.ObjectID `bson:"_id,omitempty"      json:"id"`
+	UserID       primitive.ObjectID `bson:"user_id"            json:"user_id"`
+	MessageID    int                `bson:"message_id"         json:"message_id"`
+	ChannelID    int64              `bson:"channel_id"         json:"channel_id"`
+	CourseID     primitive.ObjectID `bson:"course_id"          json:"course_id"`
+	ViewCount    int                `bson:"view_count"         json:"view_count"`
+	LastViewedAt time.Time          `bson:"last_viewed_at"     json:"last_viewed_at"`
+}
+
 // StreamNonce — per-page-load nonce that ties a player page to its stream.
 type StreamNonce struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty"`
@@ -155,6 +167,7 @@ func Connect() {
 	ColOTPs         = Database.Collection("otp_records")             // ← OTP login records
 	ColPendingRegs  = Database.Collection("pending_registrations")   // ← unverified registrations
 	ColURLMonitors  = Database.Collection("url_monitors")            // ← URL monitor
+	ColWatchHistory = Database.Collection("watch_history")           // ← watch history
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -212,6 +225,15 @@ func createIndexes() {
 	// url_monitors: unique URL — ek URL ek velach add hota yeil
 	ensureIndex(ctx, ColURLMonitors, bson.D{{Key: "url", Value: 1}}, true)
 	ensureIndex(ctx, ColURLMonitors, bson.D{{Key: "enabled", Value: 1}}, false)
+
+	// watch_history: unique (user_id, message_id, channel_id) — one record per user per file
+	ensureCompoundIndex(ctx, ColWatchHistory,
+		bson.D{{Key: "user_id", Value: 1}, {Key: "message_id", Value: 1}, {Key: "channel_id", Value: 1}},
+		true,
+	)
+	ensureIndex(ctx, ColWatchHistory, bson.D{{Key: "user_id", Value: 1}}, false)
+	ensureIndex(ctx, ColWatchHistory, bson.D{{Key: "course_id", Value: 1}}, false)
+	ensureIndex(ctx, ColWatchHistory, bson.D{{Key: "last_viewed_at", Value: -1}}, false)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {

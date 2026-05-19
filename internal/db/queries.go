@@ -640,3 +640,78 @@ func DeleteWorker(url string) error {
 	_, err := ColWorkers.DeleteOne(ctx, bson.M{"url": url})
 	return err
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WATCH HISTORY  (per-user view tracking with count + last viewed time)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// RecordView upserts a watch history entry for (userID, messageID, channelID).
+// On first view: creates record with view_count=1.
+// On repeat view: increments view_count and updates last_viewed_at.
+func RecordView(userID primitive.ObjectID, messageID int, channelID int64, courseID primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	filter := bson.M{
+		"user_id":    userID,
+		"message_id": messageID,
+		"channel_id": channelID,
+	}
+	update := bson.M{
+		"$inc": bson.M{"view_count": 1},
+		"$set": bson.M{
+			"last_viewed_at": time.Now(),
+			"course_id":      courseID,
+		},
+		"$setOnInsert": bson.M{
+			"_id":     primitive.NewObjectID(),
+			"user_id": userID,
+		},
+	}
+	opts := options.Update().SetUpsert(true)
+	_, err := ColWatchHistory.UpdateOne(ctx, filter, update, opts)
+	return err
+}
+
+// GetWatchHistoryForCourse returns all WatchHistory records for a user in a specific course.
+// Sorted by last_viewed_at descending (most recently watched first).
+func GetWatchHistoryForCourse(userID, courseID primitive.ObjectID) ([]WatchHistory, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColWatchHistory.Find(ctx,
+		bson.M{"user_id": userID, "course_id": courseID},
+		options.Find().SetSort(bson.M{"last_viewed_at": -1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []WatchHistory
+	if err = cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+// GetFileViewCount returns the view_count and last_viewed_at for one specific file.
+// Returns (0, zero-time, nil) if the user has never viewed the file.
+func GetFileViewCount(userID primitive.ObjectID, messageID int, channelID int64) (int, time.Time, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var h WatchHistory
+	err := ColWatchHistory.FindOne(ctx, bson.M{
+		"user_id":    userID,
+		"message_id": messageID,
+		"channel_id": channelID,
+	}).Decode(&h)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return 0, time.Time{}, nil
+		}
+		return 0, time.Time{}, err
+	}
+	return h.ViewCount, h.LastViewedAt, nil
+}
