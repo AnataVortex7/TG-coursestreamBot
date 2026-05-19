@@ -284,7 +284,7 @@
       src="{{ .streamURL }}"
       style="width:100%;height:80vh;border:none;display:block;background:#fff;"
     ></iframe>
-    <a id="pdf-download" href="{{ .streamURL }}" download="{{ .title }}.pdf">⬇️ Download PDF</a>
+    <a id="pdf-download" href="{{ .downloadURL }}" download="{{ .title }}.pdf">⬇️ Download PDF</a>
 
   {{ else if eq .mediaType "image" }}
     <!-- Image viewer -->
