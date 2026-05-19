@@ -1,7 +1,7 @@
 // internal/bot/userbot_login.go
 //
-// Admin Panel madhe Telegram Phone Login flow.
-// SendCode → VerifyCode (OTP) → 2FA (if needed) → session save → userbot start
+// Channel-based login flow — SignIn() Run() च्या आत होतो.
+// PHONE_CODE_EMPTY error fix — code channel ne pass hoto.
 
 package bot
 
@@ -28,8 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 // UserBotInfo — frontend la pathavaychi status
 type UserBotInfo struct {
 	Running   bool   `json:"running"`
@@ -40,19 +38,32 @@ type UserBotInfo struct {
 	UserID    int64  `json:"user_id,omitempty"`
 }
 
-// pendingLogin — SendCode nantarcha temporary state
-type pendingLogin struct {
-	phone     string
-	phoneHash string
-	storage   *session.StorageMemory
-	tgClient  *telegram.Client
-	cancel    context.CancelFunc
+// verifyRequest — VerifyCode, Run() la channel ne pathavto
+type verifyRequest struct {
+	code     string
+	password string
 }
 
-// ─── Global state ─────────────────────────────────────────────────────────────
+// loginResult — Run() madhe milalela result
+type loginResult struct {
+	sessionStr string
+	info       UserBotInfo
+	err        error
+	needs2FA   bool
+}
+
+// pendingLogin — SendCode nantarcha live state
+type pendingLogin struct {
+	phone    string
+	phoneHash string
+	storage  *session.StorageMemory
+	verifyCh chan verifyRequest // VerifyCode → Run goroutine
+	resultCh chan loginResult   // Run goroutine → VerifyCode
+	cancel   context.CancelFunc
+}
 
 var (
-	loginMu      sync.Mutex
+	loginMu       sync.Mutex
 	activePending *pendingLogin
 )
 
@@ -60,7 +71,6 @@ var (
 
 func (u *UserBotStruct) Status() UserBotInfo {
 	if u.client == nil {
-		// DB madhe saved info aahe ka (offline saathi)
 		doc, _ := db.GetUserBotSessionDoc()
 		if doc != nil && doc.Session != "" {
 			return UserBotInfo{
@@ -87,24 +97,18 @@ func (u *UserBotStruct) Status() UserBotInfo {
 
 // ─── SendCode ─────────────────────────────────────────────────────────────────
 
-// SendCode — phone number la Telegram OTP pathavto.
-// Returns phoneHash jo VerifyCode la द्यायचा आहे.
 func (u *UserBotStruct) SendCode(phone string) (string, error) {
 	loginMu.Lock()
-	// Juna pending cancel kara
 	if activePending != nil {
 		activePending.cancel()
 		activePending = nil
 	}
 	loginMu.Unlock()
 
-	apiID  := int(config.ValueOf.ApiID)
-	apiHash := config.ValueOf.ApiHash
-
-	storage := &session.StorageMemory{}
+	storage    := &session.StorageMemory{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	tgClient := telegram.NewClient(apiID, apiHash, telegram.Options{
+	tgClient := telegram.NewClient(int(config.ValueOf.ApiID), config.ValueOf.ApiHash, telegram.Options{
 		SessionStorage: storage,
 		Device: telegram.DeviceConfig{
 			DeviceModel:   "Pyrogram",
@@ -113,48 +117,131 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 		},
 	})
 
-	readyCh    := make(chan struct{})
 	phoneHashCh := make(chan string, 1)
 	errCh       := make(chan error, 1)
+	verifyCh    := make(chan verifyRequest, 1)
+	resultCh    := make(chan loginResult, 1)
 
 	go func() {
-		err := tgClient.Run(ctx, func(ctx context.Context) error {
-			close(readyCh)
+		runErr := tgClient.Run(ctx, func(ctx context.Context) error {
 
+			// Step 1: OTP pathav
 			res, err := tgClient.Auth().SendCode(ctx, phone, auth.SendCodeOptions{})
 			if err != nil {
-				errCh <- err
+				errCh <- fmt.Errorf("SendCode error: %v", err)
 				return nil
 			}
+			var phoneHash string
 			switch r := res.(type) {
 			case *tg.AuthSentCode:
-				phoneHashCh <- r.PhoneCodeHash
+				phoneHash = r.PhoneCodeHash
 			default:
-				errCh <- fmt.Errorf("unexpected auth type: %T", res)
+				errCh <- fmt.Errorf("Unexpected auth type: %T", res)
+				return nil
+			}
+			phoneHashCh <- phoneHash
+
+			// Step 2: VerifyCode cha wait — Run() AATACH rahto
+			var req verifyRequest
+			select {
+			case req = <-verifyCh:
+			case <-ctx.Done():
+				return nil
+			case <-time.After(10 * time.Minute):
+				resultCh <- loginResult{err: errors.New("OTP timeout — 10 min madhe verify nahi kela")}
 				return nil
 			}
 
-			// VerifyCode येईपर्यंत goroutine alive ठेव
-			<-ctx.Done()
+			// Step 3: SignIn — Run() AATACH hote — PHONE_CODE_EMPTY येणार nahi
+			_, signInErr := tgClient.Auth().SignIn(ctx, phone, phoneHash, req.code)
+			if signInErr != nil {
+				if tgerr.Is(signInErr, "SESSION_PASSWORD_NEEDED") {
+					if req.password == "" {
+						// Frontend la 2FA signal pathav
+						resultCh <- loginResult{needs2FA: true}
+						// 2FA password cha wait karo
+						var req2 verifyRequest
+						select {
+						case req2 = <-verifyCh:
+						case <-ctx.Done():
+							return nil
+						case <-time.After(10 * time.Minute):
+							resultCh <- loginResult{err: errors.New("2FA timeout")}
+							return nil
+						}
+						if _, err2 := tgClient.Auth().Password(ctx, req2.password); err2 != nil {
+							resultCh <- loginResult{err: fmt.Errorf("2FA password chukicha: %v", err2)}
+							return nil
+						}
+					} else {
+						if _, err2 := tgClient.Auth().Password(ctx, req.password); err2 != nil {
+							resultCh <- loginResult{err: fmt.Errorf("2FA password chukicha: %v", err2)}
+							return nil
+						}
+					}
+				} else if tgerr.Is(signInErr, "PHONE_CODE_INVALID") {
+					resultCh <- loginResult{err: errors.New("OTP chukicha — dobara check kara")}
+					return nil
+				} else if tgerr.Is(signInErr, "PHONE_CODE_EXPIRED") {
+					resultCh <- loginResult{err: errors.New("OTP expire zala — nava OTP maga")}
+					return nil
+				} else {
+					resultCh <- loginResult{err: fmt.Errorf("Login error: %v", signInErr)}
+					return nil
+				}
+			}
+
+			// Step 4: Self info + session encode
+			self, err := tgClient.Self(ctx)
+			if err != nil {
+				resultCh <- loginResult{err: fmt.Errorf("User info milali nahi: %v", err)}
+				return nil
+			}
+
+			rawSession, err := storage.LoadSession(ctx)
+			if err != nil {
+				resultCh <- loginResult{err: fmt.Errorf("Session load error: %v", err)}
+				return nil
+			}
+
+			type jsonData struct {
+				Version int
+				Data    session.Data
+			}
+			var jd jsonData
+			if jsonErr := json.Unmarshal(rawSession, &jd); jsonErr != nil {
+				resultCh <- loginResult{err: fmt.Errorf("Session parse error: %v", jsonErr)}
+				return nil
+			}
+
+			sessionStr, encErr := qrlogin.EncodeToPyrogramSession(&jd.Data, config.ValueOf.ApiID)
+			if encErr != nil {
+				resultCh <- loginResult{err: fmt.Errorf("Session encode error: %v", encErr)}
+				return nil
+			}
+
+			resultCh <- loginResult{
+				sessionStr: sessionStr,
+				info: UserBotInfo{
+					Running:   true,
+					FirstName: self.FirstName,
+					LastName:  self.LastName,
+					Username:  self.Username,
+					Phone:     self.Phone,
+					UserID:    self.ID,
+				},
+			}
 			return nil
 		})
-		if err != nil && !errors.Is(err, context.Canceled) {
+
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
 			select {
-			case errCh <- err:
+			case errCh <- runErr:
 			default:
 			}
 		}
 	}()
 
-	// Ready होण्याची वाट (max 15s)
-	select {
-	case <-readyCh:
-	case <-time.After(15 * time.Second):
-		cancel()
-		return "", errors.New("Telegram connection timeout — API_ID / API_HASH check kara")
-	}
-
-	// phoneHash येण्याची वाट (max 20s)
 	select {
 	case hash := <-phoneHashCh:
 		loginMu.Lock()
@@ -162,7 +249,8 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 			phone:     phone,
 			phoneHash: hash,
 			storage:   storage,
-			tgClient:  tgClient,
+			verifyCh:  verifyCh,
+			resultCh:  resultCh,
 			cancel:    cancel,
 		}
 		loginMu.Unlock()
@@ -172,15 +260,12 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 		return "", err
 	case <-time.After(20 * time.Second):
 		cancel()
-		return "", errors.New("OTP pathavata aala nahi — phone number check kara")
+		return "", errors.New("Telegram connection timeout — API_ID/API_HASH check kara")
 	}
 }
 
 // ─── VerifyCode ───────────────────────────────────────────────────────────────
 
-// VerifyCode — OTP + optional 2FA verify karto.
-// password = "" if no 2FA.
-// Returns: session string, user info, error
 func (u *UserBotStruct) VerifyCode(phone, phoneHash, code, password string) (string, UserBotInfo, error) {
 	loginMu.Lock()
 	p := activePending
@@ -190,112 +275,43 @@ func (u *UserBotStruct) VerifyCode(phone, phoneHash, code, password string) (str
 		return "", UserBotInfo{}, errors.New("Aadhi phone number pathava (SendCode kara)")
 	}
 	if p.phone != phone {
-		return "", UserBotInfo{}, errors.New("Phone number match hot nahi — aadhi SendCode kara")
+		return "", UserBotInfo{}, errors.New("Phone number match hot nahi")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	type result struct {
-		sessionStr string
-		info       UserBotInfo
-		err        error
+	// Run goroutine la code channel ne pathav
+	select {
+	case p.verifyCh <- verifyRequest{code: code, password: password}:
+	case <-time.After(5 * time.Second):
+		return "", UserBotInfo{}, errors.New("Internal timeout — page refresh kara ani dobara try kara")
 	}
-	resCh := make(chan result, 1)
 
-	go func() {
-		// Step 1: OTP SignIn
-		_, signInErr := p.tgClient.Auth().SignIn(ctx, phone, phoneHash, code)
-
-		if signInErr != nil {
-			if tgerr.Is(signInErr, "SESSION_PASSWORD_NEEDED") {
-				// 2FA required
-				if password == "" {
-					resCh <- result{err: errors.New("SESSION_PASSWORD_NEEDED")}
-					return
-				}
-				// 2FA verify
-				if _, err2FA := p.tgClient.Auth().Password(ctx, password); err2FA != nil {
-					resCh <- result{err: fmt.Errorf("2FA password chukicha: %v", err2FA)}
-					return
-				}
-				// 2FA success — continue below
-			} else if tgerr.Is(signInErr, "PHONE_CODE_INVALID") {
-				resCh <- result{err: errors.New("OTP chukicha aahe — dobara enter kara")}
-				return
-			} else if tgerr.Is(signInErr, "PHONE_CODE_EXPIRED") {
-				resCh <- result{err: errors.New("OTP expire zala — nava OTP maga")}
-				return
-			} else {
-				resCh <- result{err: fmt.Errorf("Login error: %v", signInErr)}
-				return
-			}
+	// Result cha wait karo
+	select {
+	case res := <-p.resultCh:
+		if res.needs2FA {
+			// pending alive asato — 2FA password saathi
+			return "", UserBotInfo{}, errors.New("SESSION_PASSWORD_NEEDED")
 		}
-
-		// User info milav
-		self, err := p.tgClient.Self(ctx)
-		if err != nil {
-			resCh <- result{err: fmt.Errorf("User info milali nahi: %v", err)}
-			return
+		// Cleanup
+		loginMu.Lock()
+		if activePending == p {
+			p.cancel()
+			activePending = nil
 		}
-
-		info := UserBotInfo{
-			Running:   true,
-			FirstName: self.FirstName,
-			LastName:  self.LastName,
-			Username:  self.Username,
-			Phone:     self.Phone,
-			UserID:    self.ID,
-		}
-
-		// Session encode (Pyrogram format)
-		rawSession, err := p.storage.LoadSession(ctx)
-		if err != nil {
-			resCh <- result{err: fmt.Errorf("Session load error: %v", err)}
-			return
-		}
-
-		type jsonData struct {
-			Version int
-			Data    session.Data
-		}
-		var jd jsonData
-		if jsonErr := json.Unmarshal(rawSession, &jd); jsonErr != nil {
-			resCh <- result{err: fmt.Errorf("Session parse error: %v", jsonErr)}
-			return
-		}
-
-		sessionStr, encErr := qrlogin.EncodeToPyrogramSession(&jd.Data, config.ValueOf.ApiID)
-		if encErr != nil {
-			resCh <- result{err: fmt.Errorf("Session encode error: %v", encErr)}
-			return
-		}
-
-		resCh <- result{sessionStr: sessionStr, info: info}
-	}()
-
-	res := <-resCh
-
-	// Cleanup
-	loginMu.Lock()
-	if activePending == p {
-		p.cancel()
-		activePending = nil
+		loginMu.Unlock()
+		return res.sessionStr, res.info, res.err
+	case <-time.After(30 * time.Second):
+		return "", UserBotInfo{}, errors.New("Verify timeout — dobara try kara")
 	}
-	loginMu.Unlock()
-
-	return res.sessionStr, res.info, res.err
 }
 
 // ─── StartFromSession ─────────────────────────────────────────────────────────
 
-// StartFromSession — session string vaparun live userbot restart karto.
 func (u *UserBotStruct) StartFromSession(sessionStr string) {
 	if u.log == nil {
 		u.log = zap.NewNop()
 	}
 	log := u.log.Named("restart")
-
 	go func() {
 		client, err := gotgproto.NewClient(
 			int(config.ValueOf.ApiID),
@@ -311,8 +327,7 @@ func (u *UserBotStruct) StartFromSession(sessionStr string) {
 			return
 		}
 		u.client = client
-		log.Sugar().Infof("✅ Userbot started: @%s (%s %s)",
-			client.Self.Username, client.Self.FirstName, client.Self.LastName)
+		log.Sugar().Infof("✅ Userbot started: @%s", client.Self.Username)
 		_ = u.AddBotsAsAdmins()
 	}()
 }
@@ -325,8 +340,6 @@ func (u *UserBotStruct) Stop() {
 
 // ─── StartUserBotFromDB ───────────────────────────────────────────────────────
 
-// StartUserBotFromDB — startup var MongoDB madhe session aahe ka check karto.
-// run.go madhe bot.StartUserBot(log) REPLACE kara ya ne.
 func StartUserBotFromDB(l *zap.Logger) {
 	log := l.Named("USERBOT")
 
@@ -342,7 +355,6 @@ func StartUserBotFromDB(l *zap.Logger) {
 		return
 	}
 
-	// ENV fallback
 	if config.ValueOf.UserSession != "" {
 		log.Info("DB session nahi — ENV USER_SESSION use kartoy")
 		StartUserBot(l)
