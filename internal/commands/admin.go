@@ -3,7 +3,6 @@ package commands
 import (
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
-	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
 	"fmt"
@@ -36,13 +35,13 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("revokeaccess", adminOnly(cmdRevokeAccess)))
 
 	d.AddHandler(handlers.NewCommand("syncchannel", adminOnly(cmdSyncChannel)))
-	d.AddHandler(handlers.NewCommand("copychannel", adminOnly(cmdCopyChannel)))
 	d.AddHandler(handlers.NewCommand("sessions", adminOnly(cmdSessions)))
 	d.AddHandler(handlers.NewCommand("killsession", adminOnly(cmdKillSession)))
 	d.AddHandler(handlers.NewCommand("stats", adminOnly(cmdStats)))
 }
 
 // ─── adminOnly wrapper ────────────────────────────────────────────────────────
+// Rejects anyone who is not in config.ValueOf.AllowedUsers.
 
 func adminOnly(fn func(*ext.Context, *ext.Update) error) func(*ext.Context, *ext.Update) error {
 	return func(ctx *ext.Context, u *ext.Update) error {
@@ -75,6 +74,9 @@ func args(u *ext.Update) []string {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // /adduser <mobile_or_email> <password> [full_name]
+// Examples:
+//   /adduser 9876543210 pass123
+//   /adduser user@email.com pass123 Rahul Sharma
 func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 2 {
@@ -88,6 +90,7 @@ func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 		fullName = strings.Join(a[2:], " ")
 	}
 
+	// Decide if identifier is mobile or email
 	mobile, email := "", ""
 	if strings.Contains(identifier, "@") {
 		email = identifier
@@ -137,6 +140,7 @@ func cmdDelUser(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
+	// Disable + kill all sessions
 	_ = db.SetUserActive(user.ID, false)
 	_ = db.DeleteAllSessionsForUser(user.ID)
 
@@ -175,17 +179,20 @@ func cmdListUsers(ctx *ext.Context, u *ext.Update) error {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // /addcourse <title> | <description> | <price> | <buy_link> | <channel_id>
+// Fields separated by | for multi-word values.
+// channel_id is the Telegram channel ID for this course's content (e.g. -1001234567890)
 func cmdAddCourse(ctx *ext.Context, u *ext.Update) error {
 	text := u.EffectiveMessage.Text
+	// Remove command prefix
 	idx := strings.Index(text, " ")
 	if idx == -1 {
-		reply(ctx, u, "Usage: /addcourse <title> | <description> | <price> | <buy_link> | <channel_id>\n\nExample:\n/addcourse Python Basics | Learn Python from scratch | ₹999 | https://pay.example.com/python | -1001234567890")
+		reply(ctx, u, "Usage: /addcourse <title> | <description> | <price> | <buy_link> | <channel_id>\n\nExample:\n/addcourse Python Basics | Learn Python from scratch | ₹999 | https://pay.example.com/python | -1001234567890\n\nEach course must have its own dedicated Telegram channel.")
 		return dispatcher.EndGroups
 	}
 	raw := strings.TrimSpace(text[idx+1:])
 	parts := strings.Split(raw, "|")
 	if len(parts) < 5 {
-		reply(ctx, u, "❌ Need 5 fields separated by |\nFormat: title | description | price | buy_link | channel_id")
+		reply(ctx, u, "❌ Need 5 fields separated by |\nFormat: title | description | price | buy_link | channel_id\n\nEach course must have its own dedicated Telegram channel.")
 		return dispatcher.EndGroups
 	}
 
@@ -202,7 +209,7 @@ func cmdAddCourse(ctx *ext.Context, u *ext.Update) error {
 
 	channelID, err := strconv.ParseInt(channelIDStr, 10, 64)
 	if err != nil {
-		reply(ctx, u, "❌ Invalid channel_id. Must be a number like -1001234567890")
+		reply(ctx, u, "❌ Invalid channel_id. Must be a number like -1001234567890\nForward any message from your channel to @userinfobot to get its ID.")
 		return dispatcher.EndGroups
 	}
 
@@ -237,6 +244,7 @@ func cmdDelCourse(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ "+err.Error())
 		return dispatcher.EndGroups
 	}
+	// Also clean cached files
 	_ = db.DeleteCachedFilesForCourse(courseID)
 
 	reply(ctx, u, "✅ Course deleted and cached files removed.")
@@ -272,7 +280,10 @@ func cmdListCourses(ctx *ext.Context, u *ext.Update) error {
 // ACCESS COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// /grantaccess <username> <course_id>
 // /grantaccess <mobile_or_email> <course_id> [months]
+// months=0 or omitted → permanent access
+// Example: /grantaccess 9876543210 <id> 3   → 3 months access
 func cmdGrantAccess(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 2 {
@@ -357,7 +368,27 @@ func cmdRevokeAccess(ctx *ext.Context, u *ext.Update) error {
 // CHANNEL SYNC
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// /syncchannel <course_id> [start_msg_id] [end_msg_id]
+//
+// Examples:
+//   /syncchannel <id>              → sync all messages
+//   /syncchannel <id> 100          → sync from msg ID 100 to end
+//   /syncchannel <id> 100 500      → sync only msg ID 100 to 500
+//
+// Features:
+//   - Flood wait handling (auto retry after wait)
+//   - 10 second break after every 100 messages cached
+//   - Progress updates every 100 messages
+
 // /syncchannel <course_id> <start_msg_id> <end_msg_id>
+//
+// Examples:
+//   /syncchannel <id> 1 500     → sync msg ID 1 to 500
+//   /syncchannel <id> 100 200   → sync msg ID 100 to 200
+//
+// Uses ChannelsGetMessages (same as /stream route) — explicit ID fetch.
+// Requires both start and end. Bot client used (fixes PeerStorage issue).
+
 func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 3 {
@@ -394,6 +425,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 		course.ChannelID, course.Title, startMsgID, endMsgID,
 	))
 
+	// ✅ bot.Bot वापर — ctx.Raw नाही (PeerStorage fix)
 	botClient := MainBotClient
 	channel, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, course.ChannelID)
 	if err != nil {
@@ -402,7 +434,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	const (
-		batchSize    = 100
+		batchSize    = 100 // Telegram ChannelsGetMessages max per call
 		breakEvery   = 100
 		breakSeconds = 10
 	)
@@ -411,17 +443,21 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 	skipped := 0
 	sinceBreak := 0
 
+	// startMsgID to endMsgID ला batches मध्ये process कर
 	for batchStart := startMsgID; batchStart <= endMsgID; batchStart += batchSize {
+
 		batchEnd := batchStart + batchSize - 1
 		if batchEnd > endMsgID {
 			batchEnd = endMsgID
 		}
 
+		// ✅ Explicit ID list बनव — /channel route सारखंच
 		ids := make([]tg.InputMessageClass, 0, batchEnd-batchStart+1)
 		for id := batchStart; id <= batchEnd; id++ {
 			ids = append(ids, &tg.InputMessageID{ID: id})
 		}
 
+		// ✅ ChannelsGetMessages — /stream सारखीच API method
 		var res tg.MessagesMessagesClass
 		var fetchErr error
 
@@ -473,7 +509,10 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				continue
 			}
 
+			// Caption read करा (msg.Message = Telegram caption field)
 			caption := strings.TrimSpace(msg.Message)
+
+			// Title: caption असेल तर caption, नाहीतर filename extension शिवाय
 			title := caption
 			if title == "" {
 				title = stripExt(file.FileName)
@@ -518,126 +557,6 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// RESTRICTED CHANNEL COPY
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// /copychannel <source_channel_id> <target_channel_id> <start_msg_id> <end_msg_id> [find=replace ...]
-//
-// Copies media messages from a RESTRICTED source channel to your target channel
-// using the logged-in userbot account.  Unlike a normal forward, this re-sends
-// the file using its server-side reference — Telegram does NOT re-upload the
-// file, so it's fast.
-//
-// Caption word replacement (optional):
-//   Pass one or more  find=replace  pairs after the IDs.
-//   Every occurrence of "find" in each caption is replaced with "replace".
-//   Spaces in find/replace are not supported (use underscores or omit).
-//
-// Examples:
-//   /copychannel -1001111111 -1002222222 1 500
-//   /copychannel -1001111111 -1002222222 1 500 @OldChannel=@MyChannel
-//   /copychannel -1001111111 -1002222222 1 500 @OldChannel=@MyChannel OldName=NewName
-func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
-	const usage = "Usage:\n/copychannel <source_id> <target_id> <start_msg> <end_msg> [find=replace ...]\n\nExample (plain copy):\n/copychannel -1001111111 -1002222222 1 500\n\nExample (with caption replace):\n/copychannel -1001111111 -1002222222 1 500 @OldChannel=@MyChannel OldName=NewName"
-
-	a := args(u)
-	if len(a) < 4 {
-		reply(ctx, u, usage)
-		return dispatcher.EndGroups
-	}
-
-	// ── Parse channel IDs ─────────────────────────────────────────────────────
-	sourceID, err := strconv.ParseInt(a[0], 10, 64)
-	if err != nil {
-		reply(ctx, u, "❌ Invalid source_channel_id.\n\n"+usage)
-		return dispatcher.EndGroups
-	}
-	targetID, err := strconv.ParseInt(a[1], 10, 64)
-	if err != nil {
-		reply(ctx, u, "❌ Invalid target_channel_id.\n\n"+usage)
-		return dispatcher.EndGroups
-	}
-
-	// ── Parse message range ───────────────────────────────────────────────────
-	startMsgID, err1 := strconv.Atoi(a[2])
-	endMsgID, err2 := strconv.Atoi(a[3])
-	if err1 != nil || err2 != nil || startMsgID < 1 || endMsgID < startMsgID {
-		reply(ctx, u, "❌ Invalid msg range. start and end must be positive integers, start ≤ end.\n\n"+usage)
-		return dispatcher.EndGroups
-	}
-
-	// ── Parse optional find=replace pairs ────────────────────────────────────
-	var replacements []bot.CaptionReplace
-	for _, pair := range a[4:] {
-		idx := strings.Index(pair, "=")
-		if idx <= 0 {
-			reply(ctx, u, fmt.Sprintf("❌ Bad find=replace pair: %q\nFormat must be: word=newword", pair))
-			return dispatcher.EndGroups
-		}
-		replacements = append(replacements, bot.CaptionReplace{
-			Find:    pair[:idx],
-			Replace: pair[idx+1:],
-		})
-	}
-
-	// ── Userbot check ─────────────────────────────────────────────────────────
-	if bot.UserBot.GetClient() == nil {
-		reply(ctx, u, "❌ Userbot is not running.\nSet USER_SESSION in your .env and restart the bot.")
-		return dispatcher.EndGroups
-	}
-
-	// ── Progress summary ──────────────────────────────────────────────────────
-	replaceInfo := ""
-	if len(replacements) > 0 {
-		parts := make([]string, len(replacements))
-		for i, r := range replacements {
-			parts[i] = fmt.Sprintf("%q → %q", r.Find, r.Replace)
-		}
-		replaceInfo = "\nCaption replacements:\n  " + strings.Join(parts, "\n  ")
-	}
-
-	reply(ctx, u, fmt.Sprintf(
-		"📋 Copy started\n\nSource: %d\nTarget: %d\nRange: msg %d → %d%s\n\n⏳ Working...",
-		sourceID, targetID, startMsgID, endMsgID, replaceInfo,
-	))
-
-	// ── Run copy in background goroutine so bot stays responsive ─────────────
-	go func() {
-		opts := bot.CopyOptions{CaptionReplacements: replacements}
-
-		lastReported := 0
-		progressFn := func(copied, skipped int) {
-			// Report every 50 successful copies
-			if copied-lastReported >= 50 {
-				reply(ctx, u, fmt.Sprintf("📦 Progress: %d copied, %d skipped...", copied, skipped))
-				lastReported = copied
-			}
-		}
-
-		result, err := bot.UserBot.CopyRestrictedMessages(
-			ctx.Context,
-			sourceID,
-			targetID,
-			startMsgID,
-			endMsgID,
-			opts,
-			progressFn,
-		)
-		if err != nil {
-			reply(ctx, u, "❌ Copy failed: "+err.Error())
-			return
-		}
-
-		reply(ctx, u, fmt.Sprintf(
-			"✅ Copy complete!\n\nSource: %d\nTarget: %d\nRange: msg %d → %d\n\n📁 Copied: %d\n⚠️ Skipped (no media / error): %d",
-			sourceID, targetID, startMsgID, endMsgID, result.Copied, result.Skipped,
-		))
-	}()
-
-	return dispatcher.EndGroups
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // SESSION COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -665,7 +584,7 @@ func cmdSessions(ctx *ext.Context, u *ext.Update) error {
 		sb.WriteString(fmt.Sprintf(
 			"%d. %s\n   IP: %s\n   Expires: %s\n   Token: ...%s\n\n",
 			i+1, uname, s.IP, expires,
-			s.Token[max(0, len(s.Token)-8):],
+			s.Token[max(0, len(s.Token)-8):], // last 8 chars only
 		))
 	}
 	sb.WriteString("Use /killsession <username> to force logout.")
@@ -673,7 +592,7 @@ func cmdSessions(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// /killsession <username>
+// /killsession <username> — force logout a user
 func cmdKillSession(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 1 {
@@ -733,7 +652,7 @@ func cmdStats(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// ─── Go 1.21 min/max compat ───────────────────────────────────────────────────
 
 func max(a, b int) int {
 	if a > b {
@@ -742,12 +661,18 @@ func max(a, b int) int {
 	return b
 }
 
+// ─── Auto-append new uploads to channel cache ─────────────────────────────────
+// This is called from the existing stream.go sendLink handler AFTER forwarding.
+// When admin uploads a new file to the bot, it gets forwarded to LOG_CHANNEL
+// and we cache it here so /syncchannel doesn't need to be re-run.
+
 func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectID, caption, fileName, mimeType string, fileSize int64) error {
 	sortOrder, err := db.HighestSortOrder(courseID)
 	if err != nil {
 		return err
 	}
 
+	// Title: caption असेल तर caption, नाहीतर filename extension शिवाय
 	title := strings.TrimSpace(caption)
 	if title == "" {
 		title = stripExt(fileName)
@@ -776,3 +701,6 @@ func stripExt(name string) string {
 	}
 	return name
 }
+
+// unused import guard
+var _ = strconv.Itoa
