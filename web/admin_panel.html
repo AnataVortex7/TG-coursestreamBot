@@ -645,7 +645,7 @@ function openModal(title, msg, onConfirm) {
   pendingConfirm=onConfirm;
   document.getElementById('modal-title').textContent=title;
   document.getElementById('modal-msg').textContent=msg;
-  document.getElementById('modal-ok').onclick=()=>{closeModal();if(pendingConfirm)pendingConfirm();};
+  document.getElementById('modal-ok').onclick=()=>{if(pendingConfirm)pendingConfirm();closeModal();};
   document.getElementById('delModal').classList.add('open');
 }
 function closeModal(){document.getElementById('delModal').classList.remove('open');pendingConfirm=null;}
