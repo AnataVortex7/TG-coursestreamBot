@@ -528,7 +528,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				FileName:  file.FileName,
 				MimeType:  file.MimeType,
 				FileSize:  file.FileSize,
-				SortOrder: msg.ID,
+				SortOrder: messageID, 
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
@@ -683,7 +683,7 @@ func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectI
 		FileName:  fileName,
 		MimeType:  mimeType,
 		FileSize:  fileSize,
-		SortOrder: msg.ID,
+		SortOrder: messageID, 
 		CreatedAt: time.Now(),
 	}
 	return db.UpsertCachedFile(cached)
