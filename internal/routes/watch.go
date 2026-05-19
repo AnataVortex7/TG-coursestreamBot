@@ -91,6 +91,13 @@ func handleWatch(c *gin.Context) {
 		return
 	}
 
+	// Record view — fire-and-forget (don't block player load on DB write)
+	go func() {
+		if err := db.RecordView(currentUserID, verified.MessageID, verified.ChannelID, cachedFile.CourseID); err != nil {
+			log.Warn("failed to record view", zap.Error(err))
+		}
+	}()
+
 	nonceBytes := make([]byte, 16)
 	if _, err := rand.Read(nonceBytes); err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Server error. Please try again."})

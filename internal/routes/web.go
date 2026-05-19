@@ -188,16 +188,32 @@ func handleCourseDetail(c *gin.Context) {
 	sessionToken := auth.GetSessionToken(c)
 
 	type VideoEntry struct {
-		Index     int
-		ID        int
-		Title     string
-		Caption   string
-		FileName  string
-		MimeType  string
-		FileSize  string
-		StreamURL string
-		MediaType string
-		HasMedia  bool
+		Index        int
+		ID           int
+		Title        string
+		Caption      string
+		FileName     string
+		MimeType     string
+		FileSize     string
+		StreamURL    string
+		MediaType    string
+		HasMedia     bool
+		ViewCount    int
+		LastViewedAt string // empty if never viewed; else "02 Jan 2006, 3:04 PM"
+	}
+
+	// Load watch history for this course in one DB call (map for O(1) lookup)
+	historyRecords, _ := db.GetWatchHistoryForCourse(userID, courseID)
+	type viewInfo struct {
+		count        int
+		lastViewedAt string
+	}
+	viewMap := make(map[int]viewInfo, len(historyRecords)) // keyed by messageID
+	for _, h := range historyRecords {
+		viewMap[h.MessageID] = viewInfo{
+			count:        h.ViewCount,
+			lastViewedAt: h.LastViewedAt.Local().Format("02 Jan 2006, 3:04 PM"),
+		}
 	}
 
 	playlist := make([]VideoEntry, 0, len(files))
@@ -220,17 +236,20 @@ func handleCourseDetail(c *gin.Context) {
 			mediaType = "photo"
 		}
 
+		vi := viewMap[f.MessageID]
 		playlist = append(playlist, VideoEntry{
-			Index:     i + 1,
-			ID:        f.MessageID,
-			Title:     f.Title,
-			Caption:   f.Caption,
-			FileName:  f.FileName,
-			MimeType:  f.MimeType,
-			FileSize:  humanSize(f.FileSize),
-			StreamURL: "/watch/" + streamToken,
-			MediaType: mediaType,
-			HasMedia:  true,
+			Index:        i + 1,
+			ID:           f.MessageID,
+			Title:        f.Title,
+			Caption:      f.Caption,
+			FileName:     f.FileName,
+			MimeType:     f.MimeType,
+			FileSize:     humanSize(f.FileSize),
+			StreamURL:    "/watch/" + streamToken,
+			MediaType:    mediaType,
+			HasMedia:     true,
+			ViewCount:    vi.count,
+			LastViewedAt: vi.lastViewedAt,
 		})
 	}
 
