@@ -471,61 +471,35 @@
         </div>
       </div>
 
-      <!-- Login Card -->
+      <!-- Login Card — single card, JS controls content -->
       <div class="card" id="tg-login-card" style="display:none">
         <div class="card-head">
-          <div class="card-title">🔐 Telegram Phone Login</div>
+          <div class="card-title" id="tg-card-title">🔐 Telegram Phone Login</div>
         </div>
         <div class="card-body">
+          <!-- Info banner -->
+          <div id="tg-info-banner" style="display:none;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px"></div>
 
-          <!-- Step 1: Phone -->
-          <div id="tg-step-phone">
-            <div class="form-row">
-              <label>Phone Number <span class="req">*</span></label>
-              <input type="text" id="tg-phone" placeholder="+919876543210" style="max-width:280px"
-                     onkeydown="if(event.key==='Enter') tgSendCode()" />
-              <div class="form-hint">Country code sah enter kara — India saathi +91</div>
-            </div>
-            <button class="btn btn-primary" id="tg-send-btn" onclick="tgSendCode()">
-              📨 OTP Pathava
-            </button>
+          <!-- Step label -->
+          <div id="tg-step-label" style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px"></div>
+
+          <!-- Single input field — type/placeholder/value changes per step -->
+          <div class="form-row">
+            <label id="tg-input-label">Phone Number <span class="req">*</span></label>
+            <input id="tg-main-input"
+                   type="tel"
+                   placeholder="+919876543210"
+                   autocomplete="off"
+                   style="max-width:300px;font-size:15px"
+                   onkeydown="if(event.key==='Enter') tgMainAction()" />
+            <div class="form-hint" id="tg-input-hint">Country code sah enter kara — India saathi +91</div>
           </div>
 
-          <!-- Step 2: OTP -->
-          <div id="tg-step-otp" style="display:none">
-            <div class="tg-step-info tg-info-green">
-              📩 OTP tumchya Telegram app var pathavla aahe — check kara
-            </div>
-            <div class="form-row">
-              <label>Telegram OTP <span class="req">*</span></label>
-              <input type="tel" id="tg-code" placeholder="12345" maxlength="6" autocomplete="one-time-code"
-                     style="max-width:180px;letter-spacing:4px;font-size:20px;font-weight:700;text-align:center"
-                     onkeydown="if(event.key==='Enter') tgVerifyCode()" />
-            </div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
-              <button class="btn btn-primary" id="tg-verify-btn" onclick="tgVerifyCode()">✅ Verify Kara</button>
-              <button class="btn" onclick="tgResetLogin()">↩ Maghe</button>
-            </div>
+          <!-- Action buttons -->
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
+            <button class="btn btn-primary" id="tg-main-btn" onclick="tgMainAction()">📨 OTP Pathava</button>
+            <button class="btn" id="tg-back-btn" style="display:none" onclick="tgResetLogin()">↩ Maghe</button>
           </div>
-
-          <!-- Step 3: 2FA -->
-          <div id="tg-step-2fa" style="display:none">
-            <div class="tg-step-info tg-info-orange">
-              🔒 Tumchya account var 2-Step Verification (2FA) enabled aahe. Password enter kara.
-            </div>
-            <div class="form-row">
-              <label>2FA Password <span class="req">*</span></label>
-              <input type="password" id="tg-2fa" placeholder="Tumcha 2FA password"
-                     style="max-width:280px"
-                     onkeydown="if(event.key==='Enter') tgVerify2FA()" />
-              <div class="form-hint">Tumchi Telegram 2-Step Verification password</div>
-            </div>
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
-              <button class="btn btn-primary" id="tg-2fa-btn" onclick="tgVerify2FA()">🔓 2FA Verify Kara</button>
-              <button class="btn" onclick="tgResetLogin()">↩ Maghe</button>
-            </div>
-          </div>
-
         </div>
       </div>
     </div>
@@ -1209,11 +1183,126 @@ function fmtTimeFull(ts) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TELEGRAM LOGIN
+// TELEGRAM LOGIN — Single input approach (no display:none input bugs)
 // ═══════════════════════════════════════════════════════════════════════════════
-let tgPhoneHash   = '';
-let tgPhoneNum    = '';
-let tgPendingCode = '';
+
+// State — JS variables, DOM la depend nahi
+const TG = { step: 'phone', phoneHash: '', phone: '', code: '' };
+// step values: 'phone' | 'otp' | '2fa'
+
+function tgSetStep(step) {
+  TG.step = step;
+  const inp   = document.getElementById('tg-main-input');
+  const lbl   = document.getElementById('tg-input-label');
+  const hint  = document.getElementById('tg-input-hint');
+  const btn   = document.getElementById('tg-main-btn');
+  const back  = document.getElementById('tg-back-btn');
+  const title = document.getElementById('tg-card-title');
+  const banner= document.getElementById('tg-info-banner');
+  const slbl  = document.getElementById('tg-step-label');
+
+  // Clear input value for new step
+  if (inp) { inp.value = ''; inp.removeAttribute('disabled'); }
+
+  if (step === 'phone') {
+    if (title)  title.textContent = '🔐 Telegram Phone Login';
+    if (slbl)   slbl.textContent  = 'Step 1 of 3 — Phone Number';
+    if (lbl)    lbl.innerHTML     = 'Phone Number <span class="req">*</span>';
+    if (inp)  { inp.type = 'tel'; inp.placeholder = '+919876543210'; inp.autocomplete = 'tel'; inp.style.letterSpacing=''; inp.style.fontSize='15px'; inp.style.textAlign=''; }
+    if (hint)   hint.textContent  = 'Country code sah enter kara — India saathi +91';
+    if (btn)  { btn.textContent = '📨 OTP Pathava'; btn.disabled = false; }
+    if (back)   back.style.display = 'none';
+    if (banner) banner.style.display = 'none';
+
+  } else if (step === 'otp') {
+    if (title)  title.textContent = '🔐 OTP Verify Kara';
+    if (slbl)   slbl.textContent  = 'Step 2 of 3 — Telegram OTP';
+    if (lbl)    lbl.innerHTML     = 'Telegram OTP <span class="req">*</span>';
+    if (inp)  { inp.type = 'tel'; inp.placeholder = '12345'; inp.autocomplete = 'one-time-code'; inp.maxLength = 6; inp.style.letterSpacing='5px'; inp.style.fontSize='22px'; inp.style.textAlign='center'; }
+    if (hint)   hint.textContent  = 'Tumchya Telegram app var OTP aala aahe';
+    if (btn)  { btn.textContent = '✅ OTP Verify Kara'; btn.disabled = false; }
+    if (back)   back.style.display = '';
+    if (banner) { banner.style.display=''; banner.style.background='#e8f5e9'; banner.style.color='#2e7d32'; banner.textContent='📩 OTP Telegram var pathavla aahe — app open kara ani OTP takaa'; }
+    setTimeout(()=>{ if(inp) inp.focus(); }, 100);
+
+  } else if (step === '2fa') {
+    if (title)  title.textContent = '🔒 2FA Password';
+    if (slbl)   slbl.textContent  = 'Step 3 of 3 — 2-Step Verification';
+    if (lbl)    lbl.innerHTML     = '2FA Password <span class="req">*</span>';
+    if (inp)  { inp.type = 'password'; inp.placeholder = 'Tumcha 2FA password'; inp.autocomplete = 'current-password'; inp.maxLength = 200; inp.style.letterSpacing=''; inp.style.fontSize='15px'; inp.style.textAlign=''; }
+    if (hint)   hint.textContent  = 'Tumchi Telegram 2-Step Verification password enter kara';
+    if (btn)  { btn.textContent = '🔓 2FA Verify Kara'; btn.disabled = false; }
+    if (back)   back.style.display = '';
+    if (banner) { banner.style.display=''; banner.style.background='#fff3e0'; banner.style.color='#e65100'; banner.textContent='🔒 Tumchya account var 2FA enabled aahe. Telegram app > Settings > Privacy > 2-Step Verification cha password taka.'; }
+    setTimeout(()=>{ if(inp) inp.focus(); }, 100);
+  }
+}
+
+// Single action button — step nusaar different action
+async function tgMainAction() {
+  if (TG.step === 'phone') await tgDoSendCode();
+  else if (TG.step === 'otp')  await tgDoVerifyOTP();
+  else if (TG.step === '2fa')  await tgDoVerify2FA();
+}
+
+async function tgDoSendCode() {
+  const inp = document.getElementById('tg-main-input');
+  const phone = inp ? inp.value.trim() : '';
+  if (!phone) { toast('❌ Phone number enter kara','error'); if(inp) inp.focus(); return; }
+  const btn = document.getElementById('tg-main-btn');
+  btn.disabled = true; btn.textContent = '⏳ OTP pathavtoy...';
+  try {
+    const res = await api('/tg/send-code', {method:'POST', body:JSON.stringify({phone})});
+    const d   = await res.json();
+    if (!res.ok) { toast('❌ '+(d.error||'Error'),'error'); btn.disabled=false; btn.textContent='📨 OTP Pathava'; return; }
+    TG.phone     = phone;
+    TG.phoneHash = d.phone_hash;
+    toast('📨 OTP Telegram var pathavla!');
+    tgSetStep('otp');
+  } catch(e) { toast('❌ Network error','error'); btn.disabled=false; btn.textContent='📨 OTP Pathava'; }
+}
+
+async function tgDoVerifyOTP() {
+  const inp  = document.getElementById('tg-main-input');
+  const code = inp ? inp.value.trim() : '';
+  if (!code) { toast('❌ OTP enter kara — Telegram app madhe bagh','error'); if(inp) inp.focus(); return; }
+  TG.code = code;  // JS variable madhe save — DOM var depend nahi
+  const btn = document.getElementById('tg-main-btn');
+  btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
+  try {
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
+      phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code
+    })});
+    const d = await res.json();
+    if (res.status === 422 && d.needs_2fa) {
+      toast('🔒 2FA password required','info');
+      tgSetStep('2fa');
+      return; // btn already re-set in tgSetStep
+    }
+    if (!res.ok) { toast('❌ '+(d.error||'Verify failed'),'error'); btn.disabled=false; btn.textContent='✅ OTP Verify Kara'; return; }
+    toast('✅ Login successful! '+((d.user&&d.user.first_name)||''));
+    tgResetLogin();
+    loadTGStatus();
+  } catch(e) { toast('❌ Network error','error'); btn.disabled=false; btn.textContent='✅ OTP Verify Kara'; }
+}
+
+async function tgDoVerify2FA() {
+  const inp      = document.getElementById('tg-main-input');
+  const password = inp ? inp.value : '';
+  if (!password) { toast('❌ 2FA password enter kara','error'); if(inp) inp.focus(); return; }
+  const btn = document.getElementById('tg-main-btn');
+  btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
+  try {
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
+      phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code, password
+    })});
+    const d = await res.json();
+    if (!res.ok) { toast('❌ '+(d.error||'2FA failed'),'error'); btn.disabled=false; btn.textContent='🔓 2FA Verify Kara'; return; }
+    toast('✅ 2FA verify — Login successful!');
+    tgResetLogin();
+    loadTGStatus();
+  } catch(e) { toast('❌ Network error','error'); btn.disabled=false; btn.textContent='🔓 2FA Verify Kara'; }
+}
 
 async function loadTGStatus() {
   const body      = document.getElementById('tg-status-body');
@@ -1244,8 +1333,7 @@ async function loadTGStatus() {
       if (d.first_name || d.username) {
         const name  = [d.first_name, d.last_name].filter(Boolean).map(esc).join(' ');
         const uname = d.username ? '@'+esc(d.username) : '';
-        offlineInfo = `<div style="font-size:12px;color:#e65100;margin-top:6px">
-          Magcha account: ${name} ${uname}</div>`;
+        offlineInfo = `<div style="font-size:12px;color:#e65100;margin-top:6px">Magcha account: ${name} ${uname}</div>`;
       }
       body.innerHTML = `
         <div style="display:flex;align-items:center;gap:12px">
@@ -1257,118 +1345,30 @@ async function loadTGStatus() {
           </div>
         </div>`;
       loginCard.style.display = 'block';
-      // Only show phone step if not already on OTP/2FA step
-      if (document.getElementById('tg-step-otp').style.display === 'none' && document.getElementById('tg-step-2fa').style.display === 'none') tgShowStep('phone');
+      tgSetStep('phone');
     }
   } catch(e) {
     body.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Status load hovu shakla nahi</div>';
   }
 }
 
-function tgShowStep(step) {
-  document.getElementById('tg-step-phone').style.display = step==='phone' ? '' : 'none';
-  document.getElementById('tg-step-otp').style.display   = step==='otp'   ? '' : 'none';
-  document.getElementById('tg-step-2fa').style.display   = step==='2fa'   ? '' : 'none';
-}
-
-async function tgSendCode() {
-  const phone = document.getElementById('tg-phone').value.trim();
-  if (!phone) { toast('❌ Phone number enter kara','error'); return; }
-  const btn = document.getElementById('tg-send-btn');
-  btn.disabled = true; btn.textContent = '⏳ Pathavtoy...';
-  try {
-    const res = await api('/tg/send-code', {method:'POST', body:JSON.stringify({phone})});
-    const d   = await res.json();
-    if (!res.ok) { toast('❌ '+d.error,'error'); return; }
-    tgPhoneHash = d.phone_hash;
-    tgPhoneNum  = phone;
-    toast('📨 OTP pathavla! Telegram var bagh.');
-    tgShowStep('otp');
-    setTimeout(()=>document.getElementById('tg-code').focus(), 100);
-  } catch(e) { toast('❌ Network error','error'); }
-  finally { btn.disabled=false; btn.textContent='📨 OTP Pathava'; }
-}
-
-async function tgVerifyCode() {
-  const input = document.getElementById('tg-code');
-  const code  = input ? input.value.trim() : '';
-  if (!code) {
-    toast('❌ OTP box madhe code enter kara','error');
-    if (input) input.focus();
-    return;
-  }
-  // AADHI save kara — step switch zala tari rahil
-  tgPendingCode = code;
-
-  const btn = document.getElementById('tg-verify-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Verify kartoy...'; }
-
-  try {
-    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
-      phone: tgPhoneNum, phone_hash: tgPhoneHash, code
-    })});
-    const d = await res.json();
-
-    // 2FA required — step 3 var ja, btn re-enable nako
-    if (res.status === 422 && d.needs_2fa) {
-      toast('🔒 2FA password required — tumcha Telegram 2FA password taka','info');
-      tgShowStep('2fa');
-      setTimeout(()=>{ const f=document.getElementById('tg-2fa'); if(f) f.focus(); }, 150);
-      return;
-    }
-
-    if (!res.ok) { toast('❌ '+(d.error||'Verify failed'),'error'); return; }
-    toast('✅ Telegram login successful! '+((d.user&&d.user.first_name)||''));
-    tgResetLogin();
-    loadTGStatus();
-  } catch(e) { toast('❌ Network error — server running aahe ka check kara','error'); }
-  finally {
-    // OTP step visible asel tarach re-enable kara
-    const otpStep = document.getElementById('tg-step-otp');
-    const isOnOTP = otpStep && otpStep.style.display !== 'none';
-    if (isOnOTP && btn) { btn.disabled=false; btn.textContent='✅ Verify Kara'; }
-  }
-}
-
-async function tgVerify2FA() {
-  const password = document.getElementById('tg-2fa').value;
-  if (!password) { toast('❌ 2FA password enter kara','error'); return; }
-  const btn = document.getElementById('tg-2fa-btn');
-  btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
-  try {
-    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
-      phone: tgPhoneNum, phone_hash: tgPhoneHash, code: tgPendingCode, password
-    })});
-    const d = await res.json();
-    if (!res.ok) { toast('❌ '+d.error,'error'); return; }
-    toast('✅ 2FA verify — login successful!');
-    loadTGStatus();
-  } catch(e) { toast('❌ Network error','error'); }
-  finally { btn.disabled=false; btn.textContent='🔓 2FA Verify Kara'; }
-}
-
 async function tgLogout() {
-  openModal(
-    'Telegram Logout?',
-    'Userbot band hoil. Restricted channel access band hoil. DB madhun session delete hoil.',
-    async () => {
-      try {
-        const res = await api('/tg/logout', {method:'POST'});
-        const d   = await res.json();
-        if (!res.ok) { toast('❌ '+d.error,'error'); return; }
-        toast('✅ Userbot logout kela!');
-        loadTGStatus();
-      } catch { toast('❌ Network error','error'); }
-    }
-  );
+  openModal('Telegram Logout?','Userbot band hoil. DB madhun session delete hoil.',async()=>{
+    try {
+      const res = await api('/tg/logout',{method:'POST'});
+      const d   = await res.json();
+      if (!res.ok) { toast('❌ '+d.error,'error'); return; }
+      toast('✅ Userbot logout kela!');
+      loadTGStatus();
+    } catch { toast('❌ Network error','error'); }
+  });
 }
 
 function tgResetLogin() {
-  tgPhoneHash=''; tgPhoneNum=''; tgPendingCode='';
-  document.getElementById('tg-phone').value='';
-  document.getElementById('tg-code').value='';
-  document.getElementById('tg-2fa').value='';
-  tgShowStep('phone');
+  TG.step='phone'; TG.phoneHash=''; TG.phone=''; TG.code='';
+  const inp = document.getElementById('tg-main-input');
+  if (inp) inp.value = '';
+  tgSetStep('phone');
 }
 </script>
 </body>
