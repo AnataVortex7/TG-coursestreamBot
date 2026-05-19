@@ -528,7 +528,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				FileName:  file.FileName,
 				MimeType:  file.MimeType,
 				FileSize:  file.FileSize,
-				SortOrder: messageID,
+				SortOrder: msg.ID,
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
@@ -668,10 +668,6 @@ func max(a, b int) int {
 
 func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectID, caption, fileName, mimeType string, fileSize int64) error {
 	
-	if err != nil {
-		return err
-	}
-
 	// Title: caption असेल तर caption, नाहीतर filename extension शिवाय
 	title := strings.TrimSpace(caption)
 	if title == "" {
@@ -687,7 +683,7 @@ func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectI
 		FileName:  fileName,
 		MimeType:  mimeType,
 		FileSize:  fileSize,
-		SortOrder: messageID,
+		SortOrder: msg.ID,
 		CreatedAt: time.Now(),
 	}
 	return db.UpsertCachedFile(cached)
