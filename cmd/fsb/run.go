@@ -62,7 +62,7 @@ func runApp(cmd *cobra.Command, args []string) {
 		log.Sugar().Fatalf("Failed to start workers: %v", err)
 	}
 	workers.AddDefaultClient(mainBot, mainBot.Self)
-	bot.StartUserBot(log)
+	bot.StartUserBotFromDB(log)
 
 	// ── Init external worker pool (Koyeb workers) ─────────────────────────────
 	// workerreg.Init reads WORKER_URLS / WORKER_URL1..N from config,
