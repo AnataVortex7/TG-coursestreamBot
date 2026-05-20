@@ -199,6 +199,8 @@ func handleCourseDetail(c *gin.Context) {
 		HasMedia     bool
 		ViewCount    int
 		LastViewedAt string // empty if never viewed; else "02 Jan 2006, 3:04 PM"
+		ChannelID    int64  // needed for offline token API call
+		CourseIDHex  string // needed for offline token API call
 	}
 
 	// Load watch history for this course in one DB call (map for O(1) lookup)
@@ -254,6 +256,8 @@ func handleCourseDetail(c *gin.Context) {
 			HasMedia:     hasMedia,
 			ViewCount:    vi.count,
 			LastViewedAt: vi.lastViewedAt,
+			ChannelID:    f.ChannelID,
+			CourseIDHex:  courseIDHex,
 		})
 	}
 
