@@ -67,6 +67,8 @@
   .btn-view{background:var(--pdf);color:#fff}
   .btn-photo{background:var(--photo);color:#111}
   .btn-open{background:var(--doc);color:#fff}
+  .btn-offline{background:#1a9e5c;color:#fff}
+  .btn-offline:disabled{background:#2d4a3e;color:#5a8a6e;cursor:not-allowed;opacity:.7}
   .btn-locked{background:#2d2d3a;color:#6b7280;border:1px solid #3f3f52;cursor:not-allowed;opacity:.8}
   .pagination{display:flex;justify-content:center;gap:12px;padding:16px 20px 40px;flex-wrap:wrap}
   .pagination button{display:inline-flex;align-items:center;gap:6px;padding:9px 22px;border-radius:10px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s}
@@ -156,6 +158,13 @@
       {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-view">📄 View PDF</a>
       {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-photo">🖼️ View Photo</a>
       {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
+      {{ if or (eq .MediaType "video") (eq .MediaType "audio") }}
+      <button class="btn btn-offline"
+        onclick="getOfflineToken('{{.CourseIDHex}}', {{.ID}}, {{.ChannelID}}, this)"
+        title="Telegram मध्ये offline download साठी token generate करा">
+        📥 Offline
+      </button>
+      {{ end }}
     {{ else }}
       <button class="btn btn-locked" disabled>🔒 Access Required</button>
     {{ end }}
@@ -298,6 +307,118 @@
   function escAnn(s) {
     if (!s) return '';
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Offline Token ──────────────────────────────────────────────────────────
+  async function getOfflineToken(courseId, messageId, channelId, btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ ...';
+
+    try {
+      const resp = await fetch('/api/offline-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          course_id: courseId,
+          message_id: messageId,
+          channel_id: channelId
+        })
+      });
+      const data = await resp.json();
+
+      if (!resp.ok) {
+        if (resp.status === 429) {
+          showOfflineModal(null,
+            '⛔ आजचे 5 downloads संपले!',
+            'रात्री 12:00 IST ला reset होतील.',
+            data.used, data.limit);
+        } else {
+          alert('❌ Error: ' + (data.error || 'Unknown error'));
+        }
+        return;
+      }
+
+      showOfflineModal(
+        data.token,
+        '✅ Token तयार आहे!',
+        'Telegram bot मध्ये हा command पाठवा:',
+        data.used_today + 1,  // after this token
+        data.limit
+      );
+    } catch(e) {
+      alert('❌ Network error. पुन्हा प्रयत्न करा.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '📥 Offline';
+    }
+  }
+
+  function showOfflineModal(token, title, subtitle, used, limit) {
+    // Remove old modal if any
+    const old = document.getElementById('offline-modal-overlay');
+    if (old) old.remove();
+
+    const command = token ? `/dl ${token}` : null;
+    const remaining = limit - used;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'offline-modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
+
+    overlay.innerHTML = `
+      <div style="background:#1c1c2e;border:1px solid #3f3f52;border-radius:16px;padding:28px 24px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+        <div style="font-size:2rem;margin-bottom:8px">${token ? '📥' : '⛔'}</div>
+        <div style="font-size:1rem;font-weight:700;color:#e8e9f0;margin-bottom:4px">${title}</div>
+        <div style="font-size:.82rem;color:#9097a5;margin-bottom:${token ? '20px' : '8px'}">${subtitle}</div>
+
+        ${token ? `
+        <div id="offline-token-box" style="background:#111122;border:2px solid #4a4af7;border-radius:10px;padding:14px 18px;font-size:1.4rem;font-weight:900;letter-spacing:.3em;color:#a0a8ff;cursor:pointer;user-select:all;margin-bottom:8px"
+          onclick="copyOfflineCommand('${command}', this)" title="Copy करण्यासाठी click करा">
+          ${token}
+        </div>
+        <div style="font-size:.78rem;color:#555;margin-bottom:16px">👆 Token वर click करा copy साठी</div>
+
+        <div style="background:#111;border-radius:8px;padding:10px 14px;font-family:monospace;font-size:.9rem;color:#7dd3b0;margin-bottom:16px;cursor:pointer"
+          onclick="copyOfflineCommand('${command}', this)">
+          ${command}
+        </div>
+        ` : ''}
+
+        <div style="font-size:.8rem;color:#6b7280;margin-bottom:18px">
+          📊 आजचे downloads: <strong style="color:${remaining > 0 ? '#4ade80' : '#f87171'}">${used}/${limit}</strong>
+          ${remaining > 0 ? `&nbsp;(${remaining} शिल्लक)` : '&nbsp;— <span style="color:#f87171">संपले</span>'}
+          <br><span style="font-size:.73rem">रात्री 12:00 IST ला reset होतात</span>
+        </div>
+
+        ${token ? `
+        <div style="font-size:.78rem;color:#9097a5;margin-bottom:18px;line-height:1.5">
+          🔒 Bot हा video <strong>forward blocked</strong> पाठवेल<br>
+          Token आज रात्री 12 वाजता expire होईल
+        </div>
+        ` : ''}
+
+        <button onclick="document.getElementById('offline-modal-overlay').remove()"
+          style="background:#3a3a4e;color:#e8e9f0;border:none;border-radius:8px;padding:9px 28px;font-size:.85rem;font-weight:600;cursor:pointer">
+          बंद करा
+        </button>
+      </div>`;
+
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+
+  function copyOfflineCommand(text, el) {
+    navigator.clipboard.writeText(text).then(() => {
+      const orig = el.style.borderColor || el.style.color;
+      el.style.outline = '2px solid #4ade80';
+      setTimeout(() => el.style.outline = '', 1200);
+    }).catch(() => {
+      // Fallback
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    });
   }
 </script>
 </body>
