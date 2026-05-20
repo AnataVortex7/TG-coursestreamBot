@@ -583,3 +583,66 @@ func escapeHTML(s string) string {
 func splitLines(s string) []string {
 	return strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
 }
+
+// ─── Send New Course Notification ────────────────────────────────────────────
+// New course add zala ki sarv registered users la pathavto
+
+func SendNewCourseNotification(toEmail, fullName, courseTitle, buyLink, price, appName string) error {
+	if len(smtpProviders) == 0 {
+		return fmt.Errorf("smtp: no providers configured")
+	}
+	p := primaryProvider()
+	if appName == "" {
+		appName = p.fromName
+	}
+	subject := "🎓 New Course Available — " + courseTitle
+	htmlBody := buildNewCourseEmail(appName, fullName, courseTitle, buyLink, price)
+	msg := buildMsg(p, toEmail, subject, htmlBody)
+	return sendMail(toEmail, msg)
+}
+
+func buildNewCourseEmail(appName, fullName, courseTitle, buyLink, price string) string {
+	greet := "Hi there"
+	if fullName != "" {
+		greet = "Hi " + escapeHTML(fullName)
+	}
+	buyBtn := ""
+	if buyLink != "" {
+		buyBtn = fmt.Sprintf(`
+      <div style="text-align:center;margin-top:24px;">
+        <a href="%s" style="display:inline-block;background:linear-gradient(135deg,#6c63ff,#4f46e5);color:#fff;text-decoration:none;padding:14px 36px;border-radius:12px;font-size:15px;font-weight:700;letter-spacing:.3px;">
+          🚀 View Course
+        </a>
+      </div>`, escapeHTML(buyLink))
+	}
+	priceTag := ""
+	if price != "" {
+		priceTag = fmt.Sprintf(`<span style="display:inline-block;background:#22c55e20;color:#4ade80;border:1px solid #22c55e40;border-radius:20px;padding:4px 14px;font-size:13px;font-weight:700;margin-top:8px;">%s</span>`, escapeHTML(price))
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;margin:0;padding:40px 16px;">
+  <div style="max-width:500px;margin:0 auto;background:#1a1d27;border-radius:16px;border:1px solid #2a2d3a;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:32px 28px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:12px;">🎓</div>
+      <h1 style="color:#fff;font-size:22px;font-weight:800;margin:0 0 6px;">New Course Available!</h1>
+      <p style="color:rgba(255,255,255,.8);font-size:14px;margin:0;">%s — we have something new for you</p>
+    </div>
+    <div style="padding:28px 32px;">
+      <p style="color:#c8cad8;font-size:15px;margin:0 0 20px;">%s,</p>
+      <div style="background:#12141c;border-radius:12px;padding:20px 22px;border:1px solid #2a2d3a;text-align:center;">
+        <p style="color:#7a7d8e;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:0 0 10px;">New Course</p>
+        <p style="color:#e8e9f0;font-size:19px;font-weight:700;margin:0;">%s</p>
+        %s
+      </div>
+      %s
+      <p style="color:#4a4d5e;font-size:11px;text-align:center;margin:24px 0 0;">
+        You received this because you are registered on %s.<br>
+        Login to your account to explore all courses.
+      </p>
+    </div>
+  </div>
+</body>
+</html>`, escapeHTML(appName), greet, escapeHTML(courseTitle), priceTag, buyBtn, escapeHTML(appName))
+}
