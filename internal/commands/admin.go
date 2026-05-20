@@ -6,7 +6,6 @@ import (
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +34,6 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("grantaccess", adminOnly(cmdGrantAccess)))
 	d.AddHandler(handlers.NewCommand("revokeaccess", adminOnly(cmdRevokeAccess)))
 
-	d.AddHandler(handlers.NewCommand("addvideo", adminOnly(cmdAddVideo)))
 	d.AddHandler(handlers.NewCommand("syncchannel", adminOnly(cmdSyncChannel)))
 	d.AddHandler(handlers.NewCommand("sessions", adminOnly(cmdSessions)))
 	d.AddHandler(handlers.NewCommand("killsession", adminOnly(cmdKillSession)))
@@ -370,92 +368,6 @@ func cmdRevokeAccess(ctx *ext.Context, u *ext.Update) error {
 // CHANNEL SYNC
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// /addvideo <course_id> <start_msg_id> <end_msg_id> <caption text...>
-//
-// Inserts CachedFile records for every message ID in [start, end] that is NOT
-// already present in MongoDB. Already-cached IDs are silently skipped.
-// Title/caption = "<caption text> <message_id>"  (message_id appended as index).
-//
-// Example:
-//   /addvideo 507f1f... 10 50 Python Basics - Lecture
-//   → inserts IDs 10..50 with titles like "Python Basics - Lecture 10", "...11", …
-func cmdAddVideo(ctx *ext.Context, u *ext.Update) error {
-	a := args(u)
-	if len(a) < 4 {
-		reply(ctx, u, "Usage: /addvideo <course_id> <start_msg_id> <end_msg_id> <caption>\n\nExample:\n/addvideo 507f1f... 10 50 Python Basics - Lecture")
-		return dispatcher.EndGroups
-	}
-
-	courseID, err := primitive.ObjectIDFromHex(a[0])
-	if err != nil {
-		reply(ctx, u, "❌ Invalid course ID.")
-		return dispatcher.EndGroups
-	}
-
-	startID, err1 := strconv.Atoi(a[1])
-	endID, err2 := strconv.Atoi(a[2])
-	if err1 != nil || err2 != nil || startID < 1 || endID < startID {
-		reply(ctx, u, "❌ Invalid range. start and end must be positive integers, start ≤ end.")
-		return dispatcher.EndGroups
-	}
-
-	baseCaption := strings.TrimSpace(strings.Join(a[3:], " "))
-	if baseCaption == "" {
-		reply(ctx, u, "❌ Caption cannot be empty.")
-		return dispatcher.EndGroups
-	}
-
-	course, err := db.GetCourseByID(courseID)
-	if err != nil || course == nil {
-		reply(ctx, u, "❌ Course not found.")
-		return dispatcher.EndGroups
-	}
-	if course.ChannelID == 0 {
-		reply(ctx, u, "❌ This course has no channel set.")
-		return dispatcher.EndGroups
-	}
-
-	inserted := 0
-	skipped := 0
-
-	for id := startID; id <= endID; id++ {
-		// Already in MongoDB → skip, don't touch
-		existing, _ := db.GetCachedFile(id, course.ChannelID)
-		if existing != nil {
-			skipped++
-			continue
-		}
-
-		// Caption = base caption + message_id as index at the end
-		caption := fmt.Sprintf("%s %d", baseCaption, id)
-
-		cached := &db.CachedFile{
-			MessageID: id,
-			ChannelID: course.ChannelID,
-			CourseID:  courseID,
-			Title:     caption,
-			Caption:   caption,
-			FileName:  fmt.Sprintf("video_%d.mp4", id),
-			MimeType:  "video/mp4",
-			FileSize:  0,
-			SortOrder: id,
-			CreatedAt: time.Now(),
-		}
-
-		if err := db.UpsertCachedFile(cached); err != nil {
-			reply(ctx, u, fmt.Sprintf("❌ Failed at ID %d: %s", id, err.Error()))
-			return dispatcher.EndGroups
-		}
-		inserted++
-	}
-
-	reply(ctx, u, fmt.Sprintf(
-		"✅ Done!\n\nCourse: %s\nRange: %d → %d\nCaption prefix: %s\n\n📥 Inserted: %d\n⏭ Skipped (already cached): %d",
-		course.Title, startID, endID, baseCaption, inserted, skipped,
-	))
-	return dispatcher.EndGroups
-}
-
 // /syncchannel <course_id> [start_msg_id] [end_msg_id]
 //
 // Examples:
@@ -584,54 +496,39 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 			return dispatcher.EndGroups
 		}
 
-		// returned messages चा map बनव ID → *tg.Message
-		msgMap := make(map[int]*tg.Message)
 		for _, rawMsg := range messages.Messages {
-			if m, ok := rawMsg.(*tg.Message); ok && m.ID != 0 {
-				msgMap[m.ID] = m
-			}
-		}
-
-		// आपण request केलेल्या प्रत्येक ID साठी cache कर
-		// Telegram ने दिलं नसेल तरी Video #id म्हणून save कर
-		for id := batchStart; id <= batchEnd; id++ {
-			fileName := fmt.Sprintf("video_%d.mp4", id)
-			mimeType := "video/mp4"
-			var fileSize int64 = 0
-			title := fmt.Sprintf("Video #%d", id)
-			caption := ""
-
-			if msg, found := msgMap[id]; found {
-				caption = strings.TrimSpace(msg.Message)
-				if caption != "" {
-					title = caption
-				}
-				if msg.Media != nil {
-					if file, err := utils.FileFromMedia(msg.Media); err == nil {
-						if file.FileName != "" {
-							fileName = file.FileName
-						}
-						if file.MimeType != "" {
-							mimeType = normalizeMime(file.MimeType, file.FileName)
-						}
-						fileSize = file.FileSize
-						if title == fmt.Sprintf("Video #%d", id) && file.FileName != "" {
-							title = stripExt(file.FileName)
-						}
-					}
-				}
+			msg, ok := rawMsg.(*tg.Message)
+			if !ok || msg.Media == nil {
+				skipped++
+				continue
 			}
 
+			file, err := utils.FileFromMedia(msg.Media)
+			if err != nil {
+				skipped++
+				continue
+			}
+
+			// Caption read करा (msg.Message = Telegram caption field)
+			caption := strings.TrimSpace(msg.Message)
+
+			// Title: caption असेल तर caption, नाहीतर filename extension शिवाय
+			title := caption
+			if title == "" {
+				title = stripExt(file.FileName)
+			}
+
+			
 			cached := &db.CachedFile{
-				MessageID: id,
+				MessageID: msg.ID,
 				ChannelID: course.ChannelID,
 				CourseID:  courseID,
 				Title:     title,
 				Caption:   caption,
-				FileName:  fileName,
-				MimeType:  mimeType,
-				FileSize:  fileSize,
-				SortOrder: id,
+				FileName:  file.FileName,
+				MimeType:  file.MimeType,
+				FileSize:  file.FileSize,
+				SortOrder: msg.ID, 
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
@@ -803,30 +700,3 @@ func stripExt(name string) string {
 
 // unused import guard
 var _ = strconv.Itoa
-
-// normalizeMime — browser-safe video mime type return करतो.
-// MKV/AVI सारखे types mp4 म्हणून serve केले जातात जेणेकरून browser play करू शकतो.
-func normalizeMime(mime, fileName string) string {
-	switch strings.ToLower(mime) {
-	case "video/x-matroska", "video/mkv":
-		return "video/mp4"
-	case "video/x-msvideo", "video/avi":
-		return "video/mp4"
-	case "video/quicktime":
-		return "video/mp4"
-	case "video/mp4", "video/webm", "video/ogg":
-		return mime
-	default:
-		if strings.HasPrefix(strings.ToLower(mime), "video/") {
-			return "video/mp4"
-		}
-	}
-	ext := strings.ToLower(filepath.Ext(fileName))
-	switch ext {
-	case ".mp4", ".m4v", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".3gp":
-		return "video/mp4"
-	case ".webm":
-		return "video/webm"
-	}
-	return "video/mp4"
-}
