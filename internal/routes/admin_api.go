@@ -11,7 +11,6 @@ import (
 	"context"
 	"encoding/base64"
 	golog "log"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -272,7 +271,7 @@ func adminAddCourse(c *gin.Context) {
 	go func(courseTitle, courseBuyLink, coursePrice string) {
 		users, err := db.ListUsers()
 		if err != nil {
-			log.Printf("[NewCourse] ListUsers error: %v", err)
+			golog.Printf("[NewCourse] ListUsers error: %v", err)
 			return
 		}
 		appName := os.Getenv("BREVO_FROM_NAME")
@@ -286,12 +285,12 @@ func adminAddCourse(c *gin.Context) {
 				continue
 			}
 			if err := email.SendNewCourseNotification(u.Email, u.FullName, courseTitle, courseBuyLink, coursePrice, appName); err != nil {
-				log.Printf("[NewCourse] Email to %s failed: %v", u.Email, err)
+				golog.Printf("[NewCourse] Email to %s failed: %v", u.Email, err)
 			} else {
 				sent++
 			}
 		}
-		log.Printf("[NewCourse] '%s' — email pathavla: %d, skipped (no email): %d", courseTitle, sent, skipped)
+		golog.Printf("[NewCourse] '%s' — email pathavla: %d, skipped (no email): %d", courseTitle, sent, skipped)
 	}(course.Title, course.BuyLink, course.Price)
 
 	c.JSON(http.StatusOK, course)
@@ -832,13 +831,13 @@ func adminBroadcast(c *gin.Context) {
 					continue
 				}
 				if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
-					log.Printf("[Broadcast/All] Email to %s failed: %v", u.Email, err)
+					golog.Printf("[Broadcast/All] Email to %s failed: %v", u.Email, err)
 					failed++
 				} else {
 					sent++
 				}
 			}
-			log.Printf("[Broadcast/All] '%s' — sent: %d, failed: %d, skipped(no email): %d", title, sent, failed, skipped)
+			golog.Printf("[Broadcast/All] '%s' — sent: %d, failed: %d, skipped(no email): %d", title, sent, failed, skipped)
 		}(users, req.Subject, req.Message, req.Title, appName)
 
 		c.JSON(http.StatusOK, gin.H{
@@ -894,13 +893,13 @@ func adminBroadcast(c *gin.Context) {
 				continue
 			}
 			if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
-				log.Printf("[Broadcast/Course:%s] Email to %s failed: %v", courseName, u.Email, err)
+				golog.Printf("[Broadcast/Course:%s] Email to %s failed: %v", courseName, u.Email, err)
 				failed++
 			} else {
 				sent++
 			}
 		}
-		log.Printf("[Broadcast/Course:%s] '%s' — sent: %d, failed: %d, skipped: %d", courseName, title, sent, failed, skipped)
+		golog.Printf("[Broadcast/Course:%s] '%s' — sent: %d, failed: %d, skipped: %d", courseName, title, sent, failed, skipped)
 	}(users, req.Subject, req.Message, req.Title, course.Title, appName)
 
 	c.JSON(http.StatusOK, gin.H{
