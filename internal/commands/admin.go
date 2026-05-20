@@ -15,6 +15,7 @@ import (
 	"github.com/celestix/gotgproto/ext"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 // ─── Register all admin commands ─────────────────────────────────────────────
@@ -34,6 +35,7 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("grantaccess", adminOnly(cmdGrantAccess)))
 	d.AddHandler(handlers.NewCommand("revokeaccess", adminOnly(cmdRevokeAccess)))
 
+	d.AddHandler(handlers.NewCommand("addvideo", adminOnly(cmdAddVideo)))
 	d.AddHandler(handlers.NewCommand("syncchannel", adminOnly(cmdSyncChannel)))
 	d.AddHandler(handlers.NewCommand("sessions", adminOnly(cmdSessions)))
 	d.AddHandler(handlers.NewCommand("killsession", adminOnly(cmdKillSession)))
@@ -41,7 +43,6 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 }
 
 // ─── adminOnly wrapper ────────────────────────────────────────────────────────
-// Rejects anyone who is not in config.ValueOf.AllowedUsers.
 
 func adminOnly(fn func(*ext.Context, *ext.Update) error) func(*ext.Context, *ext.Update) error {
 	return func(ctx *ext.Context, u *ext.Update) error {
@@ -73,10 +74,6 @@ func args(u *ext.Update) []string {
 // USER COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// /adduser <mobile_or_email> <password> [full_name]
-// Examples:
-//   /adduser 9876543210 pass123
-//   /adduser user@email.com pass123 Rahul Sharma
 func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 2 {
@@ -90,7 +87,6 @@ func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 		fullName = strings.Join(a[2:], " ")
 	}
 
-	// Decide if identifier is mobile or email
 	mobile, email := "", ""
 	if strings.Contains(identifier, "@") {
 		email = identifier
@@ -126,7 +122,6 @@ func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// /deluser <username>
 func cmdDelUser(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 1 {
@@ -140,7 +135,6 @@ func cmdDelUser(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Disable + kill all sessions
 	_ = db.SetUserActive(user.ID, false)
 	_ = db.DeleteAllSessionsForUser(user.ID)
 
@@ -148,7 +142,6 @@ func cmdDelUser(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// /listusers
 func cmdListUsers(ctx *ext.Context, u *ext.Update) error {
 	users, err := db.ListUsers()
 	if err != nil {
@@ -178,12 +171,8 @@ func cmdListUsers(ctx *ext.Context, u *ext.Update) error {
 // COURSE COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// /addcourse <title> | <description> | <price> | <buy_link> | <channel_id>
-// Fields separated by | for multi-word values.
-// channel_id is the Telegram channel ID for this course's content (e.g. -1001234567890)
 func cmdAddCourse(ctx *ext.Context, u *ext.Update) error {
 	text := u.EffectiveMessage.Text
-	// Remove command prefix
 	idx := strings.Index(text, " ")
 	if idx == -1 {
 		reply(ctx, u, "Usage: /addcourse <title> | <description> | <price> | <buy_link> | <channel_id>\n\nExample:\n/addcourse Python Basics | Learn Python from scratch | ₹999 | https://pay.example.com/python | -1001234567890\n\nEach course must have its own dedicated Telegram channel.")
@@ -226,7 +215,6 @@ func cmdAddCourse(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// /delcourse <course_id>
 func cmdDelCourse(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 1 {
@@ -244,14 +232,12 @@ func cmdDelCourse(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ "+err.Error())
 		return dispatcher.EndGroups
 	}
-	// Also clean cached files
 	_ = db.DeleteCachedFilesForCourse(courseID)
 
 	reply(ctx, u, "✅ Course deleted and cached files removed.")
 	return dispatcher.EndGroups
 }
 
-// /listcourses
 func cmdListCourses(ctx *ext.Context, u *ext.Update) error {
 	courses, err := db.ListAllCourses()
 	if err != nil {
@@ -280,10 +266,6 @@ func cmdListCourses(ctx *ext.Context, u *ext.Update) error {
 // ACCESS COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// /grantaccess <username> <course_id>
-// /grantaccess <mobile_or_email> <course_id> [months]
-// months=0 or omitted → permanent access
-// Example: /grantaccess 9876543210 <id> 3   → 3 months access
 func cmdGrantAccess(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 2 {
@@ -335,7 +317,6 @@ func cmdGrantAccess(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// /revokeaccess <username> <course_id>
 func cmdRevokeAccess(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 2 {
@@ -365,29 +346,106 @@ func cmdRevokeAccess(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CHANNEL SYNC
+// ADD VIDEO — manually insert missing message IDs into a course
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// /syncchannel <course_id> [start_msg_id] [end_msg_id]
+// /addvideo <course_id> <start_msg_id> <end_msg_id> <caption>
 //
-// Examples:
-//   /syncchannel <id>              → sync all messages
-//   /syncchannel <id> 100          → sync from msg ID 100 to end
-//   /syncchannel <id> 100 500      → sync only msg ID 100 to 500
+// syncchannel media नसलेले messages skip करतो.
+// addvideo त्या skipped IDs साठी manually record insert करतो.
 //
-// Features:
-//   - Flood wait handling (auto retry after wait)
-//   - 10 second break after every 100 messages cached
-//   - Progress updates every 100 messages
+// - MongoDB मध्ये (message_id + channel_id) आधीच असेल → skip
+// - नसेल → insert: caption + message_id as title, video/mp4 defaults
+// - दुसऱ्या channel च्या duplicate key error → skip
+//
+// Example:
+//   /addvideo 507f1f... 10 50 Python Basics - Lecture
+//   → inserts missing IDs with titles: "Python Basics - Lecture 10", "...11" …
+func cmdAddVideo(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	if len(a) < 4 {
+		reply(ctx, u, "Usage: /addvideo <course_id> <start_msg_id> <end_msg_id> <caption>\n\nExample:\n/addvideo 507f1f... 10 50 Python Basics - Lecture")
+		return dispatcher.EndGroups
+	}
 
-// /syncchannel <course_id> <start_msg_id> <end_msg_id>
-//
-// Examples:
-//   /syncchannel <id> 1 500     → sync msg ID 1 to 500
-//   /syncchannel <id> 100 200   → sync msg ID 100 to 200
-//
-// Uses ChannelsGetMessages (same as /stream route) — explicit ID fetch.
-// Requires both start and end. Bot client used (fixes PeerStorage issue).
+	courseID, err := primitive.ObjectIDFromHex(a[0])
+	if err != nil {
+		reply(ctx, u, "❌ Invalid course ID.")
+		return dispatcher.EndGroups
+	}
+
+	startID, err1 := strconv.Atoi(a[1])
+	endID, err2 := strconv.Atoi(a[2])
+	if err1 != nil || err2 != nil || startID < 1 || endID < startID {
+		reply(ctx, u, "❌ Invalid range. Both must be positive integers and start ≤ end.")
+		return dispatcher.EndGroups
+	}
+
+	baseCaption := strings.TrimSpace(strings.Join(a[3:], " "))
+	if baseCaption == "" {
+		reply(ctx, u, "❌ Caption cannot be empty.")
+		return dispatcher.EndGroups
+	}
+
+	course, err := db.GetCourseByID(courseID)
+	if err != nil || course == nil {
+		reply(ctx, u, "❌ Course not found.")
+		return dispatcher.EndGroups
+	}
+	if course.ChannelID == 0 {
+		reply(ctx, u, "❌ This course has no channel set.")
+		return dispatcher.EndGroups
+	}
+
+	inserted := 0
+	skipped := 0
+
+	for id := startID; id <= endID; id++ {
+		// या course च्या channel मध्ये आधीच आहे → skip, touch नाही
+		existing, _ := db.GetCachedFile(id, course.ChannelID)
+		if existing != nil {
+			skipped++
+			continue
+		}
+
+		// Caption = owner दिलेला text + message_id as index
+		caption := fmt.Sprintf("%s %d", baseCaption, id)
+
+		cached := &db.CachedFile{
+			MessageID: id,
+			ChannelID: course.ChannelID,
+			CourseID:  courseID,
+			Title:     caption,
+			Caption:   caption,
+			FileName:  fmt.Sprintf("video_%d.mp4", id),
+			MimeType:  "video/mp4",
+			FileSize:  0,
+			SortOrder: id,
+			CreatedAt: time.Now(),
+		}
+
+		if err := db.UpsertCachedFile(cached); err != nil {
+			if mongo.IsDuplicateKeyError(err) {
+				// message_id unique index — दुसऱ्या channel मध्ये conflict → skip
+				skipped++
+				continue
+			}
+			reply(ctx, u, fmt.Sprintf("❌ Failed at ID %d: %s", id, err.Error()))
+			return dispatcher.EndGroups
+		}
+		inserted++
+	}
+
+	reply(ctx, u, fmt.Sprintf(
+		"✅ Done!\n\nCourse: %s\nChannel: %d\nRange: %d → %d\nCaption prefix: %s\n\n📥 Inserted: %d\n⏭ Skipped (already cached): %d",
+		course.Title, course.ChannelID, startID, endID, baseCaption, inserted, skipped,
+	))
+	return dispatcher.EndGroups
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHANNEL SYNC
+// ═══════════════════════════════════════════════════════════════════════════════
 
 func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
@@ -425,7 +483,6 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 		course.ChannelID, course.Title, startMsgID, endMsgID,
 	))
 
-	// ✅ bot.Bot वापर — ctx.Raw नाही (PeerStorage fix)
 	botClient := MainBotClient
 	channel, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, course.ChannelID)
 	if err != nil {
@@ -434,7 +491,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	const (
-		batchSize    = 100 // Telegram ChannelsGetMessages max per call
+		batchSize    = 100
 		breakEvery   = 100
 		breakSeconds = 10
 	)
@@ -443,7 +500,6 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 	skipped := 0
 	sinceBreak := 0
 
-	// startMsgID to endMsgID ला batches मध्ये process कर
 	for batchStart := startMsgID; batchStart <= endMsgID; batchStart += batchSize {
 
 		batchEnd := batchStart + batchSize - 1
@@ -451,13 +507,11 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 			batchEnd = endMsgID
 		}
 
-		// ✅ Explicit ID list बनव — /channel route सारखंच
 		ids := make([]tg.InputMessageClass, 0, batchEnd-batchStart+1)
 		for id := batchStart; id <= batchEnd; id++ {
 			ids = append(ids, &tg.InputMessageID{ID: id})
 		}
 
-		// ✅ ChannelsGetMessages — /stream सारखीच API method
 		var res tg.MessagesMessagesClass
 		var fetchErr error
 
@@ -509,16 +563,13 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				continue
 			}
 
-			// Caption read करा (msg.Message = Telegram caption field)
 			caption := strings.TrimSpace(msg.Message)
 
-			// Title: caption असेल तर caption, नाहीतर filename extension शिवाय
 			title := caption
 			if title == "" {
 				title = stripExt(file.FileName)
 			}
 
-			
 			cached := &db.CachedFile{
 				MessageID: msg.ID,
 				ChannelID: course.ChannelID,
@@ -528,7 +579,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				FileName:  file.FileName,
 				MimeType:  file.MimeType,
 				FileSize:  file.FileSize,
-				SortOrder: msg.ID, 
+				SortOrder: msg.ID,
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
@@ -560,7 +611,6 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 // SESSION COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// /sessions — list all active sessions
 func cmdSessions(ctx *ext.Context, u *ext.Update) error {
 	sessions, err := db.ListActiveSessions()
 	if err != nil {
@@ -584,7 +634,7 @@ func cmdSessions(ctx *ext.Context, u *ext.Update) error {
 		sb.WriteString(fmt.Sprintf(
 			"%d. %s\n   IP: %s\n   Expires: %s\n   Token: ...%s\n\n",
 			i+1, uname, s.IP, expires,
-			s.Token[max(0, len(s.Token)-8):], // last 8 chars only
+			s.Token[max(0, len(s.Token)-8):],
 		))
 	}
 	sb.WriteString("Use /killsession <username> to force logout.")
@@ -592,7 +642,6 @@ func cmdSessions(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// /killsession <username> — force logout a user
 func cmdKillSession(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 1 {
@@ -619,7 +668,6 @@ func cmdKillSession(ctx *ext.Context, u *ext.Update) error {
 // STATS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// /stats
 func cmdStats(ctx *ext.Context, u *ext.Update) error {
 	users, _ := db.ListUsers()
 	courses, _ := db.ListAllCourses()
@@ -662,13 +710,8 @@ func max(a, b int) int {
 }
 
 // ─── Auto-append new uploads to channel cache ─────────────────────────────────
-// This is called from the existing stream.go sendLink handler AFTER forwarding.
-// When admin uploads a new file to the bot, it gets forwarded to LOG_CHANNEL
-// and we cache it here so /syncchannel doesn't need to be re-run.
 
 func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectID, caption, fileName, mimeType string, fileSize int64) error {
-	
-	// Title: caption असेल तर caption, नाहीतर filename extension शिवाय
 	title := strings.TrimSpace(caption)
 	if title == "" {
 		title = stripExt(fileName)
@@ -683,7 +726,7 @@ func AutoCacheNewFile(messageID int, channelID int64, courseID primitive.ObjectI
 		FileName:  fileName,
 		MimeType:  mimeType,
 		FileSize:  fileSize,
-		SortOrder: messageID, 
+		SortOrder: messageID,
 		CreatedAt: time.Now(),
 	}
 	return db.UpsertCachedFile(cached)
