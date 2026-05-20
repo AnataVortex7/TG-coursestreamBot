@@ -6,6 +6,7 @@ import (
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
 	"fmt"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -498,13 +499,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 
 		for _, rawMsg := range messages.Messages {
 			msg, ok := rawMsg.(*tg.Message)
-			if !ok || msg.Media == nil {
-				skipped++
-				continue
-			}
-
-			file, err := utils.FileFromMedia(msg.Media)
-			if err != nil {
+			if !ok {
 				skipped++
 				continue
 			}
@@ -512,23 +507,44 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 			// Caption read करा (msg.Message = Telegram caption field)
 			caption := strings.TrimSpace(msg.Message)
 
-			// Title: caption असेल तर caption, नाहीतर filename extension शिवाय
+			// Default values — media detect नाही झाली तरी cache करायचं
+			fileName := fmt.Sprintf("video_%d.mp4", msg.ID)
+			mimeType := "video/mp4"
+			var fileSize int64 = 0
+
+			// Title: caption असेल तर caption, नाहीतर Video #<msg_id>
 			title := caption
 			if title == "" {
-				title = stripExt(file.FileName)
+				title = fmt.Sprintf("Video #%d", msg.ID)
 			}
 
-			
+			// Media detect झाली तर actual values वापर
+			if msg.Media != nil {
+				if file, err := utils.FileFromMedia(msg.Media); err == nil {
+					if file.FileName != "" {
+						fileName = file.FileName
+					}
+					if file.MimeType != "" {
+						mimeType = normalizeMime(file.MimeType, file.FileName)
+					}
+					fileSize = file.FileSize
+					// Title: caption > filename (extension शिवाय) > Video #id
+					if title == fmt.Sprintf("Video #%d", msg.ID) && file.FileName != "" {
+						title = stripExt(file.FileName)
+					}
+				}
+			}
+
 			cached := &db.CachedFile{
 				MessageID: msg.ID,
 				ChannelID: course.ChannelID,
 				CourseID:  courseID,
 				Title:     title,
 				Caption:   caption,
-				FileName:  file.FileName,
-				MimeType:  file.MimeType,
-				FileSize:  file.FileSize,
-				SortOrder: msg.ID, 
+				FileName:  fileName,
+				MimeType:  mimeType,
+				FileSize:  fileSize,
+				SortOrder: msg.ID,
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
@@ -700,3 +716,30 @@ func stripExt(name string) string {
 
 // unused import guard
 var _ = strconv.Itoa
+
+// normalizeMime — browser-safe video mime type return करतो.
+// MKV/AVI सारखे types mp4 म्हणून serve केले जातात जेणेकरून browser play करू शकतो.
+func normalizeMime(mime, fileName string) string {
+	switch strings.ToLower(mime) {
+	case "video/x-matroska", "video/mkv":
+		return "video/mp4"
+	case "video/x-msvideo", "video/avi":
+		return "video/mp4"
+	case "video/quicktime":
+		return "video/mp4"
+	case "video/mp4", "video/webm", "video/ogg":
+		return mime
+	default:
+		if strings.HasPrefix(strings.ToLower(mime), "video/") {
+			return "video/mp4"
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(fileName))
+	switch ext {
+	case ".mp4", ".m4v", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".3gp":
+		return "video/mp4"
+	case ".webm":
+		return "video/webm"
+	}
+	return "video/mp4"
+}
