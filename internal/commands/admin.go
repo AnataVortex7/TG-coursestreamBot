@@ -497,58 +497,46 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 			return dispatcher.EndGroups
 		}
 
+		// returned messages चा map बनव ID → *tg.Message
+		msgMap := make(map[int]*tg.Message)
 		for _, rawMsg := range messages.Messages {
-			// Message ID काढा — *tg.Message किंवा *tg.MessageEmpty दोन्हीतून
-			var msgID int
-			var caption string
-			var media tg.MessageMediaClass
-
-			switch m := rawMsg.(type) {
-			case *tg.Message:
-				msgID = m.ID
-				caption = strings.TrimSpace(m.Message)
-				media = m.Media
-			case *tg.MessageEmpty:
-				msgID = m.ID
-				// empty message — no caption, no media
-			default:
-				// *tg.MessageService (join/pin) — skip
-				skipped++
-				continue
+			if m, ok := rawMsg.(*tg.Message); ok && m.ID != 0 {
+				msgMap[m.ID] = m
 			}
+		}
 
-			if msgID == 0 {
-				skipped++
-				continue
-			}
-
-			// Default: video/mp4 — caption नसेल तर msg ID
-			fileName := fmt.Sprintf("video_%d.mp4", msgID)
+		// आपण request केलेल्या प्रत्येक ID साठी cache कर
+		// Telegram ने दिलं नसेल तरी Video #id म्हणून save कर
+		for id := batchStart; id <= batchEnd; id++ {
+			fileName := fmt.Sprintf("video_%d.mp4", id)
 			mimeType := "video/mp4"
 			var fileSize int64 = 0
-			title := caption
-			if title == "" {
-				title = fmt.Sprintf("Video #%d", msgID)
-			}
+			title := fmt.Sprintf("Video #%d", id)
+			caption := ""
 
-			// Media असेल तर actual values वापर
-			if media != nil {
-				if file, err := utils.FileFromMedia(media); err == nil {
-					if file.FileName != "" {
-						fileName = file.FileName
-					}
-					if file.MimeType != "" {
-						mimeType = normalizeMime(file.MimeType, file.FileName)
-					}
-					fileSize = file.FileSize
-					if title == fmt.Sprintf("Video #%d", msgID) && file.FileName != "" {
-						title = stripExt(file.FileName)
+			if msg, found := msgMap[id]; found {
+				caption = strings.TrimSpace(msg.Message)
+				if caption != "" {
+					title = caption
+				}
+				if msg.Media != nil {
+					if file, err := utils.FileFromMedia(msg.Media); err == nil {
+						if file.FileName != "" {
+							fileName = file.FileName
+						}
+						if file.MimeType != "" {
+							mimeType = normalizeMime(file.MimeType, file.FileName)
+						}
+						fileSize = file.FileSize
+						if title == fmt.Sprintf("Video #%d", id) && file.FileName != "" {
+							title = stripExt(file.FileName)
+						}
 					}
 				}
 			}
 
 			cached := &db.CachedFile{
-				MessageID: msgID,
+				MessageID: id,
 				ChannelID: course.ChannelID,
 				CourseID:  courseID,
 				Title:     title,
@@ -556,7 +544,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				FileName:  fileName,
 				MimeType:  mimeType,
 				FileSize:  fileSize,
-				SortOrder: msgID,
+				SortOrder: id,
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
