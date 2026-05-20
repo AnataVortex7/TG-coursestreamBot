@@ -154,15 +154,8 @@ func handleCourseDetail(c *gin.Context) {
 		return
 	}
 
-	// Access check
-	hasAccess, err := db.HasAccess(userID, courseID)
-	if err != nil || !hasAccess {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{
-			"code":    403,
-			"message": "You do not have access to this course.",
-		})
-		return
-	}
+	// Access check — don't block, just pass flag to template
+	hasAccess, _ := db.HasAccess(userID, courseID)
 
 	// Load course info
 	course, err := db.GetCourseByID(courseID)
@@ -218,11 +211,6 @@ func handleCourseDetail(c *gin.Context) {
 
 	playlist := make([]VideoEntry, 0, len(files))
 	for i, f := range files {
-		streamToken, err := token.New(f.MessageID, f.ChannelID, userID.Hex(), sessionToken)
-		if err != nil {
-			continue
-		}
-
 		mime := strings.ToLower(f.MimeType)
 		mediaType := "document"
 		switch {
@@ -236,6 +224,16 @@ func handleCourseDetail(c *gin.Context) {
 			mediaType = "photo"
 		}
 
+		streamURL := ""
+		hasMedia := false
+		if hasAccess {
+			streamToken, err := token.New(f.MessageID, f.ChannelID, userID.Hex(), sessionToken)
+			if err == nil {
+				streamURL = "/watch/" + streamToken
+				hasMedia = true
+			}
+		}
+
 		vi := viewMap[f.MessageID]
 		playlist = append(playlist, VideoEntry{
 			Index:        i + 1,
@@ -245,9 +243,9 @@ func handleCourseDetail(c *gin.Context) {
 			FileName:     f.FileName,
 			MimeType:     f.MimeType,
 			FileSize:     humanSize(f.FileSize),
-			StreamURL:    "/watch/" + streamToken,
+			StreamURL:    streamURL,
 			MediaType:    mediaType,
-			HasMedia:     true,
+			HasMedia:     hasMedia,
 			ViewCount:    vi.count,
 			LastViewedAt: vi.lastViewedAt,
 		})
@@ -258,6 +256,7 @@ func handleCourseDetail(c *gin.Context) {
 		"course":     course,
 		"playlist":   playlist,
 		"totalCount": len(playlist),
+		"hasAccess":  hasAccess,
 	})
 }
 
@@ -318,3 +317,4 @@ func itoa(n int) string {
 	}
 	return string(buf[pos:])
 }
+
