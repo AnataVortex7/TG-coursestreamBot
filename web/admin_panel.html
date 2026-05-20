@@ -199,6 +199,9 @@
       <div class="nav-item" id="nav-access" onclick="goto('access',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>Access Control
       </div>
+      <div class="nav-item" id="nav-broadcast" onclick="goto('broadcast',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>Broadcast
+      </div>
       <div class="nav-section">Telegram</div>
       <div class="nav-item" id="nav-tglogin" onclick="goto('tglogin',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>TG Login
@@ -505,6 +508,71 @@
     </div>
 
     <!-- STATS -->
+    <div class="page" id="page-broadcast">
+      <div class="page-header">
+        <div class="page-title">📢 Broadcast</div>
+        <div class="page-sub">Users la announcement pathav — email + in-app</div>
+      </div>
+
+      <!-- Send New Broadcast -->
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-head">
+          <div class="card-title">✉️ Nava Broadcast Pathav</div>
+        </div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Target *</label>
+            <select id="bc-target" onchange="bcTargetChanged()"
+              style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px">
+              <option value="all">📣 Sarv Registered Users</option>
+              <option value="course">📖 Course-Specific Users</option>
+            </select>
+          </div>
+
+          <div id="bc-course-row" style="display:none">
+            <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Course *</label>
+            <select id="bc-course-id"
+              style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px">
+              <option value="">— Course निवडा —</option>
+            </select>
+          </div>
+
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Announcement Title *</label>
+            <input id="bc-title" type="text" placeholder="e.g. New Batch Starting!"
+              style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px;box-sizing:border-box" maxlength="150">
+          </div>
+
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Email Subject *</label>
+            <input id="bc-subject" type="text" placeholder="e.g. Important Update for Course Students"
+              style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px;box-sizing:border-box" maxlength="150">
+          </div>
+
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Message *</label>
+            <textarea id="bc-message" rows="5" placeholder="Tumcha message yat lihа..."
+              style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px;box-sizing:border-box;resize:vertical" maxlength="2000"></textarea>
+          </div>
+
+          <div style="display:flex;gap:10px;align-items:center">
+            <button class="btn btn-primary" onclick="sendBroadcast()" id="bc-send-btn">📤 Broadcast Pathav</button>
+            <div id="bc-status" style="font-size:13px;color:#888"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Announcements List -->
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">📋 Sagalya Announcements</div>
+          <button class="btn btn-sm" onclick="loadAnnouncements()">🔄 Refresh</button>
+        </div>
+        <div class="card-body" id="bc-list"><div class="loading">⏳ Loading...</div></div>
+      </div>
+    </div>
+
     <div class="page" id="page-stats">
       <div class="page-header">
         <div class="page-title">Stats</div>
@@ -628,8 +696,103 @@ function goto(name, el) {
   if (name==='stats') loadDetailStats();
   if (name==='access') { loadUsers(); loadCourses(); }
   if (name==='tglogin') loadTGStatus();
+  if (name==='broadcast') { loadAnnouncements(); loadCoursesForBroadcast(); }
   if (name==='urlmonitor') { loadURLMonitor(); startUMAutoRefresh(); }
   else stopUMAutoRefresh();
+}
+
+// ─── Broadcast ────────────────────────────────────────────────────────────────
+async function loadCoursesForBroadcast() {
+  try {
+    const res = await api('/courses');
+    const data = await res.json();
+    const sel = document.getElementById('bc-course-id');
+    sel.innerHTML = '<option value="">— Course निवडा —</option>';
+    (data||[]).forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.id; o.textContent = c.title;
+      sel.appendChild(o);
+    });
+  } catch(e) { /* silent */ }
+}
+
+function bcTargetChanged() {
+  const t = document.getElementById('bc-target').value;
+  document.getElementById('bc-course-row').style.display = t==='course' ? '' : 'none';
+}
+
+async function sendBroadcast() {
+  const target  = document.getElementById('bc-target').value;
+  const title   = document.getElementById('bc-title').value.trim();
+  const subject = document.getElementById('bc-subject').value.trim();
+  const message = document.getElementById('bc-message').value.trim();
+  const courseID= document.getElementById('bc-course-id').value;
+  const btn     = document.getElementById('bc-send-btn');
+  const status  = document.getElementById('bc-status');
+
+  if (!title || !subject || !message) { toast('Title, subject ani message bhara', 'error'); return; }
+  if (target === 'course' && !courseID) { toast('Course निवडा', 'error'); return; }
+
+  btn.disabled = true; status.textContent = '⏳ Pathavt aahe...';
+  try {
+    const body = JSON.stringify(Object.assign({ title, subject, message, target }, target==='course' ? {course_id: courseID} : {}));
+    const res  = await api('/broadcast', { method:'POST', body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+    toast(`✅ Broadcast suru! ${data.email_queued} users la email queue madhe`, 'success');
+    status.textContent = `✅ ${data.email_queued} emails queued`;
+    document.getElementById('bc-title').value = '';
+    document.getElementById('bc-subject').value = '';
+    document.getElementById('bc-message').value = '';
+    loadAnnouncements();
+  } catch(e) {
+    toast('Broadcast failed: ' + (e.message||e), 'error');
+    status.textContent = '';
+  }
+  btn.disabled = false;
+}
+
+async function loadAnnouncements() {
+  const el = document.getElementById('bc-list');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">⏳ Loading...</div>';
+  try {
+    const res  = await api('/announcements');
+    const list = await res.json();
+    if (!list || list.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:#555;padding:20px">Koi announcements nahi</div>';
+      return;
+    }
+    el.innerHTML = list.map(a => {
+      const scope = a.course_id ? `<span style="background:#6c63ff22;color:#a89fff;padding:2px 8px;border-radius:10px;font-size:11px">📖 Course</span>`
+                                : `<span style="background:#22c55e22;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:11px">🌐 Global</span>`;
+      const active = a.is_active
+        ? `<span style="background:#22c55e22;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:11px">Active</span>`
+        : `<span style="background:#f59e0b22;color:#fbbf24;padding:2px 8px;border-radius:10px;font-size:11px">Deleted</span>`;
+      const date = new Date(a.created_at).toLocaleString('en-IN');
+      return `<div style="background:#12141c;border:1px solid #2a2d3a;border-radius:10px;padding:14px 16px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <span style="font-weight:700;color:#e8e9f0;font-size:14px">${esc(a.title)}</span>
+          ${scope} ${active}
+          <span style="color:#555;font-size:11px;margin-left:auto">${date}</span>
+        </div>
+        <div style="color:#9097a5;font-size:13px;margin-bottom:10px;white-space:pre-line">${esc(a.message)}</div>
+        ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteAnnouncement('${a.id}')">🗑 Delete</button>` : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = `<div style="color:#f87171">Error: ${esc(e.message||String(e))}</div>`;
+  }
+}
+
+async function deleteAnnouncement(id) {
+  openModal('Announcement Delete', 'Ha announcement delete kara? (users la disanar nahi)', async () => {
+    try {
+      await api('/announcements/' + id, { method:'DELETE' });
+      toast('Announcement deleted', 'success');
+      loadAnnouncements();
+    } catch(e) { toast('Delete failed', 'error'); }
+  });
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────

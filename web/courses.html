@@ -611,5 +611,71 @@
   }
 </script>
 
+<!-- ─── Global Announcement Popup ─────────────────────────────────────────── -->
+<div id="announce-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;align-items:center;justify-content:center;padding:16px">
+  <div style="background:#1a1d27;border-radius:18px;border:1px solid #2a2d3a;max-width:500px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.6)">
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:22px 24px 18px;border-radius:18px 18px 0 0;display:flex;align-items:flex-start;justify-content:space-between">
+      <div>
+        <div style="font-size:28px;margin-bottom:6px">📢</div>
+        <div style="color:#fff;font-weight:800;font-size:18px">Announcements</div>
+        <div style="color:rgba(255,255,255,.7);font-size:13px;margin-top:2px">Admin kadeून nava message</div>
+      </div>
+      <button onclick="closeAnnouncePopup()" style="background:rgba(255,255,255,.15);border:none;color:#fff;width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center">✕</button>
+    </div>
+    <!-- Body -->
+    <div id="announce-body" style="padding:20px 24px;display:flex;flex-direction:column;gap:14px"></div>
+    <!-- Footer -->
+    <div style="padding:16px 24px;border-top:1px solid #2a2d3a;display:flex;justify-content:flex-end">
+      <button onclick="closeAnnouncePopup()" style="background:#6c63ff;color:#fff;border:none;padding:10px 24px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">Got it ✓</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(async function checkGlobalAnnouncements() {
+  try {
+    const res  = await fetch('/api/announcements');
+    if (!res.ok) return;
+    const list = await res.json();
+    if (!list || list.length === 0) return;
+
+    // Filter out ones already seen (stored by ID in sessionStorage)
+    const seenRaw = sessionStorage.getItem('seen_announcements') || '[]';
+    const seen    = new Set(JSON.parse(seenRaw));
+    const unseen  = list.filter(a => !seen.has(a.id));
+    if (unseen.length === 0) return;
+
+    const body = document.getElementById('announce-body');
+    body.innerHTML = unseen.map(a => `
+      <div style="background:#12141c;border:1px solid #2a2d3a;border-radius:12px;padding:16px">
+        <div style="font-weight:700;color:#e8e9f0;font-size:15px;margin-bottom:8px">${escHtml(a.title)}</div>
+        <div style="color:#9097a5;font-size:14px;line-height:1.6;white-space:pre-line">${escHtml(a.message)}</div>
+        <div style="color:#555;font-size:11px;margin-top:8px">${new Date(a.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}</div>
+      </div>`).join('');
+
+    document.getElementById('announce-overlay').style.display = 'flex';
+
+    // Mark all as seen for this session
+    unseen.forEach(a => seen.add(a.id));
+    sessionStorage.setItem('seen_announcements', JSON.stringify([...seen]));
+  } catch(e) { /* silent — don't break the page */ }
+})();
+
+function closeAnnouncePopup() {
+  document.getElementById('announce-overlay').style.display = 'none';
+}
+
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Close on backdrop click
+document.getElementById('announce-overlay').addEventListener('click', function(e) {
+  if (e.target === this) closeAnnouncePopup();
+});
+</script>
+
 </body>
 </html>
