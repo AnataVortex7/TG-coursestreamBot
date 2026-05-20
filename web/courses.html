@@ -360,7 +360,7 @@
   {{ else }}
   <div class="grid">
     {{ range .available }}
-    <div class="course-card available">
+    <a class="course-card available" href="/course/{{ .ID }}">
       <div class="thumb-wrap">
         {{ if .Thumbnail }}
         <img class="thumb" src="{{ .Thumbnail }}" alt="{{ .Title }}" loading="lazy"/>
@@ -389,7 +389,7 @@
           </button>
         </div>
       </div>
-    </div>
+    </a>
     {{ end }}
   </div>
   {{ end }}
