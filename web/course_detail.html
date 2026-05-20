@@ -67,6 +67,7 @@
   .btn-view{background:var(--pdf);color:#fff}
   .btn-photo{background:var(--photo);color:#111}
   .btn-open{background:var(--doc);color:#fff}
+  .btn-locked{background:#2d2d3a;color:#6b7280;border:1px solid #3f3f52;cursor:not-allowed;opacity:.8}
   .pagination{display:flex;justify-content:center;gap:12px;padding:16px 20px 40px;flex-wrap:wrap}
   .pagination button{display:inline-flex;align-items:center;gap:6px;padding:9px 22px;border-radius:10px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s}
   .pagination button:hover{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -145,15 +146,17 @@
     </div>
     {{ end }}
   </div>
-  {{ if .HasMedia }}
   <div class="card-actions">
-    {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-watch">▶ Watch</a>
-    {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-listen">🎵 Listen</a>
-    {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-view">📄 View PDF</a>
-    {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-photo">🖼️ View Photo</a>
-    {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
+    {{ if .HasMedia }}
+      {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-watch">▶ Watch</a>
+      {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-listen">🎵 Listen</a>
+      {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-view">📄 View PDF</a>
+      {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-photo">🖼️ View Photo</a>
+      {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
+    {{ else }}
+      <button class="btn btn-locked" disabled>🔒 Access Required</button>
+    {{ end }}
   </div>
-  {{ end }}
 </div>
 {{ else }}
 <div class="empty">
