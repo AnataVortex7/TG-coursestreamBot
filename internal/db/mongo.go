@@ -28,8 +28,9 @@ var (
 	ColWorkers      *mongo.Collection // external streaming workers
 	ColOTPs         *mongo.Collection // email OTP login records (TTL: 10 min)
 	ColPendingRegs  *mongo.Collection // unverified registration records (TTL: 10 min)
-	ColURLMonitors  *mongo.Collection // url monitor — persisted monitored URLs
-	ColWatchHistory *mongo.Collection // user watch history + view counts
+	ColURLMonitors    *mongo.Collection // url monitor — persisted monitored URLs
+	ColWatchHistory   *mongo.Collection // user watch history + view counts
+	ColAnnouncements  *mongo.Collection // admin broadcast announcements
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -116,6 +117,18 @@ type WatchHistory struct {
 	LastViewedAt time.Time          `bson:"last_viewed_at"     json:"last_viewed_at"`
 }
 
+// Announcement — admin broadcast message shown as popup (global) or course banner (course-specific).
+// CourseID = nil  → global announcement → shown as popup on /courses after login.
+// CourseID = set  → course-specific     → shown as banner on /course/:id (access-gated).
+type Announcement struct {
+	ID        primitive.ObjectID  `bson:"_id,omitempty"  json:"id"`
+	Title     string              `bson:"title"          json:"title"`
+	Message   string              `bson:"message"        json:"message"`
+	CourseID  *primitive.ObjectID `bson:"course_id"      json:"course_id"`  // nil = global
+	CreatedAt time.Time           `bson:"created_at"     json:"created_at"`
+	IsActive  bool                `bson:"is_active"      json:"is_active"`
+}
+
 // StreamNonce — per-page-load nonce that ties a player page to its stream.
 type StreamNonce struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty"`
@@ -167,7 +180,8 @@ func Connect() {
 	ColOTPs         = Database.Collection("otp_records")             // ← OTP login records
 	ColPendingRegs  = Database.Collection("pending_registrations")   // ← unverified registrations
 	ColURLMonitors  = Database.Collection("url_monitors")            // ← URL monitor
-	ColWatchHistory = Database.Collection("watch_history")           // ← watch history
+	ColWatchHistory  = Database.Collection("watch_history")           // ← watch history
+	ColAnnouncements = Database.Collection("announcements")           // ← broadcast announcements
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -234,6 +248,11 @@ func createIndexes() {
 	ensureIndex(ctx, ColWatchHistory, bson.D{{Key: "user_id", Value: 1}}, false)
 	ensureIndex(ctx, ColWatchHistory, bson.D{{Key: "course_id", Value: 1}}, false)
 	ensureIndex(ctx, ColWatchHistory, bson.D{{Key: "last_viewed_at", Value: -1}}, false)
+
+	// Announcements indexes
+	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "course_id", Value: 1}}, false)
+	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "is_active", Value: 1}}, false)
+	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "created_at", Value: -1}}, false)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {

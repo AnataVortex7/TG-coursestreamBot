@@ -715,3 +715,159 @@ func GetFileViewCount(userID primitive.ObjectID, messageID int, channelID int64)
 	}
 	return h.ViewCount, h.LastViewedAt, nil
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ANNOUNCEMENTS  (admin broadcast → popup for global / banner for course)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// CreateAnnouncement inserts a new broadcast announcement.
+// courseID = nil  → global (shows as popup on /courses after login).
+// courseID = set  → course-specific (shows as banner on /course/:id, access-gated).
+func CreateAnnouncement(title, message string, courseID *primitive.ObjectID) (*Announcement, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	a := &Announcement{
+		ID:        primitive.NewObjectID(),
+		Title:     title,
+		Message:   message,
+		CourseID:  courseID,
+		CreatedAt: time.Now(),
+		IsActive:  true,
+	}
+	_, err := ColAnnouncements.InsertOne(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+// GetGlobalAnnouncements returns all active announcements with no course (global).
+// Used for the popup on /courses page after login.
+func GetGlobalAnnouncements() ([]Announcement, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColAnnouncements.Find(ctx,
+		bson.M{"course_id": nil, "is_active": true},
+		options.Find().SetSort(bson.M{"created_at": -1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var list []Announcement
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// GetCourseAnnouncements returns active announcements for a specific course.
+// Used for the banner on /course/:id page.
+func GetCourseAnnouncements(courseID primitive.ObjectID) ([]Announcement, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColAnnouncements.Find(ctx,
+		bson.M{"course_id": courseID, "is_active": true},
+		options.Find().SetSort(bson.M{"created_at": -1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var list []Announcement
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// GetUsersForCourse returns all User records who currently have active access to a course.
+// Used by broadcast to find email targets for course-specific sends.
+func GetUsersForCourse(courseID primitive.ObjectID) ([]User, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	// Step 1: find all active access records for this course
+	filter := bson.M{
+		"course_id": courseID,
+		"$or": bson.A{
+			bson.M{"expires_at": nil},
+			bson.M{"expires_at": bson.M{"$gt": time.Now()}},
+		},
+	}
+	cursor, err := ColAccess.Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var records []Access
+	if err = cursor.All(ctx, &records); err != nil {
+		return nil, err
+	}
+
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	// Step 2: collect user IDs
+	userIDs := make([]primitive.ObjectID, 0, len(records))
+	for _, r := range records {
+		userIDs = append(userIDs, r.UserID)
+	}
+
+	// Step 3: fetch all matching users in one query
+	userCursor, err := ColUsers.Find(ctx, bson.M{
+		"_id":       bson.M{"$in": userIDs},
+		"is_active": true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer userCursor.Close(ctx)
+
+	var users []User
+	if err = userCursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// DeleteAnnouncement soft-deletes an announcement by ID.
+func DeleteAnnouncement(id primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColAnnouncements.UpdateOne(ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{"is_active": false}},
+	)
+	return err
+}
+
+// ListAllAnnouncements returns all announcements (active + inactive) sorted newest first.
+// Used in admin panel to manage broadcasts.
+func ListAllAnnouncements() ([]Announcement, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColAnnouncements.Find(ctx,
+		bson.M{},
+		options.Find().SetSort(bson.M{"created_at": -1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var list []Announcement
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
