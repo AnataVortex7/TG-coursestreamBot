@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	golog "log"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -101,6 +102,11 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 
 	// Messaging — admin user la message pathavto
 	api.POST("/send-message", adminSendMessageToUser)
+
+	// ─── Broadcast ───────────────────────────────────────────────────────────
+	api.POST("/broadcast", adminBroadcast)
+	api.GET("/announcements", adminListAnnouncements)
+	api.DELETE("/announcements/:id", adminDeleteAnnouncement)
 
 	// ─── URL Monitor ─────────────────────────────────────────────────────────
 	api.GET("/urlmonitor", adminURLMonitorList)
@@ -261,6 +267,33 @@ func adminAddCourse(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Background goroutine: sarv registered users la "New Course" email pathav
+	go func(courseTitle, courseBuyLink, coursePrice string) {
+		users, err := db.ListUsers()
+		if err != nil {
+			log.Printf("[NewCourse] ListUsers error: %v", err)
+			return
+		}
+		appName := os.Getenv("BREVO_FROM_NAME")
+		if appName == "" {
+			appName = "CourseStream"
+		}
+		sent, skipped := 0, 0
+		for _, u := range users {
+			if u.Email == "" {
+				skipped++
+				continue
+			}
+			if err := email.SendNewCourseNotification(u.Email, u.FullName, courseTitle, courseBuyLink, coursePrice, appName); err != nil {
+				log.Printf("[NewCourse] Email to %s failed: %v", u.Email, err)
+			} else {
+				sent++
+			}
+		}
+		log.Printf("[NewCourse] '%s' — email pathavla: %d, skipped (no email): %d", courseTitle, sent, skipped)
+	}(course.Title, course.BuyLink, course.Price)
+
 	c.JSON(http.StatusOK, course)
 }
 
@@ -727,4 +760,181 @@ func adminSendMessageToUser(c *gin.Context) {
 		"username": user.Username,
 		"email":    user.Email,
 	})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BROADCAST — admin announcement + bulk email
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// adminBroadcast creates an announcement in DB and sends emails in background goroutine.
+// POST /api/admin/broadcast
+// Body: { "title": "...", "subject": "...", "message": "...", "target": "all"|"course", "course_id": "..." }
+func adminBroadcast(c *gin.Context) {
+	var req struct {
+		Title    string `json:"title"`
+		Subject  string `json:"subject"`
+		Message  string `json:"message"`
+		Target   string `json:"target"`    // "all" or "course"
+		CourseID string `json:"course_id"` // required when target="course"
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	req.Subject = strings.TrimSpace(req.Subject)
+	req.Message = strings.TrimSpace(req.Message)
+
+	if req.Title == "" || req.Subject == "" || req.Message == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Title, subject ani message sagale bharave"})
+		return
+	}
+	if req.Target != "all" && req.Target != "course" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Target 'all' kinva 'course' pahije"})
+		return
+	}
+
+	appName := os.Getenv("BREVO_FROM_NAME")
+	if appName == "" {
+		appName = "CourseStream"
+	}
+
+	// ── Global broadcast ──────────────────────────────────────────────────────
+	if req.Target == "all" {
+		// Save announcement (CourseID = nil → global popup)
+		announcement, err := db.CreateAnnouncement(req.Title, req.Message, nil)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Announcement save zala nahi: " + err.Error()})
+			return
+		}
+
+		// Fetch all users (quick — just IDs + emails needed)
+		users, err := db.ListUsers()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Users load zale nahi: " + err.Error()})
+			return
+		}
+
+		// Count email-eligible users before launching goroutine
+		emailCount := 0
+		for _, u := range users {
+			if u.Email != "" {
+				emailCount++
+			}
+		}
+
+		// Fire-and-forget: send each email independently — don't wait
+		go func(users []db.User, subject, message, title, app string) {
+			sent, failed, skipped := 0, 0, 0
+			for _, u := range users {
+				if u.Email == "" {
+					skipped++
+					continue
+				}
+				if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
+					log.Printf("[Broadcast/All] Email to %s failed: %v", u.Email, err)
+					failed++
+				} else {
+					sent++
+				}
+			}
+			log.Printf("[Broadcast/All] '%s' — sent: %d, failed: %d, skipped(no email): %d", title, sent, failed, skipped)
+		}(users, req.Subject, req.Message, req.Title, appName)
+
+		c.JSON(http.StatusOK, gin.H{
+			"ok":              true,
+			"announcement_id": announcement.ID.Hex(),
+			"target":          "all",
+			"email_queued":    emailCount,
+			"message":         "Broadcast suru zala — emails background madhe jaat aahet",
+		})
+		return
+	}
+
+	// ── Course-specific broadcast ─────────────────────────────────────────────
+	courseID, err := primitive.ObjectIDFromHex(req.CourseID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	course, err := db.GetCourseByID(courseID)
+	if err != nil || course == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	// Save announcement (CourseID set → course-specific banner)
+	announcement, err := db.CreateAnnouncement(req.Title, req.Message, &courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Announcement save zala nahi: " + err.Error()})
+		return
+	}
+
+	// Fetch only users who have access to this course
+	users, err := db.GetUsersForCourse(courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Course users load zale nahi: " + err.Error()})
+		return
+	}
+
+	emailCount := 0
+	for _, u := range users {
+		if u.Email != "" {
+			emailCount++
+		}
+	}
+
+	// Fire-and-forget per email
+	go func(users []db.User, subject, message, title, courseName, app string) {
+		sent, failed, skipped := 0, 0, 0
+		for _, u := range users {
+			if u.Email == "" {
+				skipped++
+				continue
+			}
+			if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
+				log.Printf("[Broadcast/Course:%s] Email to %s failed: %v", courseName, u.Email, err)
+				failed++
+			} else {
+				sent++
+			}
+		}
+		log.Printf("[Broadcast/Course:%s] '%s' — sent: %d, failed: %d, skipped: %d", courseName, title, sent, failed, skipped)
+	}(users, req.Subject, req.Message, req.Title, course.Title, appName)
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":              true,
+		"announcement_id": announcement.ID.Hex(),
+		"target":          "course",
+		"course":          course.Title,
+		"email_queued":    emailCount,
+		"message":         "Course broadcast suru zala — emails background madhe jaat aahet",
+	})
+}
+
+// adminListAnnouncements returns all announcements for admin panel management.
+// GET /api/admin/announcements
+func adminListAnnouncements(c *gin.Context) {
+	list, err := db.ListAllAnnouncements()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+// adminDeleteAnnouncement soft-deletes an announcement.
+// DELETE /api/admin/announcements/:id
+func adminDeleteAnnouncement(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid announcement ID"})
+		return
+	}
+	if err := db.DeleteAnnouncement(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

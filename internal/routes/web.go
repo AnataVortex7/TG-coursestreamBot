@@ -59,6 +59,12 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	{
 		protected.GET("/courses", handleCoursesList)
 		protected.GET("/course/:id", handleCourseDetail)
+
+		// ── Announcements API (auth required) ──────────────────────────────
+		// GET /api/announcements         → global announcements (for popup)
+		// GET /api/announcements/:id     → course-specific announcements (access-gated)
+		protected.GET("/api/announcements", handleGlobalAnnouncements)
+		protected.GET("/api/announcements/:course_id", handleCourseAnnouncements)
 	}
 }
 
@@ -318,3 +324,40 @@ func itoa(n int) string {
 	return string(buf[pos:])
 }
 
+
+// ─── /api/announcements  (global popup) ──────────────────────────────────────
+
+func handleGlobalAnnouncements(c *gin.Context) {
+	list, err := db.GetGlobalAnnouncements()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+// ─── /api/announcements/:course_id  (course banner — access-gated) ───────────
+
+func handleCourseAnnouncements(c *gin.Context) {
+	userID := auth.GetUserID(c)
+
+	courseID, err := primitive.ObjectIDFromHex(c.Param("course_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	// Only return announcements to users who have access to the course
+	hasAccess, err := db.HasAccess(userID, courseID)
+	if err != nil || !hasAccess {
+		c.JSON(http.StatusOK, []db.Announcement{}) // empty — no leak of existence
+		return
+	}
+
+	list, err := db.GetCourseAnnouncements(courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
