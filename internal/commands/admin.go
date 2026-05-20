@@ -498,29 +498,42 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 		}
 
 		for _, rawMsg := range messages.Messages {
-			msg, ok := rawMsg.(*tg.Message)
-			if !ok {
+			// Message ID काढा — *tg.Message किंवा *tg.MessageEmpty दोन्हीतून
+			var msgID int
+			var caption string
+			var media tg.MessageMediaClass
+
+			switch m := rawMsg.(type) {
+			case *tg.Message:
+				msgID = m.ID
+				caption = strings.TrimSpace(m.Message)
+				media = m.Media
+			case *tg.MessageEmpty:
+				msgID = m.ID
+				// empty message — no caption, no media
+			default:
+				// *tg.MessageService (join/pin) — skip
 				skipped++
 				continue
 			}
 
-			// Caption read करा (msg.Message = Telegram caption field)
-			caption := strings.TrimSpace(msg.Message)
-
-			// Default values — media detect नाही झाली तरी cache करायचं
-			fileName := fmt.Sprintf("video_%d.mp4", msg.ID)
-			mimeType := "video/mp4"
-			var fileSize int64 = 0
-
-			// Title: caption असेल तर caption, नाहीतर Video #<msg_id>
-			title := caption
-			if title == "" {
-				title = fmt.Sprintf("Video #%d", msg.ID)
+			if msgID == 0 {
+				skipped++
+				continue
 			}
 
-			// Media detect झाली तर actual values वापर
-			if msg.Media != nil {
-				if file, err := utils.FileFromMedia(msg.Media); err == nil {
+			// Default: video/mp4 — caption नसेल तर msg ID
+			fileName := fmt.Sprintf("video_%d.mp4", msgID)
+			mimeType := "video/mp4"
+			var fileSize int64 = 0
+			title := caption
+			if title == "" {
+				title = fmt.Sprintf("Video #%d", msgID)
+			}
+
+			// Media असेल तर actual values वापर
+			if media != nil {
+				if file, err := utils.FileFromMedia(media); err == nil {
 					if file.FileName != "" {
 						fileName = file.FileName
 					}
@@ -528,15 +541,14 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 						mimeType = normalizeMime(file.MimeType, file.FileName)
 					}
 					fileSize = file.FileSize
-					// Title: caption > filename (extension शिवाय) > Video #id
-					if title == fmt.Sprintf("Video #%d", msg.ID) && file.FileName != "" {
+					if title == fmt.Sprintf("Video #%d", msgID) && file.FileName != "" {
 						title = stripExt(file.FileName)
 					}
 				}
 			}
 
 			cached := &db.CachedFile{
-				MessageID: msg.ID,
+				MessageID: msgID,
 				ChannelID: course.ChannelID,
 				CourseID:  courseID,
 				Title:     title,
@@ -544,7 +556,7 @@ func cmdSyncChannel(ctx *ext.Context, u *ext.Update) error {
 				FileName:  fileName,
 				MimeType:  mimeType,
 				FileSize:  fileSize,
-				SortOrder: msg.ID,
+				SortOrder: msgID,
 				CreatedAt: time.Now(),
 			}
 			if err := db.UpsertCachedFile(cached); err != nil {
