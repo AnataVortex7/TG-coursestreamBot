@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -304,10 +305,7 @@ localStream:
 	}
 
 	contentLength := end - start + 1
-	mimeType := file.MimeType
-	if mimeType == "" {
-		mimeType = "application/octet-stream"
-	}
+	mimeType := normalizeWatchMime(file.MimeType, file.FileName)
 
 	c.Header("Content-Type", mimeType)
 	c.Header("Content-Length", strconv.FormatInt(contentLength, 10))
@@ -420,5 +418,36 @@ func handlePDFDownload(c *gin.Context) {
 		if !utils.IsClientDisconnectError(err) {
 			log.Error("pdf download copy error", zap.Error(err))
 		}
+	}
+}
+
+// normalizeWatchMime — stream वेळी browser-safe Content-Type देतो.
+// MKV, AVI इत्यादी types video/mp4 म्हणून serve केले जातात.
+func normalizeWatchMime(mime, fileName string) string {
+	switch strings.ToLower(mime) {
+	case "video/x-matroska", "video/mkv", "video/x-msvideo",
+		"video/avi", "video/quicktime":
+		return "video/mp4"
+	case "video/mp4", "video/webm", "video/ogg":
+		return mime
+	case "":
+		// mime नाही — extension वरून guess कर
+		ext := strings.ToLower(filepath.Ext(fileName))
+		switch ext {
+		case ".webm":
+			return "video/webm"
+		case ".mp4", ".m4v", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".3gp":
+			return "video/mp4"
+		case ".mp3":
+			return "audio/mpeg"
+		case ".pdf":
+			return "application/pdf"
+		}
+		return "video/mp4"
+	default:
+		if strings.HasPrefix(strings.ToLower(mime), "video/") {
+			return "video/mp4"
+		}
+		return mime
 	}
 }
