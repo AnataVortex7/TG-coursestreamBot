@@ -256,6 +256,8 @@ func createIndexes() {
 	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "created_at", Value: -1}}, false)
 
 	// users: telegram_id for /dl bot command lookup
+	// Drop first to handle conflict with any previously created unique index
+	_, _ = ColUsers.Indexes().DropOne(ctx, "telegram_id_1")
 	ensureIndex(ctx, ColUsers, bson.D{{Key: "telegram_id", Value: 1}}, false)
 
 	// offline_tokens: unique token + TTL (auto-delete at midnight IST via expires_at)
