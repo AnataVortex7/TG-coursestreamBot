@@ -295,10 +295,9 @@ func sendAdminAlert(ctx *ext.Context, user *db.User, score int) {
 			continue
 		}
 		_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
-			Peer:      adminPeer,
-			Message:   msg,
-			ParseMode: &tg.InputMessageEntityMentionName{},
-			RandomID:  rand.Int63(),
+			Peer:     adminPeer,
+			Message:  msg,
+			RandomID: rand.Int63(),
 		})
 	}
 }
