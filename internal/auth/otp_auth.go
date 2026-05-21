@@ -8,7 +8,8 @@ import (
 	"EverythingSuckz/fsb/internal/email"
 	"fmt"
 	"log"
-	"math/rand"
+	"crypto/rand"
+    "math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -236,8 +237,8 @@ func DoPasswordLogin(c *gin.Context) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // generateOTP creates a cryptographically random 4-digit string (1000–9999).
+// AFTER — cryptographically secure
 func generateOTP() string {
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	n := 1000 + r.Intn(9000)
-	return fmt.Sprintf("%d", n)
+    n, _ := rand.Int(rand.Reader, big.NewInt(9000))
+    return fmt.Sprintf("%d", 1000+n.Int64())
 }
