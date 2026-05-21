@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"time"
 
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
@@ -92,6 +93,20 @@ func cmdDL(ctx *ext.Context, u *ext.Update) error {
 			"❌ तुमचा Telegram account bot शी link केलेला नाही.\n\n"+
 				"Admin ला सांगा: `/settg <your_mobile_or_email> "+fmt.Sprintf("%d", chatID)+"`\n\n"+
 				"एकदा link झाल्यावर /dl command वापरता येईल.")
+		return dispatcher.EndGroups
+	}
+
+	// ── Block check ───────────────────────────────────────────────────────────
+	blocked, blockedUntil, blockReason := db.IsUserBlocked(dbUser.ID)
+	if blocked {
+		reply(ctx, u, fmt.Sprintf(
+			"⛔ तुमचा account suspended आहे.\n\n"+
+				"📅 Until: %s IST\n"+
+				"📝 Reason: %s\n\n"+
+				"जास्त माहितीसाठी admin शी संपर्क करा.",
+			blockedUntil.In(istLoc()).Format("02 Jan 2006, 3:04 PM"),
+			blockReason,
+		))
 		return dispatcher.EndGroups
 	}
 
@@ -201,7 +216,7 @@ func cmdDL(ctx *ext.Context, u *ext.Update) error {
 		usedToday,
 	)
 
-	_, err = botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+	sentMedia, err := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 		Peer:       toPeer,
 		Media:      inputMedia,
 		Message:    caption,
@@ -213,12 +228,98 @@ func cmdDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
+	// ── Auto-delete schedule (48 hours नंतर) ─────────────────────────────────
+	if updates, ok := sentMedia.(*tg.Updates); ok {
+		for _, upd := range updates.Updates {
+			if msg, ok := upd.(*tg.UpdateMessageID); ok {
+				_ = db.ScheduleDelete(chatID, msg.ID)
+				break
+			}
+		}
+	}
+
+	// ── Suspicious activity track ─────────────────────────────────────────────
+	shouldAlert, score, _ := db.RecordDownload(dbUser.ID, usedToday)
+	if shouldAlert {
+		// Admin ला alert पाठवा
+		go sendAdminAlert(ctx, dbUser, score)
+	}
+
 	// Delete the "sending…" placeholder if it was sent
 	if sentMsg != nil {
 		_ = ctx.DeleteMessages(chatID, []int{sentMsg.ID})
 	}
 
 	return dispatcher.EndGroups
+}
+
+// sendAdminAlert — suspicious user बद्दल admin ला Telegram message पाठवतो.
+func sendAdminAlert(ctx *ext.Context, user *db.User, score int) {
+	botClient := MainBotClient
+	if botClient == nil {
+		return
+	}
+
+	usedToday, _ := db.GetDailyUsageCount(user.ID)
+	guard, _ := db.GetGuard(user.ID)
+	consecutive := 0
+	if guard != nil {
+		consecutive = guard.ConsecutiveFullDays
+	}
+
+	msg := fmt.Sprintf(
+		"🚨 *Suspicious Activity Alert*\n\n"+
+			"👤 User: `%s`\n"+
+			"📱 Mobile: %s\n"+
+			"📧 Email: %s\n"+
+			"📊 Suspicion Score: *%d* / 15\n"+
+			"📅 Consecutive Full Days: %d\n"+
+			"⬇️ Downloads Today: %d / 5\n\n"+
+			"Block करायचे असल्यास:\n"+
+			"`/blockuser %s 10 Suspicious activity`",
+		user.Username, user.Mobile, user.Email,
+		score, consecutive, usedToday,
+		func() string {
+			if user.Mobile != "" {
+				return user.Mobile
+			}
+			return user.Email
+		}(),
+	)
+
+	// AllowedUsers[0] = admin
+	adminIDs := getAdminIDs()
+	for _, adminID := range adminIDs {
+		adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+		if adminPeer == nil {
+			continue
+		}
+		_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:      adminPeer,
+			Message:   msg,
+			ParseMode: &tg.InputMessageEntityMentionName{},
+			RandomID:  rand.Int63(),
+		})
+	}
+}
+
+func istLoc() *time.Location {
+	loc, _ := time.LoadLocation("Asia/Kolkata")
+	if loc == nil {
+		return time.FixedZone("IST", 5*60*60+30*60)
+	}
+	return loc
+}
+
+func getAdminIDs() []int64 {
+	// AllowedUsers = admin IDs (config मधून)
+	// commands package मधून config import करणे avoid करायला,
+	// commands.go मध्ये AdminIDs var ठेवता येतो (bot startup ला set होतो).
+	// सध्या MainBotClient.Self.ID हा admin आहे असे assume करतो.
+	if MainBotClient == nil {
+		return nil
+	}
+	return []int64{MainBotClient.Self.ID}
 }
 
 // ── /settg <identifier> <telegram_id> ────────────────────────────────────────
