@@ -31,56 +31,25 @@ var smtpProviders []smtpConfig
 var providerCounter uint64 // round-robin counter
 
 func init() {
-	// Primary — existing BREVO_* variables (unchanged)
-	primary := smtpConfig{
-		host:      envOr("BREVO_SMTP_HOST", "smtp-relay.brevo.com"),
-		port:      envOr("BREVO_SMTP_PORT", "587"),
-		user:      os.Getenv("BREVO_SMTP_USER"),
-		pass:      os.Getenv("BREVO_SMTP_PASS"),
-		fromEmail: envOr("BREVO_FROM_EMAIL", os.Getenv("BREVO_SMTP_USER")),
-		fromName:  envOr("BREVO_FROM_NAME", "CourseStream"),
-	}
-	if primary.user != "" && primary.pass != "" {
-		smtpProviders = append(smtpProviders, primary)
-	}
-
-	// Secondary — BREVO_*_2 variables
-	secondary := smtpConfig{
-		host:      os.Getenv("BREVO_SMTP_HOST_2"),
-		port:      envOr("BREVO_SMTP_PORT_2", "587"),
-		user:      os.Getenv("BREVO_SMTP_USER_2"),
-		pass:      os.Getenv("BREVO_SMTP_PASS_2"),
-		fromEmail: envOr("BREVO_FROM_EMAIL_2", os.Getenv("BREVO_SMTP_USER_2")),
-		fromName:  envOr("BREVO_FROM_NAME_2", envOr("BREVO_FROM_NAME", "CourseStream")),
-	}
-	if secondary.host != "" && secondary.user != "" && secondary.pass != "" {
-		smtpProviders = append(smtpProviders, secondary)
-	}
-
-	// Tertiary — BREVO_*_3 variables
-	tertiary := smtpConfig{
-		host:      os.Getenv("BREVO_SMTP_HOST_3"),
-		port:      envOr("BREVO_SMTP_PORT_3", "587"),
-		user:      os.Getenv("BREVO_SMTP_USER_3"),
-		pass:      os.Getenv("BREVO_SMTP_PASS_3"),
-		fromEmail: envOr("BREVO_FROM_EMAIL_3", os.Getenv("BREVO_SMTP_USER_3")),
-		fromName:  envOr("BREVO_FROM_NAME_3", envOr("BREVO_FROM_NAME", "CourseStream")),
-	}
-	if tertiary.host != "" && tertiary.user != "" && tertiary.pass != "" {
-		smtpProviders = append(smtpProviders, tertiary)
-	}
-
-	// Quaternary — BREVO_*_4 variables
-	quaternary := smtpConfig{
-		host:      os.Getenv("BREVO_SMTP_HOST_4"),
-		port:      envOr("BREVO_SMTP_PORT_4", "587"),
-		user:      os.Getenv("BREVO_SMTP_USER_4"),
-		pass:      os.Getenv("BREVO_SMTP_PASS_4"),
-		fromEmail: envOr("BREVO_FROM_EMAIL_4", os.Getenv("BREVO_SMTP_USER_4")),
-		fromName:  envOr("BREVO_FROM_NAME_4", envOr("BREVO_FROM_NAME", "CourseStream")),
-	}
-	if quaternary.host != "" && quaternary.user != "" && quaternary.pass != "" {
-		smtpProviders = append(smtpProviders, quaternary)
+	for i := 1; ; i++ {
+		suffix := ""
+		if i > 1 {
+			suffix = fmt.Sprintf("_%d", i)
+		}
+		user := os.Getenv("BREVO_SMTP_USER" + suffix)
+		pass := os.Getenv("BREVO_SMTP_PASS" + suffix)
+		if user == "" || pass == "" {
+			break
+		}
+		host := envOr("BREVO_SMTP_HOST"+suffix, "smtp-relay.brevo.com")
+		smtpProviders = append(smtpProviders, smtpConfig{
+			host:      host,
+			port:      envOr("BREVO_SMTP_PORT"+suffix, "587"),
+			user:      user,
+			pass:      pass,
+			fromEmail: envOr("BREVO_FROM_EMAIL"+suffix, user),
+			fromName:  envOr("BREVO_FROM_NAME"+suffix, envOr("BREVO_FROM_NAME", "CourseStream")),
+		})
 	}
 }
 
