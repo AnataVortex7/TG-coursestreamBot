@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/cache"
@@ -57,6 +58,12 @@ func runApp(cmd *cobra.Command, args []string) {
 	}
 	commands.MainBotClient = mainBot
 	cache.InitCache(log)
+
+	// ── Start background janitor (auto-delete + cleanup) ──────────────────────
+	janitorCtx, janitorCancel := context.WithCancel(context.Background())
+	defer janitorCancel()
+	go commands.StartJanitor(janitorCtx, mainBot, log)
+
 	workers, err := bot.StartWorkers(log)
 	if err != nil {
 		log.Sugar().Fatalf("Failed to start workers: %v", err)
