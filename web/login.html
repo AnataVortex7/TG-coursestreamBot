@@ -494,7 +494,13 @@ async function sendOTP(isResend = false) {
         if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
         return;
       }
-      showAlert('error', data.error || 'Failed to send OTP.');
+      // AFTER — email fail झाली तर password step वर जा
+      if (data.error && data.error.toLowerCase().includes('failed to send')) {
+        showAlert('warn', 'Email service unavailable. Please sign in with your password.');
+        showStep('password');
+      } else {
+        showAlert('error', data.error || 'Failed to send OTP.');
+      }
       if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
       return;
     }
