@@ -12,6 +12,7 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,7 +27,10 @@ type smtpConfig struct {
 	fromName  string
 }
 
+
+
 var smtpProviders []smtpConfig
+var providerCounter uint64 // round-robin counter
 
 func init() {
 	// Primary — existing BREVO_* variables (unchanged)
@@ -116,20 +120,26 @@ func dialAndAuth(p smtpConfig) bool {
 
 // ─── Core send — fallback logic ───────────────────────────────────────────────
 
+// AFTER — Round-Robin sendMail function
 func sendMail(toEmail string, msg []byte) error {
-	if len(smtpProviders) == 0 {
+	n := uint64(len(smtpProviders))
+	if n == 0 {
 		return fmt.Errorf("smtp: no providers configured")
 	}
+
+	// Round-robin: प्रत्येक email वेगळ्या provider ला जातो
+	start := atomic.AddUint64(&providerCounter, 1) % n
+
 	var lastErr error
-	for i, p := range smtpProviders {
+	for i := uint64(0); i < n; i++ {
+		idx := (start + i) % n
+		p := smtpProviders[idx]
 		err := sendViaProvider(p, toEmail, msg)
 		if err == nil {
-			if i > 0 {
-				log.Printf("[SMTP] Sent via fallback provider #%d (%s)", i+1, p.host)
-			}
+			log.Printf("[SMTP] Sent via provider #%d (%s)", idx+1, p.host)
 			return nil
 		}
-		log.Printf("[SMTP] Provider #%d (%s) failed: %v", i+1, p.host, err)
+		log.Printf("[SMTP] Provider #%d (%s) failed: %v", idx+1, p.host, err)
 		lastErr = err
 	}
 	return fmt.Errorf("smtp: all providers failed, last error: %w", lastErr)
