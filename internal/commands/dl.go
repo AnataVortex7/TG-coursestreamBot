@@ -205,7 +205,7 @@ func cmdDL(ctx *ext.Context, u *ext.Update) error {
 		Peer:       toPeer,
 		Media:      inputMedia,
 		Message:    caption,
-		NoForwards: true, // ← forward blocked + save blocked
+		Noforwards: true, // ← forward blocked + save blocked
 		RandomID:   rand.Int63(),
 	})
 	if err != nil {
