@@ -74,7 +74,7 @@ func cmdDL(ctx *ext.Context, u *ext.Update) error {
 				"1. Website वर course उघडा\n"+
 				"2. Video च्या खाली 📥 *Offline* button दाबा\n"+
 				"3. मिळालेला token इथे `/dl XXXXX` असा टाका\n\n"+
-				"⚠️ रोज फक्त 5 downloads — midnight IST ला reset होतात.\n"+
+				"⚠️ रोज फक्त 3 downloads — midnight IST ला reset होतात.\n"+
 				"⚠️ पाठवलेला video forward किंवा save करता येणार नाही.",
 		)
 		return dispatcher.EndGroups
@@ -91,7 +91,7 @@ func cmdDL(ctx *ext.Context, u *ext.Update) error {
 	if err != nil || dbUser == nil {
 		reply(ctx, u,
 			"❌ तुमचा Telegram account bot शी link केलेला नाही.\n\n"+
-				"Admin ला सांगा: `/settg <your_mobile_or_email> "+fmt.Sprintf("%d", chatID)+"`\n\n"+
+				"cmd taka: `/register <your_mobile_or_email> "+fmt.Sprintf("%d", chatID)+"`\n\n"+
 				"एकदा link झाल्यावर /dl command वापरता येईल.")
 		return dispatcher.EndGroups
 	}
