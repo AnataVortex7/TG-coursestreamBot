@@ -2,6 +2,7 @@
 package routes
 
 import (
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/token"
@@ -262,11 +263,12 @@ func handleCourseDetail(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "course_detail.html", gin.H{
-		"username":   username,
-		"course":     course,
-		"playlist":   playlist,
-		"totalCount": len(playlist),
-		"hasAccess":  hasAccess,
+		"username":    username,
+		"course":      course,
+		"playlist":    playlist,
+		"totalCount":  len(playlist),
+		"hasAccess":   hasAccess,
+		"botUsername": config.ValueOf.BotUsername,
 	})
 }
 
