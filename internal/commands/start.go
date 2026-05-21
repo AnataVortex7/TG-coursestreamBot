@@ -26,6 +26,15 @@ func start(ctx *ext.Context, u *ext.Update) error {
 		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
 		return dispatcher.EndGroups
 	}
-	ctx.Reply(u, ext.ReplyTextString("Hi, send me any file to get a direct streamable link to that file."), nil)
+	ctx.Reply(u, ext.ReplyTextString(
+		"👋 Welcome!\n\n"+
+			"📥 Offline Video Download साठी:\n\n"+
+			"1️⃣ तुमचा mobile/email टाका:\n"+
+			"   /register 9876543210\n\n"+
+			"2️⃣ Admin link केल्यावर website वर जा → course उघडा → 📥 Offline button दाबा → token मिळेल\n\n"+
+			"3️⃣ Token इथे टाका:\n"+
+			"   /dl 48271\n\n"+
+			"❓ तुमचा Telegram ID बघायला: /myid",
+	), nil)
 	return dispatcher.EndGroups
 }
