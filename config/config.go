@@ -52,7 +52,9 @@ type config struct {
 	AllowedUsers   allowedUsers `envconfig:"ALLOWED_USERS"`
 	MultiTokens    []string
 
-	// Stream config
+	// Admin notification email — registration requests येथे येतात
+	AdminEmail  string `envconfig:"ADMIN_EMAIL" default:""`
+	BotUsername string `envconfig:"BOT_USERNAME" default:""`
 	StreamConcurrency int `envconfig:"STREAM_CONCURRENCY" default:"4"`
 	StreamBufferCount int `envconfig:"STREAM_BUFFER_COUNT" default:"8"`
 	StreamTimeoutSec  int `envconfig:"STREAM_TIMEOUT_SEC" default:"30"`
