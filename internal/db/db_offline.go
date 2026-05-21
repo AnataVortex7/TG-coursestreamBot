@@ -39,7 +39,7 @@ type OfflineDailyUsage struct {
 
 // ─── Sentinel errors ─────────────────────────────────────────────────────────
 
-const offlineDailyMax = 5
+const offlineDailyMax = 3
 
 var (
 	ErrTokenNotFound     = errors.New("token not found or expired")
