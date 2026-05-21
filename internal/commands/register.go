@@ -20,7 +20,9 @@ import (
 	"math/rand"
 	"strings"
 
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/email"
 
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
@@ -94,8 +96,8 @@ func cmdRegister(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Admin IDs (AllowedUsers मधून)
-	adminIDs := getAdminIDs()
+	// Admin IDs — config च्या AllowedUsers मधून
+	adminIDs := []int64(config.ValueOf.AllowedUsers)
 	if len(adminIDs) == 0 {
 		reply(ctx, u, "❌ Admin configure केलेला नाही.")
 		return dispatcher.EndGroups
@@ -104,29 +106,39 @@ func cmdRegister(ctx *ext.Context, u *ext.Update) error {
 	// Admin ला message पाठवा
 	settgCmd := fmt.Sprintf("/settg %s %d", identifier, chatID)
 	adminMsg := fmt.Sprintf(
-		"🔔 *New Link Request*\n\n"+
-			"👤 User: `%s`\n"+
+		"🔔 New Link Request\n\n"+
+			"👤 User: %s\n"+
 			"📛 Name: %s\n"+
-			"📱 TG ID: `%d`\n\n"+
+			"📱 TG ID: %d\n\n"+
 			"खाली copy करा आणि send करा:\n"+
-			"`%s`",
+			"%s",
 		identifier,
 		user.FullName,
 		chatID,
 		settgCmd,
 	)
 
+	sentToAdmin := false
 	for _, adminID := range adminIDs {
-		adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
-		if adminPeer == nil {
-			continue
-		}
-		_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
-			Peer:     adminPeer,
+		_, err := botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     &tg.InputPeerUser{UserID: adminID},
 			Message:  adminMsg,
 			RandomID: rand.Int63(),
 		})
+		if err == nil {
+			sentToAdmin = true
+		}
 	}
+
+	// Email पण पाठवा (ADMIN_EMAIL set असेल तर)
+	if adminEmail := config.ValueOf.AdminEmail; adminEmail != "" {
+		go func() {
+			_ = email.SendRegistrationRequest(adminEmail, identifier, user.FullName, chatID)
+		}()
+		sentToAdmin = true
+	}
+
+	_ = sentToAdmin
 
 	// User ला confirm करा
 	reply(ctx, u,
