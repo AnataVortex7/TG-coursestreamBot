@@ -71,6 +71,19 @@ func init() {
 	if tertiary.host != "" && tertiary.user != "" && tertiary.pass != "" {
 		smtpProviders = append(smtpProviders, tertiary)
 	}
+
+	// Quaternary — BREVO_*_4 variables
+	quaternary := smtpConfig{
+		host:      os.Getenv("BREVO_SMTP_HOST_4"),
+		port:      envOr("BREVO_SMTP_PORT_4", "587"),
+		user:      os.Getenv("BREVO_SMTP_USER_4"),
+		pass:      os.Getenv("BREVO_SMTP_PASS_4"),
+		fromEmail: envOr("BREVO_FROM_EMAIL_4", os.Getenv("BREVO_SMTP_USER_4")),
+		fromName:  envOr("BREVO_FROM_NAME", "CourseStream"),
+	}
+	if quaternary.host != "" && quaternary.user != "" && quaternary.pass != "" {
+		smtpProviders = append(smtpProviders, quaternary)
+	}
 }
 
 func envOr(key, fallback string) string {
