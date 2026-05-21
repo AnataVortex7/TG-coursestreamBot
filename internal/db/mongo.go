@@ -268,6 +268,15 @@ func createIndexes() {
 		bson.D{{Key: "user_id", Value: 1}, {Key: "date_key", Value: 1}},
 		true,
 	)
+
+	// pending_deletes: messages scheduled for auto-delete after 48h
+	ensureIndex(ctx, Database.Collection("pending_deletes"), bson.D{{Key: "delete_at", Value: 1}}, false)
+	ensureIndex(ctx, Database.Collection("pending_deletes"), bson.D{{Key: "deleted", Value: 1}}, false)
+
+	// user_guard: suspicion score + block status per user
+	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "user_id", Value: 1}}, true)
+	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "suspicion_score", Value: -1}}, false)
+	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "is_blocked", Value: 1}}, false)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
