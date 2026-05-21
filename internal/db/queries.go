@@ -871,3 +871,38 @@ func ListAllAnnouncements() ([]Announcement, error) {
 	}
 	return list, nil
 }
+
+// ─── Telegram ID helpers (used by /dl bot command) ───────────────────────────
+
+// GetUserByTelegramID finds a website user by their linked Telegram ID.
+// Returns (nil, nil) if no user has this Telegram ID linked yet.
+func GetUserByTelegramID(telegramID int64) (*User, error) {
+	if telegramID == 0 {
+		return nil, nil
+	}
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var u User
+	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&u)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &u, nil
+}
+
+// SetUserTelegramID links a website user record to a Telegram user ID.
+// Called by admin via the /settg bot command.
+func SetUserTelegramID(userID primitive.ObjectID, telegramID int64) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{"telegram_id": telegramID}},
+	)
+	return err
+}

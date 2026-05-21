@@ -43,6 +43,7 @@ type User struct {
 	Mobile       string             `bson:"mobile"              json:"mobile"`        // e.g. "9876543210" (digits only, optional)
 	Email        string             `bson:"email"               json:"email"`         // optional
 	PasswordHash string             `bson:"password_hash"       json:"-"`
+	TelegramID   int64              `bson:"telegram_id"         json:"telegram_id"`   // linked Telegram user ID (0 = not linked)
 	CreatedAt    time.Time          `bson:"created_at"          json:"created_at"`
 	IsActive     bool               `bson:"is_active"           json:"is_active"`
 }
@@ -253,6 +254,20 @@ func createIndexes() {
 	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "course_id", Value: 1}}, false)
 	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "is_active", Value: 1}}, false)
 	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "created_at", Value: -1}}, false)
+
+	// users: telegram_id for /dl bot command lookup
+	ensureIndex(ctx, ColUsers, bson.D{{Key: "telegram_id", Value: 1}}, false)
+
+	// offline_tokens: unique token + TTL (auto-delete at midnight IST via expires_at)
+	ensureIndex(ctx, Database.Collection("offline_tokens"), bson.D{{Key: "token", Value: 1}}, true)
+	ensureIndex(ctx, Database.Collection("offline_tokens"), bson.D{{Key: "user_id", Value: 1}}, false)
+	ensureTTLIndex(ctx, Database.Collection("offline_tokens"), "expires_at")
+
+	// offline_daily_usage: unique (user_id, date_key) — one counter per user per day
+	ensureCompoundIndex(ctx, Database.Collection("offline_daily_usage"),
+		bson.D{{Key: "user_id", Value: 1}, {Key: "date_key", Value: 1}},
+		true,
+	)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
