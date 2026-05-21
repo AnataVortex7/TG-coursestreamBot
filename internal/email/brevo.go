@@ -27,8 +27,6 @@ type smtpConfig struct {
 	fromName  string
 }
 
-
-
 var smtpProviders []smtpConfig
 var providerCounter uint64 // round-robin counter
 
@@ -53,7 +51,7 @@ func init() {
 		user:      os.Getenv("BREVO_SMTP_USER_2"),
 		pass:      os.Getenv("BREVO_SMTP_PASS_2"),
 		fromEmail: envOr("BREVO_FROM_EMAIL_2", os.Getenv("BREVO_SMTP_USER_2")),
-		fromName:  envOr("BREVO_FROM_NAME", "CourseStream"),
+		fromName:  envOr("BREVO_FROM_NAME_2", envOr("BREVO_FROM_NAME", "CourseStream")),
 	}
 	if secondary.host != "" && secondary.user != "" && secondary.pass != "" {
 		smtpProviders = append(smtpProviders, secondary)
@@ -66,7 +64,7 @@ func init() {
 		user:      os.Getenv("BREVO_SMTP_USER_3"),
 		pass:      os.Getenv("BREVO_SMTP_PASS_3"),
 		fromEmail: envOr("BREVO_FROM_EMAIL_3", os.Getenv("BREVO_SMTP_USER_3")),
-		fromName:  envOr("BREVO_FROM_NAME", "CourseStream"),
+		fromName:  envOr("BREVO_FROM_NAME_3", envOr("BREVO_FROM_NAME", "CourseStream")),
 	}
 	if tertiary.host != "" && tertiary.user != "" && tertiary.pass != "" {
 		smtpProviders = append(smtpProviders, tertiary)
@@ -79,7 +77,7 @@ func init() {
 		user:      os.Getenv("BREVO_SMTP_USER_4"),
 		pass:      os.Getenv("BREVO_SMTP_PASS_4"),
 		fromEmail: envOr("BREVO_FROM_EMAIL_4", os.Getenv("BREVO_SMTP_USER_4")),
-		fromName:  envOr("BREVO_FROM_NAME", "CourseStream"),
+		fromName:  envOr("BREVO_FROM_NAME_4", envOr("BREVO_FROM_NAME", "CourseStream")),
 	}
 	if quaternary.host != "" && quaternary.user != "" && quaternary.pass != "" {
 		smtpProviders = append(smtpProviders, quaternary)
@@ -95,7 +93,6 @@ func envOr(key, fallback string) string {
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 
-// IsServiceUp — at least ek provider up ahe ka te check karto
 func IsServiceUp() bool {
 	for _, p := range smtpProviders {
 		if dialAndAuth(p) {
@@ -131,22 +128,23 @@ func dialAndAuth(p smtpConfig) bool {
 	return true
 }
 
-// ─── Core send — fallback logic ───────────────────────────────────────────────
+// ─── Core send — round-robin + fallback ───────────────────────────────────────
 
-// AFTER — Round-Robin sendMail function
-func sendMail(toEmail string, msg []byte) error {
+// sendMail — round-robin provider निवडतो, त्याच provider च्या credentials ने msg बनवतो आणि पाठवतो
+func sendMail(toEmail, subject, htmlBody string) error {
 	n := uint64(len(smtpProviders))
 	if n == 0 {
 		return fmt.Errorf("smtp: no providers configured")
 	}
 
-	// Round-robin: प्रत्येक email वेगळ्या provider ला जातो
 	start := atomic.AddUint64(&providerCounter, 1) % n
 
 	var lastErr error
 	for i := uint64(0); i < n; i++ {
 		idx := (start + i) % n
 		p := smtpProviders[idx]
+		// निवडलेल्या provider च्या fromEmail/fromName ने message बनवतो
+		msg := buildMsg(p, toEmail, subject, htmlBody)
 		err := sendViaProvider(p, toEmail, msg)
 		if err == nil {
 			log.Printf("[SMTP] Sent via provider #%d (%s)", idx+1, p.host)
@@ -224,8 +222,7 @@ func SendOTP(toEmail, otpCode string) error {
 	p := primaryProvider()
 	subject := "Your Login OTP — " + p.fromName
 	htmlBody := buildOTPEmail(p.fromName, otpCode)
-	msg := buildMsg(p, toEmail, subject, htmlBody)
-	return sendMail(toEmail, msg)
+	return sendMail(toEmail, subject, htmlBody)
 }
 
 // ─── Send Registration OTP ────────────────────────────────────────────────────
@@ -237,8 +234,7 @@ func SendRegOTP(toEmail, fullName, otpCode string) error {
 	p := primaryProvider()
 	subject := "Verify your email — " + p.fromName
 	htmlBody := buildRegOTPEmail(p.fromName, fullName, otpCode)
-	msg := buildMsg(p, toEmail, subject, htmlBody)
-	return sendMail(toEmail, msg)
+	return sendMail(toEmail, subject, htmlBody)
 }
 
 // ─── Send Purchase Notification ───────────────────────────────────────────────
@@ -250,11 +246,9 @@ func SendPurchaseNotification(adminEmail string, info PurchaseInfo) error {
 	if adminEmail == "" {
 		return fmt.Errorf("smtp: ADMIN_EMAIL not set")
 	}
-	p := primaryProvider()
 	subject := fmt.Sprintf("🎁 New Purchase Request — %s", info.CourseTitle)
 	htmlBody := buildPurchaseEmail(info)
-	msg := buildMsg(p, adminEmail, subject, htmlBody)
-	return sendMail(adminEmail, msg)
+	return sendMail(adminEmail, subject, htmlBody)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -444,7 +438,6 @@ func orDash(s string) string {
 }
 
 // ─── Send Admin → User Message ────────────────────────────────────────────────
-// Admin panel madhuun directly user la email pathavto
 
 func SendAdminToUserMessage(toEmail, fullName, subject, message, appName string) error {
 	if len(smtpProviders) == 0 {
@@ -455,12 +448,10 @@ func SendAdminToUserMessage(toEmail, fullName, subject, message, appName string)
 		appName = p.fromName
 	}
 	htmlBody := buildAdminToUserEmail(appName, fullName, subject, message)
-	msg := buildMsg(p, toEmail, subject, htmlBody)
-	return sendMail(toEmail, msg)
+	return sendMail(toEmail, subject, htmlBody)
 }
 
 func buildAdminToUserEmail(appName, fullName, subject, message string) string {
-	// \n → <br> for HTML rendering
 	htmlMessage := ""
 	for _, line := range splitLines(message) {
 		if line == "" {
@@ -498,7 +489,6 @@ func buildAdminToUserEmail(appName, fullName, subject, message string) string {
 }
 
 // ─── Send User → Admin Contact Message ───────────────────────────────────────
-// User site vartun admin la contact karto
 
 type UserContactInfo struct {
 	UserFullName string
@@ -519,8 +509,7 @@ func SendUserContactToAdmin(adminEmail string, info UserContactInfo) error {
 	p := primaryProvider()
 	subject := fmt.Sprintf("📬 New Message from %s — %s", info.UserFullName, info.Subject)
 	htmlBody := buildUserContactEmail(p.fromName, info)
-	msg := buildMsg(p, adminEmail, subject, htmlBody)
-	return sendMail(adminEmail, msg)
+	return sendMail(adminEmail, subject, htmlBody)
 }
 
 func buildUserContactEmail(appName string, info UserContactInfo) string {
@@ -531,13 +520,6 @@ func buildUserContactEmail(appName string, info UserContactInfo) string {
 		} else {
 			htmlMessage += "<p style=\"color:#c8cad8;font-size:14px;line-height:1.7;margin:0 0 8px;\">" + escapeHTML(line) + "</p>"
 		}
-	}
-	identifier := info.UserMobile
-	if identifier == "" {
-		identifier = info.UserEmail
-	}
-	if identifier == "" {
-		identifier = info.Username
 	}
 	return fmt.Sprintf(`<!DOCTYPE html>
 <html lang="en">
@@ -608,7 +590,6 @@ func splitLines(s string) []string {
 }
 
 // ─── Send New Course Notification ────────────────────────────────────────────
-// New course add zala ki sarv registered users la pathavto
 
 func SendNewCourseNotification(toEmail, fullName, courseTitle, buyLink, price, appName string) error {
 	if len(smtpProviders) == 0 {
@@ -620,8 +601,7 @@ func SendNewCourseNotification(toEmail, fullName, courseTitle, buyLink, price, a
 	}
 	subject := "🎓 New Course Available — " + courseTitle
 	htmlBody := buildNewCourseEmail(appName, fullName, courseTitle, buyLink, price)
-	msg := buildMsg(p, toEmail, subject, htmlBody)
-	return sendMail(toEmail, msg)
+	return sendMail(toEmail, subject, htmlBody)
 }
 
 func buildNewCourseEmail(appName, fullName, courseTitle, buyLink, price string) string {
@@ -672,18 +652,17 @@ func buildNewCourseEmail(appName, fullName, courseTitle, buyLink, price string) 
 
 // ─── SendRegistrationRequest ──────────────────────────────────────────────────
 
-// SendRegistrationRequest — user ने /register केल्यावर admin ला email जातो.
-// adminEmail = config.ValueOf.AdminEmail
 func SendRegistrationRequest(adminEmail, userIdentifier, userFullName string, telegramID int64) error {
+	if len(smtpProviders) == 0 {
+		return fmt.Errorf("smtp: no providers configured")
+	}
 	p := primaryProvider()
 	if p.user == "" {
 		return fmt.Errorf("no SMTP provider configured")
 	}
-
 	subject := "🔔 New Telegram Link Request — " + userIdentifier
-	body := buildRegistrationEmail(userIdentifier, userFullName, telegramID)
-	msg := buildMsg(p, adminEmail, subject, body)
-	return sendMail(adminEmail, msg)
+	htmlBody := buildRegistrationEmail(userIdentifier, userFullName, telegramID)
+	return sendMail(adminEmail, subject, htmlBody)
 }
 
 func buildRegistrationEmail(identifier, fullName string, telegramID int64) string {
