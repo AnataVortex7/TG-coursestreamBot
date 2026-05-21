@@ -646,3 +646,57 @@ func buildNewCourseEmail(appName, fullName, courseTitle, buyLink, price string) 
 </body>
 </html>`, escapeHTML(appName), greet, escapeHTML(courseTitle), priceTag, buyBtn, escapeHTML(appName))
 }
+
+// ─── SendRegistrationRequest ──────────────────────────────────────────────────
+
+// SendRegistrationRequest — user ने /register केल्यावर admin ला email जातो.
+// adminEmail = config.ValueOf.AdminEmail
+func SendRegistrationRequest(adminEmail, userIdentifier, userFullName string, telegramID int64) error {
+	p := primaryProvider()
+	if p.user == "" {
+		return fmt.Errorf("no SMTP provider configured")
+	}
+
+	subject := "🔔 New Telegram Link Request — " + userIdentifier
+	body := buildRegistrationEmail(userIdentifier, userFullName, telegramID)
+	msg := buildMsg(p, adminEmail, subject, body)
+	return sendMail(adminEmail, msg)
+}
+
+func buildRegistrationEmail(identifier, fullName string, telegramID int64) string {
+	settgCmd := fmt.Sprintf("/settg %s %d", identifier, telegramID)
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#0d0e17;font-family:'Segoe UI',Arial,sans-serif;">
+  <div style="max-width:520px;margin:40px auto;background:#12141c;border-radius:16px;border:1px solid #2a2d3a;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#2d6a4f,#1a9e5c);padding:28px 32px;">
+      <h1 style="color:#fff;font-size:20px;font-weight:800;margin:0 0 4px;">🔔 New Link Request</h1>
+      <p style="color:rgba(255,255,255,.8);font-size:13px;margin:0;">User ने Telegram account link करायला request केली</p>
+    </div>
+    <div style="padding:28px 32px;">
+      <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+        <tr>
+          <td style="color:#7a7d8e;font-size:12px;font-weight:700;text-transform:uppercase;padding:8px 0;border-bottom:1px solid #2a2d3a;">User</td>
+          <td style="color:#e8e9f0;font-size:14px;font-weight:600;padding:8px 0;border-bottom:1px solid #2a2d3a;">%s</td>
+        </tr>
+        <tr>
+          <td style="color:#7a7d8e;font-size:12px;font-weight:700;text-transform:uppercase;padding:8px 0;border-bottom:1px solid #2a2d3a;">Name</td>
+          <td style="color:#e8e9f0;font-size:14px;padding:8px 0;border-bottom:1px solid #2a2d3a;">%s</td>
+        </tr>
+        <tr>
+          <td style="color:#7a7d8e;font-size:12px;font-weight:700;text-transform:uppercase;padding:8px 0;">Telegram ID</td>
+          <td style="color:#e8e9f0;font-size:14px;font-family:monospace;padding:8px 0;">%d</td>
+        </tr>
+      </table>
+      <p style="color:#9097a5;font-size:13px;margin:0 0 12px;">Bot मध्ये हा command copy-paste करा:</p>
+      <div style="background:#0d0e17;border:2px solid #1a9e5c;border-radius:10px;padding:16px 20px;font-family:monospace;font-size:16px;font-weight:700;color:#4ade80;letter-spacing:.05em;word-break:break-all;">
+        %s
+      </div>
+      <p style="color:#4a4d5e;font-size:11px;text-align:center;margin:24px 0 0;">
+        CourseStream Admin Panel
+      </p>
+    </div>
+  </div>
+</body>
+</html>`, escapeHTML(identifier), escapeHTML(fullName), telegramID, escapeHTML(settgCmd))
+}
