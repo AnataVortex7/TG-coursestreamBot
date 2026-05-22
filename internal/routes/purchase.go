@@ -76,7 +76,7 @@ func handlePurchase(c *gin.Context) {
 	// Admin email — env madhuun gheto
 	adminEmail := os.Getenv("ADMIN_EMAIL")
 	if adminEmail == "" {
-		adminEmail = "meratakshay22@gmail.com" // default
+		adminEmail = "" // default
 	}
 
 	// Email pathavto
