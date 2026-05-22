@@ -206,3 +206,30 @@ func GetDailyUsageCount(userID, courseID primitive.ObjectID) (int, error) {
 	}
 	return usage.Count, nil
 }
+
+// ─── GetTotalDailyUsageCount ──────────────────────────────────────────────────
+
+// GetTotalDailyUsageCount — user ने आज सर्व courses मिळून किती downloads केले.
+// Admin status display साठी वापरतो.
+func GetTotalDailyUsageCount(userID primitive.ObjectID) (int, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := colOffUsage().Find(ctx, bson.M{
+		"user_id":  userID,
+		"date_key": todayKeyIST(),
+	})
+	if err != nil {
+		return 0, err
+	}
+	defer cursor.Close(ctx)
+
+	total := 0
+	for cursor.Next(ctx) {
+		var u OfflineDailyUsage
+		if err := cursor.Decode(&u); err == nil {
+			total += u.Count
+		}
+	}
+	return total, nil
+}

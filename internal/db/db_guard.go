@@ -198,7 +198,7 @@ func RecordDownload(userID primitive.ObjectID, usedToday int) (bool, int, error)
 	added := 0
 
 	// 5/5 downloads today
-	if usedToday >= offlineDailyMax {
+	if usedToday >= defaultDailyLimit {
 		added += 3
 
 		// Consecutive full days check
@@ -239,7 +239,7 @@ func RecordDownload(userID primitive.ObjectID, usedToday int) (bool, int, error)
 		},
 		"$setOnInsert": bson.M{"_id": primitive.NewObjectID()},
 	}
-	if g.LastFullDay != today && usedToday >= offlineDailyMax {
+	if g.LastFullDay != today && usedToday >= defaultDailyLimit {
 		update["$set"].(bson.M)["last_full_day"] = today
 	}
 	if shouldAlert {
