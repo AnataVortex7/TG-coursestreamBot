@@ -276,7 +276,7 @@ func adminAddCourse(c *gin.Context) {
 		}
 		appName := os.Getenv("BREVO_FROM_NAME")
 		if appName == "" {
-			appName = "CourseStream"
+			appName = "ONLINE COURSE"
 		}
 		sent, skipped := 0, 0
 		for _, u := range users {
@@ -746,7 +746,7 @@ func adminSendMessageToUser(c *gin.Context) {
 
 	appName := os.Getenv("BREVO_FROM_NAME")
 	if appName == "" {
-		appName = "CourseStream"
+		appName = "ONLINE COURSE"
 	}
 
 	if err := email.SendAdminToUserMessage(user.Email, user.FullName, req.Subject, req.Message, appName); err != nil {
@@ -795,7 +795,7 @@ func adminBroadcast(c *gin.Context) {
 
 	appName := os.Getenv("BREVO_FROM_NAME")
 	if appName == "" {
-		appName = "CourseStream"
+		appName = "ONLINE COURSE"
 	}
 
 	// ── Global broadcast ──────────────────────────────────────────────────────
