@@ -23,20 +23,20 @@ import (
 
 // ─── Admin credentials from env ──────────────────────────────────────────────
 // Set ADMIN_USER and ADMIN_PASS in your .env file.
-// Defaults to Akshay / Akshay1181 if not set.
+// Defaults to  if not set.
 
 func adminUser() string {
 	if v := os.Getenv("ADMIN_USER"); v != "" {
 		return v
 	}
-	return "Akshay"
+	return ""
 }
 
 func adminPass() string {
 	if v := os.Getenv("ADMIN_PASS"); v != "" {
 		return v
 	}
-	return "Akshay1181"
+	return ""
 }
 
 // ─── Basic-Auth middleware ────────────────────────────────────────────────────
