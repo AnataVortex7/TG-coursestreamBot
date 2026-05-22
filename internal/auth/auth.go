@@ -25,7 +25,7 @@ func init() {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
 		// fallback — production must set JWT_SECRET
-		secret = "change-me-in-production-set-JWT_SECRET-env"
+		secret = ""
 	}
 	jwtSecret = []byte(secret)
 }
