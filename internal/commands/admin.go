@@ -14,6 +14,7 @@ import (
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/ext"
 	"github.com/gotd/td/tg"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -31,6 +32,7 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("addcourse", adminOnly(cmdAddCourse)))
 	d.AddHandler(handlers.NewCommand("delcourse", adminOnly(cmdDelCourse)))
 	d.AddHandler(handlers.NewCommand("listcourses", adminOnly(cmdListCourses)))
+	d.AddHandler(handlers.NewCommand("setdlimit", adminOnly(cmdSetDLimit)))
 
 	d.AddHandler(handlers.NewCommand("grantaccess", adminOnly(cmdGrantAccess)))
 	d.AddHandler(handlers.NewCommand("revokeaccess", adminOnly(cmdRevokeAccess)))
@@ -211,6 +213,66 @@ func cmdAddCourse(ctx *ext.Context, u *ext.Update) error {
 	reply(ctx, u, fmt.Sprintf(
 		"✅ Course created\n\nTitle: %s\nID: %s\nPrice: %s\nChannel: %d\n\nMake sure the bot is admin in that channel.\nThen use /syncchannel %s to index existing videos.",
 		course.Title, course.ID.Hex(), course.Price, course.ChannelID, course.ID.Hex(),
+	))
+	return dispatcher.EndGroups
+}
+
+// ── /setdlimit <course_id> <limit> ────────────────────────────────────────────
+// Course साठी per-user daily offline download limit set करतो.
+// Usage: /setdlimit 507f1f77bcf86cd799439011 5
+//        /setdlimit 507f1f77bcf86cd799439011 0   ← 0 = default (3) वापर
+
+func cmdSetDLimit(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	if len(a) < 2 {
+		reply(ctx, u,
+			"Usage: `/setdlimit <course_id> <limit>`\n\n"+
+				"Examples:\n"+
+				"`/setdlimit 507f1f77bcf86cd799439011 5` — 5 downloads/day\n"+
+				"`/setdlimit 507f1f77bcf86cd799439011 1` — 1 download/day\n"+
+				"`/setdlimit 507f1f77bcf86cd799439011 0` — default (3) वर reset\n\n"+
+				"Course IDs बघायला: /listcourses")
+		return dispatcher.EndGroups
+	}
+
+	courseObjID, err := primitive.ObjectIDFromHex(strings.TrimSpace(a[0]))
+	if err != nil {
+		reply(ctx, u, "❌ Invalid course ID. /listcourses वापरा.")
+		return dispatcher.EndGroups
+	}
+
+	var limit int
+	if _, err := fmt.Sscanf(a[1], "%d", &limit); err != nil || limit < 0 {
+		reply(ctx, u, "❌ Limit एक positive number असायला हवे (0 = default 3).")
+		return dispatcher.EndGroups
+	}
+
+	course, err := db.GetCourseByID(courseObjID)
+	if err != nil || course == nil {
+		reply(ctx, u, "❌ Course सापडला नाही.")
+		return dispatcher.EndGroups
+	}
+
+	if err := db.UpdateCourse(courseObjID, bson.M{"download_limit": limit}); err != nil {
+		reply(ctx, u, "❌ DB update error: "+err.Error())
+		return dispatcher.EndGroups
+	}
+
+	displayLimit := limit
+	if displayLimit == 0 {
+		displayLimit = 3
+	}
+	reply(ctx, u, fmt.Sprintf(
+		"✅ Download limit updated!\n\n"+
+			"📚 Course: %s\n"+
+			"⬇️ Daily Limit: %d downloads/user%s",
+		course.Title, displayLimit,
+		func() string {
+			if limit == 0 {
+				return " (default)"
+			}
+			return ""
+		}(),
 	))
 	return dispatcher.EndGroups
 }
