@@ -101,7 +101,7 @@ func sendAdminAlert(ctx *ext.Context, user *db.User, score int) {
 		return
 	}
 
-	usedToday, _ := db.GetDailyUsageCount(user.ID)
+	usedToday, _ := db.GetTotalDailyUsageCount(user.ID)
 	guard, _ := db.GetGuard(user.ID)
 	consecutive := 0
 	if guard != nil {
