@@ -95,7 +95,11 @@ func getRouter(log *zap.Logger) *gin.Engine {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	router := gin.Default()
+	router := gin.New()
+	router.Use(gin.Recovery())
+	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+ 	   SkipPaths: []string{"/", "/courses", "/login"},
+	}))
 	router.Use(gin.ErrorLogger())
 
 	router.LoadHTMLGlob("web/*")
