@@ -60,7 +60,7 @@ func handleUserContact(c *gin.Context) {
 	// Admin email — env madhuun gheto
 	adminEmail := os.Getenv("ADMIN_EMAIL")
 	if adminEmail == "" {
-		adminEmail = "meratakshay22@gmail.com" // default fallback
+		adminEmail = "" // default fallback
 	}
 
 	info := email.UserContactInfo{
