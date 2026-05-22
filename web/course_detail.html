@@ -331,23 +331,16 @@
 
       if (!resp.ok) {
         if (resp.status === 429) {
-          showOfflineModal(null,
-            '⛔ आजचे 5 downloads संपले!',
-            'रात्री 12:00 IST ला reset होतील.',
-            data.used, data.limit);
+          showOfflineModal(null, data.used, data.limit);
         } else {
           alert('❌ Error: ' + (data.error || 'Unknown error'));
         }
         return;
       }
 
-      showOfflineModal(
-        data.token,
-        '✅ Token तयार आहे!',
-        'Telegram bot मध्ये हा command पाठवा:',
-        data.used_today + 1,  // after this token
-        data.limit
-      );
+      // data.bot_link = "https://t.me/botname?start=dl_48271"
+      // User click करेल → Telegram उघडेल → direct video येईल
+      showOfflineModal(data.bot_link, data.used_today + 1, data.limit);
     } catch(e) {
       alert('❌ Network error. पुन्हा प्रयत्न करा.');
     } finally {
@@ -356,14 +349,12 @@
     }
   }
 
-  function showOfflineModal(token, title, subtitle, used, limit) {
-    // Remove old modal if any
+  function showOfflineModal(botLink, used, limit) {
     const old = document.getElementById('offline-modal-overlay');
     if (old) old.remove();
 
-    const command = token ? `/dl ${token}` : null;
-    const botLink = BOT_USERNAME ? `https://t.me/${BOT_USERNAME}` : null;
     const remaining = limit - used;
+    const hasLink = !!botLink;
 
     const overlay = document.createElement('div');
     overlay.id = 'offline-modal-overlay';
@@ -371,41 +362,31 @@
 
     overlay.innerHTML = `
       <div style="background:#1c1c2e;border:1px solid #3f3f52;border-radius:16px;padding:28px 24px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
-        <div style="font-size:2rem;margin-bottom:8px">${token ? '📥' : '⛔'}</div>
-        <div style="font-size:1rem;font-weight:700;color:#e8e9f0;margin-bottom:4px">${title}</div>
-        <div style="font-size:.82rem;color:#9097a5;margin-bottom:${token ? '20px' : '8px'}">${subtitle}</div>
-
-        ${token ? `
-        <div id="offline-token-box" style="background:#111122;border:2px solid #4a4af7;border-radius:10px;padding:14px 18px;font-size:1.4rem;font-weight:900;letter-spacing:.3em;color:#a0a8ff;cursor:pointer;user-select:all;margin-bottom:8px"
-          onclick="copyOfflineCommand('${command}', this)" title="Copy करण्यासाठी click करा">
-          ${token}
+        <div style="font-size:2rem;margin-bottom:8px">${hasLink ? '📥' : '⛔'}</div>
+        <div style="font-size:1rem;font-weight:700;color:#e8e9f0;margin-bottom:4px">
+          ${hasLink ? '✅ Ready! Link click करा' : '⛔ आजचे downloads संपले!'}
         </div>
-        <div style="font-size:.78rem;color:#555;margin-bottom:16px">👆 Token वर click करा copy साठी</div>
+        <div style="font-size:.82rem;color:#9097a5;margin-bottom:20px">
+          ${hasLink ? 'Telegram उघडेल → Bot direct video पाठवेल' : 'रात्री 12:00 IST ला reset होतील.'}
+        </div>
 
-        ${botLink ? `
+        ${hasLink ? `
         <a href="${botLink}" target="_blank"
-          style="display:block;background:#2481cc;color:#fff;text-decoration:none;border-radius:8px;padding:10px 16px;font-size:.88rem;font-weight:600;margin-bottom:12px;text-align:center;">
-          📱 @${BOT_USERNAME} उघडा Telegram मध्ये
-        </a>` : ''}
-
-        <div style="background:#111;border-radius:8px;padding:10px 14px;font-family:monospace;font-size:.9rem;color:#7dd3b0;margin-bottom:16px;cursor:pointer"
-          onclick="copyOfflineCommand('${command}', this)">
-          ${command}
+          style="display:block;background:linear-gradient(135deg,#2481cc,#1a6aaa);color:#fff;text-decoration:none;border-radius:12px;padding:16px 20px;font-size:1rem;font-weight:700;margin-bottom:16px;text-align:center;box-shadow:0 4px 20px rgba(36,129,204,.4);">
+          📱 Telegram मध्ये Video मिळवा
+          <div style="font-size:.75rem;font-weight:400;opacity:.85;margin-top:4px">Click करा → Bot direct पाठवेल</div>
+        </a>
+        <div style="font-size:.78rem;color:#9097a5;margin-bottom:16px;line-height:1.5">
+          🔒 Video forward व save blocked असेल<br>
+          ⏰ Link आज रात्री 12 वाजता expire होईल
         </div>
         ` : ''}
 
         <div style="font-size:.8rem;color:#6b7280;margin-bottom:18px">
           📊 आजचे downloads: <strong style="color:${remaining > 0 ? '#4ade80' : '#f87171'}">${used}/${limit}</strong>
-          ${remaining > 0 ? `&nbsp;(${remaining} शिल्लक)` : '&nbsp;— <span style="color:#f87171">संपले</span>'}
+          ${remaining > 0 ? `&nbsp;(${remaining} शिल्लक)` : `&nbsp;— <span style="color:#f87171">संपले</span>`}
           <br><span style="font-size:.73rem">रात्री 12:00 IST ला reset होतात</span>
         </div>
-
-        ${token ? `
-        <div style="font-size:.78rem;color:#9097a5;margin-bottom:18px;line-height:1.5">
-          🔒 Bot हा video <strong>forward blocked</strong> पाठवेल<br>
-          Token आज रात्री 12 वाजता expire होईल
-        </div>
-        ` : ''}
 
         <button onclick="document.getElementById('offline-modal-overlay').remove()"
           style="background:#3a3a4e;color:#e8e9f0;border:none;border-radius:8px;padding:9px 28px;font-size:.85rem;font-weight:600;cursor:pointer">
