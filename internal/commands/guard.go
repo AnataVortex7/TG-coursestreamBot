@@ -170,7 +170,7 @@ func cmdUserInfo(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	usedToday, _ := db.GetDailyUsageCount(user.ID)
+	usedToday, _ := db.GetTotalDailyUsageCount(user.ID)
 
 	status := "🟢 Active"
 	if g != nil && g.IsBlocked {
