@@ -15,36 +15,37 @@ import (
 
 // ─── Models ──────────────────────────────────────────────────────────────────
 
-// OfflineToken — one record per "📥 Offline" button click on the website.
 type OfflineToken struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
-	Token     string             `bson:"token"`       // 5-digit string e.g. "48271"
-	UserID    primitive.ObjectID `bson:"user_id"`     // website user who generated it
-	CourseID  primitive.ObjectID `bson:"course_id"`   // which course
-	MessageID int                `bson:"message_id"`  // Telegram message id of the video
-	ChannelID int64              `bson:"channel_id"`  // Telegram channel id
-	UseCount  int                `bson:"use_count"`   // how many times redeemed (audit)
+	Token     string             `bson:"token"`
+	UserID    primitive.ObjectID `bson:"user_id"`
+	CourseID  primitive.ObjectID `bson:"course_id"`
+	MessageID int                `bson:"message_id"`
+	ChannelID int64              `bson:"channel_id"`
+	UseCount  int                `bson:"use_count"`
 	CreatedAt time.Time          `bson:"created_at"`
-	ExpiresAt time.Time          `bson:"expires_at"`  // TTL index auto-deletes at midnight IST
+	ExpiresAt time.Time          `bson:"expires_at"`
 }
 
-// OfflineDailyUsage — one doc per (user_id, date_key). date_key = "2006-01-02" IST.
+// OfflineDailyUsage — per (user_id, course_id, date_key) tracking
+// Course-specific limit साठी course_id add केला
 type OfflineDailyUsage struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty"`
 	UserID    primitive.ObjectID `bson:"user_id"`
-	DateKey   string             `bson:"date_key"` // "2006-01-02" in IST
+	CourseID  primitive.ObjectID `bson:"course_id"` // ← course-specific tracking
+	DateKey   string             `bson:"date_key"`  // "2006-01-02" IST
 	Count     int                `bson:"count"`
 	UpdatedAt time.Time          `bson:"updated_at"`
 }
 
 // ─── Sentinel errors ─────────────────────────────────────────────────────────
 
-const offlineDailyMax = 3
+const defaultDailyLimit = 3 // Course वर limit set नसेल तर हा default
 
 var (
 	ErrTokenNotFound     = errors.New("token not found or expired")
 	ErrTokenWrongUser    = errors.New("this token belongs to a different account")
-	ErrDailyLimitReached = fmt.Errorf("daily download limit of %d reached; resets at midnight IST", offlineDailyMax)
+	ErrDailyLimitReached = errors.New("daily download limit reached; resets at midnight IST")
 )
 
 // ─── IST timezone ────────────────────────────────────────────────────────────
@@ -68,18 +69,11 @@ func midnightTomorrowIST() time.Time {
 	return time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, ist)
 }
 
-// ─── Lazy collection accessors ───────────────────────────────────────────────
-// Using functions (not package-level vars) so they are always called AFTER
-// Connect() has initialised Database — zero "undefined" compile issues.
-
-func colOffTok() *mongo.Collection    { return Database.Collection("offline_tokens") }
-func colOffUsage() *mongo.Collection  { return Database.Collection("offline_daily_usage") }
+func colOffTok() *mongo.Collection   { return Database.Collection("offline_tokens") }
+func colOffUsage() *mongo.Collection { return Database.Collection("offline_daily_usage") }
 
 // ─── CreateOfflineToken ───────────────────────────────────────────────────────
 
-// CreateOfflineToken generates a unique 5-digit token for a course video.
-// Called from the web handler when user clicks "📥 Offline".
-// Returns the token string (e.g. "48271") or an error.
 func CreateOfflineToken(userID, courseID primitive.ObjectID, messageID int, channelID int64) (string, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
@@ -103,7 +97,7 @@ func CreateOfflineToken(userID, courseID primitive.ObjectID, messageID int, chan
 		_, err := colOffTok().InsertOne(ctx, doc)
 		if err != nil {
 			if mongo.IsDuplicateKeyError(err) {
-				continue // token collision — retry with new number
+				continue
 			}
 			return "", err
 		}
@@ -114,19 +108,26 @@ func CreateOfflineToken(userID, courseID primitive.ObjectID, messageID int, chan
 
 // ─── RedeemOfflineToken ───────────────────────────────────────────────────────
 
-// RedeemResult carries the file info the bot needs to send the video.
 type RedeemResult struct {
-	MessageID int
-	ChannelID int64
-	CourseID  primitive.ObjectID
+	MessageID     int
+	ChannelID     int64
+	CourseID      primitive.ObjectID
+	UsedToday     int // आज किती downloads झाले (या course साठी)
+	CourseLimit   int // या course चा daily limit
 }
 
-// RedeemOfflineToken validates token ownership, enforces 5/day limit, returns file info.
-func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID) (*RedeemResult, error) {
+// RedeemOfflineToken — token validate करतो, course-specific daily limit enforce करतो.
+// courseLimit = 0 म्हणजे default (3) वापरतो.
+func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID, courseLimit int) (*RedeemResult, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
 
-	// 1. Find token
+	limit := courseLimit
+	if limit <= 0 {
+		limit = defaultDailyLimit
+	}
+
+	// 1. Token शोधतो
 	var tok OfflineToken
 	err := colOffTok().FindOne(ctx, bson.M{"token": tokenStr}).Decode(&tok)
 	if err != nil {
@@ -141,9 +142,13 @@ func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID) (*RedeemResu
 		return nil, ErrTokenWrongUser
 	}
 
-	// 3. Atomically increment daily usage counter
+	// 3. Per-course daily usage atomically increment
 	dateKey := todayKeyIST()
-	filter := bson.M{"user_id": userID, "date_key": dateKey}
+	filter := bson.M{
+		"user_id":   userID,
+		"course_id": tok.CourseID, // ← course-specific
+		"date_key":  dateKey,
+	}
 	update := bson.M{
 		"$inc":         bson.M{"count": 1},
 		"$set":         bson.M{"updated_at": time.Now()},
@@ -159,36 +164,39 @@ func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID) (*RedeemResu
 		return nil, fmt.Errorf("could not update daily usage: %w", err)
 	}
 
-	if usage.Count > offlineDailyMax {
-		// Roll back the increment
+	if usage.Count > limit {
+		// Rollback
 		_, _ = colOffUsage().UpdateOne(ctx, filter, bson.M{"$inc": bson.M{"count": -1}})
 		return nil, ErrDailyLimitReached
 	}
 
-	// 4. Mark token used (audit)
+	// 4. Token use_count audit
 	_, _ = colOffTok().UpdateOne(ctx,
 		bson.M{"_id": tok.ID},
 		bson.M{"$inc": bson.M{"use_count": 1}},
 	)
 
 	return &RedeemResult{
-		MessageID: tok.MessageID,
-		ChannelID: tok.ChannelID,
-		CourseID:  tok.CourseID,
+		MessageID:   tok.MessageID,
+		ChannelID:   tok.ChannelID,
+		CourseID:    tok.CourseID,
+		UsedToday:   usage.Count,
+		CourseLimit: limit,
 	}, nil
 }
 
 // ─── GetDailyUsageCount ───────────────────────────────────────────────────────
 
-// GetDailyUsageCount returns how many downloads the user has done today (IST).
-func GetDailyUsageCount(userID primitive.ObjectID) (int, error) {
+// GetDailyUsageCount — user ने आज या specific course साठी किती downloads केले.
+func GetDailyUsageCount(userID, courseID primitive.ObjectID) (int, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
 
 	var usage OfflineDailyUsage
 	err := colOffUsage().FindOne(ctx, bson.M{
-		"user_id":  userID,
-		"date_key": todayKeyIST(),
+		"user_id":   userID,
+		"course_id": courseID,
+		"date_key":  todayKeyIST(),
 	}).Decode(&usage)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {

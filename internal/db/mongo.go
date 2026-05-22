@@ -67,9 +67,10 @@ type Course struct {
 	Thumbnail   string             `bson:"thumbnail"      json:"thumbnail"`    // telegram file_id or URL
 	Price       string             `bson:"price"          json:"price"`        // display string e.g. "₹999"
 	BuyLink     string             `bson:"buy_link"       json:"buy_link"`     // payment / WhatsApp link
-	ChannelID   int64              `bson:"channel_id"     json:"channel_id"`   // dedicated Telegram channel for this course
-	IsActive    bool               `bson:"is_active"      json:"is_active"`
-	CreatedAt   time.Time          `bson:"created_at"     json:"created_at"`
+	ChannelID     int64              `bson:"channel_id"      json:"channel_id"`    // dedicated Telegram channel for this course
+	IsActive      bool               `bson:"is_active"       json:"is_active"`
+	CreatedAt     time.Time          `bson:"created_at"      json:"created_at"`
+	DownloadLimit int                `bson:"download_limit"  json:"download_limit"` // per-user daily offline download limit (0 = default 3)
 }
 
 // Access — which user can access which course (no expiry by design)
