@@ -1,8 +1,4 @@
 // internal/routes/offline.go
-//
-// POST /api/offline-token
-//   Body: { "course_id": "...", "message_id": 42, "channel_id": -100123456 }
-//   Returns: { "bot_link": "https://t.me/botname?start=dl_48271", ... }
 
 package routes
 
@@ -47,22 +43,35 @@ func handleGenerateOfflineToken(c *gin.Context) {
 		return
 	}
 
+	// Access check
 	hasAccess, err := db.HasAccess(userID, courseObjID)
 	if err != nil || !hasAccess {
 		c.JSON(http.StatusForbidden, gin.H{"error": "you do not have access to this course"})
 		return
 	}
 
-	usedToday, err := db.GetDailyUsageCount(userID)
+	// ── Course-specific limit fetch ───────────────────────────────────────────
+	course, err := db.GetCourseByID(courseObjID)
+	if err != nil || course == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "course not found"})
+		return
+	}
+	limit := course.DownloadLimit
+	if limit <= 0 {
+		limit = 3 // default
+	}
+
+	// आज किती downloads झाले (या course साठी)
+	usedToday, err := db.GetDailyUsageCount(userID, courseObjID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not check daily usage"})
 		return
 	}
-	if usedToday >= 3 {
+	if usedToday >= limit {
 		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": "daily download limit of 3 reached; resets at midnight IST",
+			"error": fmt.Sprintf("daily download limit of %d reached for this course; resets at midnight IST", limit),
 			"used":  usedToday,
-			"limit": 3,
+			"limit": limit,
 		})
 		return
 	}
@@ -73,17 +82,15 @@ func handleGenerateOfflineToken(c *gin.Context) {
 		return
 	}
 
-	// ── Deep link बनवतो ────────────────────────────────────────────────────────
-	// https://t.me/botname?start=dl_48271
-	// User click करेल → Telegram उघडेल → /start dl_48271 → direct video येईल
+	// Deep link: https://t.me/botname?start=dl_48271
 	botLink := fmt.Sprintf("https://t.me/%s?start=dl_%s",
 		config.ValueOf.BotUsername, token)
 
 	c.JSON(http.StatusOK, gin.H{
-		"bot_link":   botLink,           // ← clickable deep link
-		"token":      token,             // (backup साठी)
+		"bot_link":   botLink,
+		"token":      token,
 		"used_today": usedToday,
-		"limit":      3,
-		"remaining":  3 - usedToday,
+		"limit":      limit,
+		"remaining":  limit - usedToday,
 	})
 }
