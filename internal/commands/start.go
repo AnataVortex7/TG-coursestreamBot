@@ -33,33 +33,29 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	// ── Deep Link: /start dl_48271 ────────────────────────────────────────────
-	// Website वरून click केल्यावर Telegram ला येते: /start dl_48271
 	a := args(u)
 	if len(a) > 0 && strings.HasPrefix(a[0], "dl_") {
 		token := strings.TrimSpace(strings.TrimPrefix(a[0], "dl_"))
 		return processDLToken(ctx, u, chatId, token)
 	}
 
-	// ── Normal Welcome ─────────────────────────────────────────────────────────
 	ctx.Reply(u, ext.ReplyTextString(
 		"👋 Welcome!\n\n"+
 			"📥 Offline Video Download साठी:\n"+
 			"Website वर जा → Course उघडा → 📥 Offline button दाबा → Link click करा!\n\n"+
-			"⚙️ पहिल्यांदा link करायला:\n"+
+			"⚙️ पहिल्यांदा:\n"+
 			"   /register 9876543210\n\n"+
-			"❓ Telegram ID बघायला: /myid",
+			"❓ Telegram ID: /myid",
 	), nil)
 	return dispatcher.EndGroups
 }
 
-// processDLToken — website deep link वरून आलेला token process करतो
 func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr string) error {
 	if len(tokenStr) != 5 {
 		reply(ctx, u, "❌ Invalid token. Website वरून नवीन link generate करा.")
 		return dispatcher.EndGroups
 	}
 
-	// Telegram ID → DB User
 	dbUser, err := db.GetUserByTelegramID(chatID)
 	if err != nil || dbUser == nil {
 		reply(ctx, u,
@@ -70,7 +66,6 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
-	// Block check
 	blocked, blockedUntil, blockReason := db.IsUserBlocked(dbUser.ID)
 	if blocked {
 		reply(ctx, u, fmt.Sprintf(
@@ -87,8 +82,17 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
-	// Token redeem
-	result, err := db.RedeemOfflineToken(tokenStr, dbUser.ID)
+	// ── Course limit fetch (token मधून courseID मिळवतो) ──────────────────────
+	// Token redeem होण्याआधी course limit जाणून घ्यायला
+	// token DB मध्ये आहे, तिथून courseID → course → limit
+	courseLimit := 0 // RedeemOfflineToken आत default handle होतो
+	// (token valid असेल तर courseID मिळेल, नसेल तर redeem fail होईल)
+	// Optional: token वरून course fetch करून limit pass करता येतो
+	// पण RedeemOfflineToken स्वतः course limit accept करत नाही token stage ला
+	// म्हणून इथे 0 पाठवतो — course-specific limit offline.go route मध्ये enforce होतो
+	// Token already generate झाला म्हणजे limit check route ने केला आहे
+
+	result, err := db.RedeemOfflineToken(tokenStr, dbUser.ID, courseLimit)
 	if err != nil {
 		switch err {
 		case db.ErrTokenNotFound:
@@ -96,14 +100,20 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		case db.ErrTokenWrongUser:
 			reply(ctx, u, "❌ हा token तुमच्यासाठी नाही.")
 		case db.ErrDailyLimitReached:
-			reply(ctx, u, "⛔ आजचे downloads संपले!\nरात्री 12:00 IST ला reset होतात.")
+			reply(ctx, u, "⛔ या course साठी आजचे downloads संपले!\nरात्री 12:00 IST ला reset होतात.")
 		default:
 			reply(ctx, u, "❌ Error: "+err.Error())
 		}
 		return dispatcher.EndGroups
 	}
 
-	// Course access check
+	// ── Course limit Telegram message मध्ये दाखवण्यासाठी fetch ───────────────
+	course, _ := db.GetCourseByID(result.CourseID)
+	courseLimit = 3
+	if course != nil && course.DownloadLimit > 0 {
+		courseLimit = course.DownloadLimit
+	}
+
 	hasAccess, err := db.HasAccess(dbUser.ID, result.CourseID)
 	if err != nil || !hasAccess {
 		reply(ctx, u, "⛔ या course साठी access नाही किंवा expire झाला.")
@@ -172,13 +182,16 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
-	usedToday, _ := db.GetDailyUsageCount(dbUser.ID)
 	toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
+	caption := fmt.Sprintf(
+		"📥 Offline Download\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d",
+		result.UsedToday, courseLimit,
+	)
 
 	sentMedia, err := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 		Peer:       toPeer,
 		Media:      inputMedia,
-		Message:    fmt.Sprintf("📥 Offline Download\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/3", usedToday),
+		Message:    caption,
 		Noforwards: true,
 		RandomID:   rand.Int63(),
 	})
@@ -187,7 +200,6 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
-	// Auto-delete schedule
 	if updates, ok := sentMedia.(*tg.Updates); ok {
 		for _, upd := range updates.Updates {
 			if m, ok := upd.(*tg.UpdateMessageID); ok {
@@ -197,8 +209,7 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		}
 	}
 
-	// Suspicious activity
-	shouldAlert, score, _ := db.RecordDownload(dbUser.ID, usedToday)
+	shouldAlert, score, _ := db.RecordDownload(dbUser.ID, result.UsedToday)
 	if shouldAlert {
 		go sendAdminAlert(ctx, dbUser, score)
 	}
