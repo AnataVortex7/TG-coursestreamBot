@@ -2,16 +2,16 @@
 //
 // POST /api/offline-token
 //   Body: { "course_id": "...", "message_id": 42, "channel_id": -100123456 }
-//   Returns: { "token": "48271", "expires_at": "...", "used": 2, "limit": 5 }
-//
-// Called by the "📥 Offline" button on the course detail page (JS fetch).
+//   Returns: { "bot_link": "https://t.me/botname?start=dl_48271", ... }
 
 package routes
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 
@@ -47,40 +47,43 @@ func handleGenerateOfflineToken(c *gin.Context) {
 		return
 	}
 
-	// Access check — user must have course access
 	hasAccess, err := db.HasAccess(userID, courseObjID)
 	if err != nil || !hasAccess {
 		c.JSON(http.StatusForbidden, gin.H{"error": "you do not have access to this course"})
 		return
 	}
 
-	// Check today's usage before generating
 	usedToday, err := db.GetDailyUsageCount(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not check daily usage"})
 		return
 	}
-	if usedToday >= 5 {
+	if usedToday >= 3 {
 		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": "daily download limit of 5 reached; resets at midnight IST",
+			"error": "daily download limit of 3 reached; resets at midnight IST",
 			"used":  usedToday,
-			"limit": 5,
+			"limit": 3,
 		})
 		return
 	}
 
-	// Generate token
 	token, err := db.CreateOfflineToken(userID, courseObjID, req.MessageID, req.ChannelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	// ── Deep link बनवतो ────────────────────────────────────────────────────────
+	// https://t.me/botname?start=dl_48271
+	// User click करेल → Telegram उघडेल → /start dl_48271 → direct video येईल
+	botLink := fmt.Sprintf("https://t.me/%s?start=dl_%s",
+		config.ValueOf.BotUsername, token)
+
 	c.JSON(http.StatusOK, gin.H{
-		"token":      token,
-		"used_today": usedToday,     // before this token (so user knows remaining)
-		"limit":      5,
-		"remaining":  5 - usedToday, // remaining AFTER this token will be used
-		"note":       "Send /dl " + token + " to the bot in any Telegram chat",
+		"bot_link":   botLink,           // ← clickable deep link
+		"token":      token,             // (backup साठी)
+		"used_today": usedToday,
+		"limit":      3,
+		"remaining":  3 - usedToday,
 	})
 }
