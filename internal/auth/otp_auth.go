@@ -51,7 +51,8 @@ func SendOTPHandler(c *gin.Context) {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf(
 				"Too many wrong OTP attempts. Try again after %s.",
-				until.Format("3:04 PM, 02 Jan"),
+				ist := time.FixedZone("IST", 5*60*60+30*60)
+                until.In(ist).Format("3:04 PM IST, 02 Jan"),
 			),
 		})
 		return
