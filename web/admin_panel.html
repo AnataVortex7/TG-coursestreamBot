@@ -641,7 +641,8 @@
 
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
-let adminToken = '';
+// adminToken variable काढला — credentials JS मध्ये store होत नाहीत.
+// Login झाल्यावर server HttpOnly cookie set करतो — JS ला दिसत नाही.
 let cachedCourses = [];
 let cachedUsers = [];
 let umAutoRefreshTimer = null;
@@ -650,7 +651,8 @@ let umAutoRefreshTimer = null;
 async function api(path, opts = {}) {
   return fetch('/api/admin' + path, {
     ...opts,
-    headers: { 'Authorization': 'Basic ' + adminToken, 'Content-Type': 'application/json', ...(opts.headers||{}) }
+    credentials: 'same-origin', // cookie automatically जातो — token JS मध्ये नाही
+    headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) }
   });
 }
 
@@ -663,21 +665,29 @@ async function doLogin() {
   if (!u || !p) { err.style.display='block'; err.textContent='❌ User ID ani Password bhara'; return; }
   btn.disabled=true; btn.textContent='⏳ Verifying...'; err.style.display='none';
   try {
-    const token = btoa(u + ':' + p);
-    const res = await fetch('/api/admin/ping', { headers: {'Authorization':'Basic '+token} });
+    // Credentials faqt server la jataat — JS madhe store hot naahi
+    const body = new URLSearchParams({ user: u, pass: p });
+    const res = await fetch('/api/admin/login', {
+      method: 'POST', credentials: 'same-origin', body
+    });
     if (res.ok) {
-      adminToken = token;
       document.getElementById('loginScreen').style.display='none';
       document.getElementById('panelScreen').style.display='flex';
       loadStats(); loadUsers(); loadCourses();
-    } else { err.style.display='block'; err.textContent='❌ Chukicha User ID kiva Password'; }
+    } else {
+      const data = await res.json().catch(()=>({}));
+      err.style.display='block';
+      err.textContent='❌ ' + (data.error || 'Chukicha User ID kiva Password');
+    }
   } catch(e) { err.style.display='block'; err.textContent='❌ Server connect hovu shaklo nahi'; }
   finally { btn.disabled=false; btn.textContent='🔐 Login'; }
 }
 
-function doLogout() {
-  adminToken=''; cachedCourses=[]; cachedUsers=[];
+async function doLogout() {
+  cachedCourses=[]; cachedUsers=[];
   stopUMAutoRefresh();
+  // Server cookie clear karnar
+  await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }).catch(()=>{});
   document.getElementById('panelScreen').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
   document.getElementById('loginUser').value=''; document.getElementById('loginPass').value='';
