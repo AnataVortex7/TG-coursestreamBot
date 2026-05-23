@@ -130,9 +130,17 @@ func DoLogin(c *gin.Context) {
 		return
 	}
 
+	// ── Block check — 4 wrong attempts = 5 hour lock ──────────────────────────
+	if blocked, until := db.CheckLoginBlock(identifier); blocked {
+		fail(fmt.Sprintf("Account locked until %s. Too many wrong attempts.", until.Format("3:04 PM, 02 Jan")))
+		return
+	}
+
 	// Lookup by mobile, email, or username
 	user, err := db.GetUserByMobileOrEmail(identifier)
 	if err != nil || user == nil {
+		// Record fail on unknown identifier too (prevents enumeration timing)
+		db.RecordFailedLogin(identifier)
 		fail("Invalid credentials. Please try again.")
 		return
 	}
@@ -141,9 +149,12 @@ func DoLogin(c *gin.Context) {
 		return
 	}
 	if !CheckPassword(password, user.PasswordHash) {
-		fail("Invalid credentials. Please try again.")
+		_, msg := db.RecordFailedLogin(identifier)
+		fail(msg)
 		return
 	}
+	// ✓ Success — reset counter
+	db.ResetLoginAttempts(identifier)
 
 	// Issue JWT
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)

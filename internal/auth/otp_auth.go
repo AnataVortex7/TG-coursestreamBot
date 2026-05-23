@@ -195,8 +195,17 @@ func DoPasswordLogin(c *gin.Context) {
 		return
 	}
 
+	// ── Block check ─────────────────────────────────────────────────────────────
+	if blocked, until := db.CheckLoginBlock(identifier); blocked {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": fmt.Sprintf("Account locked until %s. Too many wrong attempts.", until.Format("3:04 PM, 02 Jan")),
+		})
+		return
+	}
+
 	user, err := db.GetUserByMobileOrEmail(identifier)
 	if err != nil || user == nil {
+		db.RecordFailedLogin(identifier)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials. Please try again."})
 		return
 	}
@@ -211,9 +220,12 @@ func DoPasswordLogin(c *gin.Context) {
 		return
 	}
 	if !CheckPassword(password, user.PasswordHash) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials. Please try again."})
+		_, msg := db.RecordFailedLogin(identifier)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": msg})
 		return
 	}
+	// ✓ Success — reset counter
+	db.ResetLoginAttempts(identifier)
 
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
