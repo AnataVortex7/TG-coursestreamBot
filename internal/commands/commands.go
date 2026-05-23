@@ -11,7 +11,11 @@ type command struct {
 	log *zap.Logger
 }
 
-var MainBotClient *gotgproto.Client  // ← हे add कर (type import लागेल)
+var MainBotClient *gotgproto.Client  // set from run.go after bot.StartClient
+
+// MainUserbotClient — userbot चा client, bot package import न करता.
+// run.go मध्ये bot.StartUserBotFromDB नंतर set होतो.
+var MainUserbotClient *gotgproto.Client
 
 func Load(log *zap.Logger, dispatcher dispatcher.Dispatcher) {
 	log = log.Named("commands")

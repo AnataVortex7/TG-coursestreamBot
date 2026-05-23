@@ -24,7 +24,6 @@ import (
 	"sync"
 
 	"EverythingSuckz/fsb/config"
-	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
@@ -175,9 +174,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	userbotClient := bot.UserBot.GetClient()
+	userbotClient := MainUserbotClient
 	if userbotClient == nil {
-		reply(ctx, u, "❌ Userbot चालू नाही. USER_SESSION env set करा.")
+		reply(ctx, u, "❌ Userbot चालू नाही. Admin Panel मध्ये TG Login करा किंवा USER_SESSION env set करा.")
 		return dispatcher.EndGroups
 	}
 
@@ -263,7 +262,7 @@ func markCopied(chatID int64, messageID int) bool {
 }
 
 func copyToLogChannel(msg *tg.Message, file *types.File) {
-	botClient := bot.Bot
+	botClient := MainBotClient
 	if botClient == nil {
 		return
 	}
