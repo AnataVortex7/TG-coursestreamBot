@@ -6,10 +6,10 @@ package auth
 import (
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
+	"crypto/rand"
 	"fmt"
 	"log"
-	"crypto/rand"
-    "math/big"
+	"math/big"
 	"net/http"
 	"strings"
 
@@ -35,11 +35,25 @@ func CheckEmailService(c *gin.Context) {
 //   - Returns the same success message whether email exists or not (prevents user enumeration).
 //   - Rate-limited: 1 OTP per 60 seconds per email address.
 //   - OTP is stored as a bcrypt hash — never plain text.
+//   - Blocked emails (cumulative lockout) cannot request new OTPs either.
 func SendOTPHandler(c *gin.Context) {
 	emailAddr := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
 
 	if emailAddr == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Email address is required."})
+		return
+	}
+
+	// ── Cumulative lockout check ──────────────────────────────────────────────
+	// Email locked असल्यास new OTP request पण block करतो.
+	// हे "3 tries × many resets" bypass रोखतो.
+	if locked, until := db.CheckOTPLock(emailAddr); locked {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": fmt.Sprintf(
+				"Too many wrong OTP attempts. Try again after %s.",
+				until.Format("3:04 PM, 02 Jan"),
+			),
+		})
 		return
 	}
 
@@ -80,8 +94,6 @@ func SendOTPHandler(c *gin.Context) {
 
 	// Send via Brevo SMTP
 	if err := email.SendOTP(emailAddr, otpPlain); err != nil {
-		// Log the real error so it appears in Koyeb / Docker logs.
-		// Check: Koyeb dashboard → your app → Logs tab
 		log.Printf("[OTP] SendOTP FAILED for %s: %v", emailAddr, err)
 
 		// Delete the OTP record so the 60-second rate limit does NOT block
@@ -117,6 +129,19 @@ func VerifyOTPHandler(c *gin.Context) {
 		return
 	}
 
+	// ── Cumulative lockout check ──────────────────────────────────────────────
+	// हे check per-OTP attempt limit (3) आधी येतो.
+	// 4 cumulative wrong attempts → 3h lock, नवीन OTP request पण block.
+	if locked, until := db.CheckOTPLock(emailAddr); locked {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": fmt.Sprintf(
+				"Too many wrong OTP attempts. Try again after %s.",
+				until.Format("3:04 PM, 02 Jan"),
+			),
+		})
+		return
+	}
+
 	// Fetch active OTP record
 	rec, err := db.GetValidOTP(emailAddr)
 	if err != nil {
@@ -128,7 +153,7 @@ func VerifyOTPHandler(c *gin.Context) {
 		return
 	}
 
-	// Too many wrong attempts?
+	// Per-OTP attempt limit (max 3 tries on this specific OTP)
 	if rec.Attempts >= maxOTPAttempts {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": "Too many wrong attempts. Please request a new OTP.",
@@ -139,6 +164,14 @@ func VerifyOTPHandler(c *gin.Context) {
 	// Verify OTP (bcrypt compare)
 	if !CheckPassword(otpCode, rec.OTPHash) {
 		_ = db.IncrementOTPAttempts(rec.ID)
+
+		// Cumulative failure count वाढवतो (cross-OTP tracking)
+		nowLocked, lockMsg := db.RecordOTPLockFailure(emailAddr)
+		if nowLocked {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": lockMsg})
+			return
+		}
+
 		remaining := maxOTPAttempts - rec.Attempts - 1
 		if remaining <= 0 {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -152,8 +185,9 @@ func VerifyOTPHandler(c *gin.Context) {
 		return
 	}
 
-	// ✓ OTP correct — consume it
+	// ✓ OTP correct — consume it and reset lockout
 	_ = db.MarkOTPUsed(rec.ID)
+	db.ResetOTPLock(emailAddr)
 
 	// Fetch the user record to issue a session
 	user, err := db.GetUserByMobileOrEmail(emailAddr)
@@ -248,8 +282,7 @@ func DoPasswordLogin(c *gin.Context) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 // generateOTP creates a cryptographically random 4-digit string (1000–9999).
-// AFTER — cryptographically secure
 func generateOTP() string {
-    n, _ := rand.Int(rand.Reader, big.NewInt(9000))
-    return fmt.Sprintf("%d", 1000+n.Int64())
+	n, _ := rand.Int(rand.Reader, big.NewInt(9000))
+	return fmt.Sprintf("%d", 1000+n.Int64())
 }

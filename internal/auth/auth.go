@@ -312,7 +312,20 @@ func VerifyRegistrationOTP(c *gin.Context) {
 		return
 	}
 
-	// Too many wrong attempts?
+	// ── Cumulative lockout check ──────────────────────────────────────────────
+	// Registration OTP पण same lockout pool मध्ये येतो.
+	// 4 cumulative wrong attempts (across any OTP requests) → 3h lock.
+	if locked, until := db.CheckOTPLock(emailAddr); locked {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": fmt.Sprintf(
+				"Too many wrong OTP attempts. Try again after %s.",
+				until.Format("3:04 PM, 02 Jan"),
+			),
+		})
+		return
+	}
+
+	// Per-OTP attempt limit (max 3 tries on this specific OTP)
 	if rec.Attempts >= maxOTPAttempts {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": "Too many wrong attempts. Please register again.",
@@ -323,6 +336,14 @@ func VerifyRegistrationOTP(c *gin.Context) {
 	// Verify OTP
 	if !CheckPassword(otpCode, rec.OTPHash) {
 		_ = db.IncrementPendingAttempts(rec.ID)
+
+		// Cumulative failure count वाढवतो (cross-OTP tracking)
+		nowLocked, lockMsg := db.RecordOTPLockFailure(emailAddr)
+		if nowLocked {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": lockMsg})
+			return
+		}
+
 		remaining := maxOTPAttempts - rec.Attempts - 1
 		if remaining <= 0 {
 			c.JSON(http.StatusUnauthorized, gin.H{
@@ -336,7 +357,8 @@ func VerifyRegistrationOTP(c *gin.Context) {
 		return
 	}
 
-	// ✓ OTP correct — create the user
+	// ✓ OTP correct — reset lockout + create the user
+	db.ResetOTPLock(emailAddr)
 	user, err := db.CreateUserFull("", rec.FullName, rec.Mobile, emailAddr, rec.PasswordHash)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
