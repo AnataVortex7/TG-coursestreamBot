@@ -647,12 +647,25 @@ let cachedCourses = [];
 let cachedUsers = [];
 let umAutoRefreshTimer = null;
 
+// ─── CSRF Helper ──────────────────────────────────────────────────────────────
+// Server GET /admin वर fsb_csrf cookie (non-HttpOnly) set करतो.
+// POST/DELETE requests मध्ये X-CSRF-Token header म्हणून पाठवतो.
+function getCsrfToken() {
+  const match = document.cookie.split('; ').find(r => r.startsWith('fsb_csrf='));
+  return match ? decodeURIComponent(match.split('=')[1]) : '';
+}
+
 // ─── API Helper ───────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
+  const method = (opts.method || 'GET').toUpperCase();
+  const extraHeaders = {};
+  if (method !== 'GET' && method !== 'HEAD') {
+    extraHeaders['X-CSRF-Token'] = getCsrfToken();
+  }
   return fetch('/api/admin' + path, {
     ...opts,
     credentials: 'same-origin', // cookie automatically जातो — token JS मध्ये नाही
-    headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) }
+    headers: { 'Content-Type': 'application/json', ...extraHeaders, ...(opts.headers||{}) }
   });
 }
 
@@ -687,7 +700,11 @@ async function doLogout() {
   cachedCourses=[]; cachedUsers=[];
   stopUMAutoRefresh();
   // Server cookie clear karnar
-  await fetch('/api/admin/logout', { method: 'POST', credentials: 'same-origin' }).catch(()=>{});
+  await fetch('/api/admin/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'X-CSRF-Token': getCsrfToken() }
+  }).catch(()=>{});
   document.getElementById('panelScreen').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
   document.getElementById('loginUser').value=''; document.getElementById('loginPass').value='';
