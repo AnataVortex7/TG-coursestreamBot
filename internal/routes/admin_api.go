@@ -9,11 +9,13 @@ import (
 	"EverythingSuckz/fsb/internal/urlmonitor"
 	"EverythingSuckz/fsb/internal/utils"
 	"context"
-	"encoding/base64"
+	"crypto/rand"
+	"encoding/hex"
 	golog "log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -39,25 +41,70 @@ func adminPass() string {
 	return ""
 }
 
-// ─── Basic-Auth middleware ────────────────────────────────────────────────────
+// ─── Admin session store (in-memory, HttpOnly cookie) ────────────────────────
+// Credentials (ADMIN_USER / ADMIN_PASS) are only checked once at login.
+// A random token is then stored in an HttpOnly cookie — JS can never read it.
 
+var (
+	adminSessions   sync.Map // token(string) → expiry(time.Time)
+	adminCookieName = "fsb_admin"
+	adminSessionTTL = 8 * time.Hour
+)
+
+func genAdminToken() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// adminLogin — POST /api/admin/login
+// Body: form fields "user" and "pass"
+// Sets an HttpOnly cookie. JS never sees the credentials.
+func adminLogin(c *gin.Context) {
+	u := strings.TrimSpace(c.PostForm("user"))
+	p := c.PostForm("pass")
+	if u == "" || p == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "user ani pass required"})
+		return
+	}
+	if u != adminUser() || p != adminPass() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Chukicha credentials"})
+		return
+	}
+	tok := genAdminToken()
+	adminSessions.Store(tok, time.Now().Add(adminSessionTTL))
+	// HttpOnly=true — JS ला token दिसत नाही
+	c.SetCookie(adminCookieName, tok, int(adminSessionTTL.Seconds()), "/", "", false, true)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// adminLogout — POST /api/admin/logout
+func adminLogout(c *gin.Context) {
+	if tok, err := c.Cookie(adminCookieName); err == nil {
+		adminSessions.Delete(tok)
+	}
+	c.SetCookie(adminCookieName, "", -1, "/", "", false, true)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// adminAuthMiddleware — HttpOnly cookie check करतो.
 func adminAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		header := c.GetHeader("Authorization")
-		if !strings.HasPrefix(header, "Basic ") {
+		tok, err := c.Cookie(adminCookieName)
+		if err != nil || tok == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()
 			return
 		}
-		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, "Basic "))
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		val, ok := adminSessions.Load(tok)
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Session expired"})
 			c.Abort()
 			return
 		}
-		parts := strings.SplitN(string(decoded), ":", 2)
-		if len(parts) != 2 || parts[0] != adminUser() || parts[1] != adminPass() {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		if time.Now().After(val.(time.Time)) {
+			adminSessions.Delete(tok)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Session expired"})
 			c.Abort()
 			return
 		}
@@ -68,6 +115,10 @@ func adminAuthMiddleware() gin.HandlerFunc {
 // ─── Register all admin API routes ───────────────────────────────────────────
 
 func (e *allRoutes) LoadAdminAPI(r *Route) {
+	// Public endpoints — no auth required
+	r.Engine.POST("/api/admin/login", adminLogin)
+	r.Engine.POST("/api/admin/logout", adminLogout)
+
 	api := r.Engine.Group("/api/admin", adminAuthMiddleware())
 
 	// Health ping — used by frontend to verify login
