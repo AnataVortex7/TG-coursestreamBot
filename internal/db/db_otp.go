@@ -1,10 +1,11 @@
-// internal/db/otp.go
+// internal/db/db_otp.go
 // OTPRecord model + CRUD helpers for email OTP login.
 // ColOTPs collection is declared here; it is initialised in Connect() inside mongo.go.
 package db
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -13,7 +14,14 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// ─── Model ────────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const (
+	MaxOTPLockAttempts = 4             // 4 wrong attempts → lock
+	OTPLockDuration    = 3 * time.Hour // lock duration
+)
+
+// ─── OTPRecord ────────────────────────────────────────────────────────────────
 
 // OTPRecord stores one OTP request.
 // MongoDB TTL index on expires_at auto-deletes expired records.
@@ -27,7 +35,107 @@ type OTPRecord struct {
 	ExpiresAt time.Time          `bson:"expires_at"` // TTL — MongoDB deletes at this time
 }
 
-// ─── Queries ─────────────────────────────────────────────────────────────────
+// ─── OTPLockout ───────────────────────────────────────────────────────────────
+
+// OTPLockout tracks cumulative failed OTP verification attempts per email.
+// Separate from OTPRecord so it persists across multiple OTP send/verify cycles.
+// Without this, a user can bypass the 3-attempt limit by requesting a new OTP.
+type OTPLockout struct {
+	ID          primitive.ObjectID `bson:"_id,omitempty"`
+	Email       string             `bson:"email"`
+	FailCount   int                `bson:"fail_count"`
+	LockedUntil time.Time          `bson:"locked_until"`
+	IsLocked    bool               `bson:"is_locked"`
+	UpdatedAt   time.Time          `bson:"updated_at"`
+}
+
+func colOTPLockouts() *mongo.Collection {
+	return Database.Collection("otp_lockouts")
+}
+
+// ─── Lockout helpers ──────────────────────────────────────────────────────────
+
+// CheckOTPLock — VerifyOTPHandler च्या सुरुवातीला call करा.
+// locked=true असल्यास until वेळेपर्यंत OTP verification allow करू नका.
+func CheckOTPLock(email string) (locked bool, until time.Time) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var rec OTPLockout
+	err := colOTPLockouts().FindOne(ctx, bson.M{"email": email}).Decode(&rec)
+	if err != nil {
+		return false, time.Time{}
+	}
+	if !rec.IsLocked {
+		return false, time.Time{}
+	}
+	// Auto-unblock झाला का?
+	if time.Now().After(rec.LockedUntil) {
+		_, _ = colOTPLockouts().UpdateOne(ctx,
+			bson.M{"email": email},
+			bson.M{"$set": bson.M{"is_locked": false, "fail_count": 0, "updated_at": time.Now()}},
+		)
+		return false, time.Time{}
+	}
+	return true, rec.LockedUntil
+}
+
+// RecordOTPLockFailure — wrong OTP attempt नंतर call करा.
+// 4 चुकीच्या attempts नंतर email 3 तासांसाठी lock होतो.
+// Returns (nowLocked bool, userMessage string)
+func RecordOTPLockFailure(email string) (nowLocked bool, msg string) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var rec OTPLockout
+	err := colOTPLockouts().FindOne(ctx, bson.M{"email": email}).Decode(&rec)
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return false, ""
+	}
+
+	newCount := rec.FailCount + 1
+	isLocked := newCount >= MaxOTPLockAttempts
+	lockedUntil := time.Time{}
+	if isLocked {
+		lockedUntil = time.Now().Add(OTPLockDuration)
+	}
+
+	update := bson.M{
+		"$set": bson.M{
+			"fail_count":   newCount,
+			"is_locked":    isLocked,
+			"locked_until": lockedUntil,
+			"updated_at":   time.Now(),
+		},
+		"$setOnInsert": bson.M{
+			"_id":   primitive.NewObjectID(),
+			"email": email,
+		},
+	}
+	_, _ = colOTPLockouts().UpdateOne(ctx,
+		bson.M{"email": email},
+		update,
+		options.Update().SetUpsert(true),
+	)
+
+	if isLocked {
+		return true, fmt.Sprintf(
+			"Too many wrong OTP attempts. Try again after %s.",
+			lockedUntil.Format("3:04 PM, 02 Jan"),
+		)
+	}
+	left := MaxOTPLockAttempts - newCount
+	return false, fmt.Sprintf("Wrong OTP. %d attempt(s) left before 3-hour lock.", left)
+}
+
+// ResetOTPLock — successful OTP verify नंतर call करा.
+func ResetOTPLock(email string) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = colOTPLockouts().DeleteOne(ctx, bson.M{"email": email})
+}
+
+// ─── OTPRecord queries ────────────────────────────────────────────────────────
 
 // CreateOTP replaces any previous OTP for email and inserts a new one.
 // hashedOTP must be a bcrypt hash of the plain 4-digit code.
