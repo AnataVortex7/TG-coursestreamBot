@@ -351,10 +351,16 @@ func setAntiDownloadHeaders(c *gin.Context) {
 // Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
 func setPlayerSecurityHeaders(c *gin.Context) {
 	host := config.ValueOf.Host
+	// Worker URLs पण media-src मध्ये add करायला हवेत —
+	// worker redirect नंतर browser CSP block करतो otherwise.
+	mediaSrc := "'self' " + host
+	for _, wu := range config.ValueOf.WorkerURLs {
+		mediaSrc += " " + wu
+	}
 	c.Header("X-Frame-Options", "DENY")
 	c.Header("Content-Security-Policy",
 		"default-src 'self'; "+
-			"media-src 'self' "+host+"; "+
+			"media-src "+mediaSrc+"; "+
 			"script-src 'self' 'unsafe-inline'; "+
 			"style-src 'self' 'unsafe-inline'; "+
 			"img-src 'self' data:; "+
@@ -368,15 +374,14 @@ func setPlayerSecurityHeaders(c *gin.Context) {
 func requirePlayerReferer(c *gin.Context) bool {
 	referer := c.Request.Header.Get("Referer")
 	if referer == "" {
-		// Range requests (video seeking) मध्ये browser Referer पाठवत नाही —
-		// पण nonce check आधीच झाला आहे, त्यामुळे Range requests ला सोडतो.
-		if c.Request.Header.Get("Range") != "" {
-			return true
-		}
-		return false
+		// Nonce check आधीच झाला आहे (step 3b) — nonce valid असणे
+		// म्हणजे request player page वरूनच आली आहे हे verified आहे.
+		// Range requests, worker redirects, काही browsers referer strip करतात —
+		// nonce valid असल्यावर referer नसला तरी allow करतो.
+		return true
 	}
 	host := config.ValueOf.Host
-	// Referer आपल्याच /watch/ page वरून असणे आवश्यक
+	// Referer असल्यास आपल्याच /watch/ page वरून असणे आवश्यक
 	return strings.HasPrefix(referer, host+"/watch/")
 }
 
