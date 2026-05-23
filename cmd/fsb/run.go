@@ -111,7 +111,6 @@ func getRouter(log *zap.Logger) *gin.Engine {
 			Message: "Server is running.",
 			Ok:      true,
 			Uptime:  utils.TimeFormat(uint64(time.Since(startTime).Seconds())),
-			Version: versionString,
 		})
 	})
 
