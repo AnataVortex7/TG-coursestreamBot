@@ -2,6 +2,7 @@
 package routes
 
 import (
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/commands"
 	"EverythingSuckz/fsb/internal/db"
@@ -87,9 +88,10 @@ func adminLogout(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// adminAuthMiddleware — HttpOnly cookie check करतो.
+// adminAuthMiddleware — session check + Origin validation + CSRF (for mutating requests).
 func adminAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// ── 1. Session cookie check ───────────────────────────────────────────
 		tok, err := c.Cookie(adminCookieName)
 		if err != nil || tok == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -108,8 +110,43 @@ func adminAuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+
+		// ── 2. Origin header validation (#6) ──────────────────────────────────
+		// Browser cross-origin requests मध्ये Origin header येतो.
+		// Same-origin requests किंवा non-browser clients मध्ये Origin नसतो — allow.
+		if origin := c.GetHeader("Origin"); origin != "" {
+			if !isAllowedOrigin(origin) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "Invalid origin"})
+				c.Abort()
+				return
+			}
+		}
+
+		// ── 3. CSRF check for mutating methods (#2) ───────────────────────────
+		// CSRFRequired middleware इथे delegate केला —
+		// admin group च्या सर्व POST/DELETE/PUT/PATCH requests validate होतात.
+		auth.CSRFRequired(c)
+		if c.IsAborted() {
+			return
+		}
+
 		c.Next()
 	}
+}
+
+// isAllowedOrigin — Origin header config च्या host शी match करतो.
+// Dev mode मध्ये localhost/127.0.0.1 पण allow करतो.
+func isAllowedOrigin(origin string) bool {
+	host := strings.TrimRight(config.ValueOf.Host, "/")
+	if strings.EqualFold(origin, host) {
+		return true
+	}
+	// Dev mode — localhost allow
+	if config.ValueOf.Dev {
+		return strings.HasPrefix(origin, "http://localhost") ||
+			strings.HasPrefix(origin, "http://127.0.0.1")
+	}
+	return false
 }
 
 // ─── Register all admin API routes ───────────────────────────────────────────

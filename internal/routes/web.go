@@ -46,7 +46,9 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	r.Engine.POST("/login/password", auth.DoPasswordLogin)
 
 	// ── Admin Panel ────────────────────────────────────────────────────────────
-	r.Engine.GET("/admin", func(c *gin.Context) {
+	// EnsureCSRFCookie: page load वर fsb_csrf cookie set करतो.
+	// admin_panel.html JS हा cookie वाचतो आणि X-CSRF-Token header म्हणून पाठवतो.
+	r.Engine.GET("/admin", auth.EnsureCSRFCookie, func(c *gin.Context) {
 		c.HTML(http.StatusOK, "admin_panel.html", gin.H{})
 	})
 
