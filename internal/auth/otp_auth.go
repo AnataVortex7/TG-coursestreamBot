@@ -12,11 +12,14 @@ import (
 	"math/big"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 const maxOTPAttempts = 3
+
+var ist = time.FixedZone("IST", 5*60*60+30*60)
 
 // ─── Service health ───────────────────────────────────────────────────────────
 
@@ -51,8 +54,7 @@ func SendOTPHandler(c *gin.Context) {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf(
 				"Too many wrong OTP attempts. Try again after %s.",
-				ist := time.FixedZone("IST", 5*60*60+30*60)
-                until.In(ist).Format("3:04 PM IST, 02 Jan"),
+				until.In(ist).Format("3:04 PM IST, 02 Jan"),
 			),
 		})
 		return
@@ -137,7 +139,7 @@ func VerifyOTPHandler(c *gin.Context) {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf(
 				"Too many wrong OTP attempts. Try again after %s.",
-				until.Format("3:04 PM, 02 Jan"),
+				until.In(ist).Format("3:04 PM IST, 02 Jan"),
 			),
 		})
 		return
@@ -233,7 +235,10 @@ func DoPasswordLogin(c *gin.Context) {
 	// ── Block check ─────────────────────────────────────────────────────────────
 	if blocked, until := db.CheckLoginBlock(identifier); blocked {
 		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": fmt.Sprintf("Account locked until %s. Too many wrong attempts.", until.Format("3:04 PM, 02 Jan")),
+			"error": fmt.Sprintf(
+				"Account locked until %s. Too many wrong attempts.",
+				until.In(ist).Format("3:04 PM IST, 02 Jan"),
+			),
 		})
 		return
 	}
