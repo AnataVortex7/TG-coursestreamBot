@@ -248,7 +248,6 @@ func downloadAndReupload(ctx context.Context, client *gotgproto.Client, file *ty
 		defer pw.Close()
 		d := downloader.NewDownloader()
 		_, err := d.Download(client.API(), file.Location).
-			WithSize(file.FileSize).
 			DC(file.DCID).
 			ToWriter(ctx, pw)
 		dlErrCh <- err
