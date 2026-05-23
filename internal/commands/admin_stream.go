@@ -1,24 +1,10 @@
 // internal/commands/admin_stream.go
-//
-// Admin-only Telegram bot commands to replace removed HTTP routes:
-//
-//   /adminstream <messageID>
-//       LOG_CHANNEL मधील message ID वरून file bot मध्ये पाठवतो.
-//       (पूर्वी: GET /stream/:messageID)
-//
-//   /userbotdl <chatID> <messageID>
-//       Userbot द्वारे कोणत्याही channel मधून file fetch करतो,
-//       LOG_CHANNEL मध्ये copy करतो, आणि admin ला पाठवतो.
-//       (पूर्वी: GET /dl/:chatID/:messageID)
-//
-// दोन्ही commands adminOnly wrapper मध्ये आहेत —
-// फक्त config.AllowedUsers मध्ये असलेले admin वापरू शकतात.
-
 package commands
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -27,9 +13,12 @@ import (
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
+	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/ext"
+	"github.com/gotd/td/telegram/downloader"
+	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 )
@@ -45,7 +34,6 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 }
 
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
-// LOG_CHANNEL मधील messageID वरून file admin ला पाठवतो.
 
 func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
@@ -71,14 +59,12 @@ func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 
 	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString("⏳ LOG_CHANNEL मधून file आणत आहे..."), nil)
 
-	// LOG_CHANNEL peer resolve करा
 	channelPeer, err := utils.GetLogChannelPeer(ctx, botClient.API(), botClient.PeerStorage)
 	if err != nil {
 		reply(ctx, u, "❌ LOG_CHANNEL access error: "+err.Error())
 		return dispatcher.EndGroups
 	}
 
-	// Message fetch करा
 	res, err := botClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 		Channel: &tg.InputChannel{
 			ChannelID:  channelPeer.ChannelID,
@@ -103,14 +89,12 @@ func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// InputMedia build करा
 	inputMedia, err := buildInputMedia(msg)
 	if err != nil {
 		reply(ctx, u, "❌ Media error: "+err.Error())
 		return dispatcher.EndGroups
 	}
 
-	// Admin ला पाठवा
 	adminChatID := u.EffectiveChat().GetID()
 	toPeer := ctx.PeerStorage.GetInputPeerById(adminChatID)
 
@@ -131,7 +115,6 @@ func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Loading message delete करा
 	if sentMsg != nil {
 		_ = ctx.DeleteMessages(adminChatID, []int{sentMsg.ID})
 	}
@@ -140,8 +123,9 @@ func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ── /userbotdl <chatID> <messageID> ──────────────────────────────────────────
-// Userbot द्वारे कोणत्याही channel मधून file fetch करतो.
-// File LOG_CHANNEL मध्ये copy होतो + admin ला पाठवतो.
+// Forward-restricted channels साठी: InputMediaDocument नाही,
+// Download → Re-upload → InputMediaUploadedDocument वापरतो.
+// त्यामुळे CHAT_FORWARDS_RESTRICTED येत नाही.
 
 func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
@@ -160,7 +144,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// t.me/c/ चा positive ID → MTProto negative form
+	// t.me/c/ positive ID → MTProto negative form
 	var chatID int64
 	if chatIDRaw > 0 {
 		chatID = -1000000000000 - chatIDRaw
@@ -176,15 +160,15 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 	userbotClient := MainUserbotClient
 	if userbotClient == nil {
-		reply(ctx, u, "❌ Userbot चालू नाही. Admin Panel मध्ये TG Login करा किंवा USER_SESSION env set करा.")
+		reply(ctx, u, "❌ Userbot चालू नाही.")
 		return dispatcher.EndGroups
 	}
 
 	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(
-		fmt.Sprintf("⏳ Channel %d मधून message %d fetch करत आहे...", chatIDRaw, msgID),
+		fmt.Sprintf("⏳ Channel %d मधून message %d download करत आहे...", chatIDRaw, msgID),
 	), nil)
 
-	// Userbot द्वारे tg.Message fetch करा (caption साठी)
+	// Message fetch करा (caption साठी)
 	tgMsg, err := utils.GetTGMessageInChannel(ctx, userbotClient, msgID, chatID)
 	if err != nil {
 		reply(ctx, u, "❌ Message fetch error: "+err.Error())
@@ -198,15 +182,31 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// LOG_CHANNEL मध्ये copy करा (once per chatID+messageID)
-	if markCopied(chatID, msgID) {
-		go copyToLogChannel(tgMsg, file)
+	// ── Download + Re-upload (CHAT_FORWARDS_RESTRICTED bypass) ───────────────
+	// InputMediaDocument forward check trigger करतो.
+	// Download करून नवीन file म्हणून upload केल्यास restriction नाही.
+	uploadedFile, err := downloadAndReupload(ctx, userbotClient, file)
+	if err != nil {
+		reply(ctx, u, "❌ Download/Re-upload error: "+err.Error())
+		return dispatcher.EndGroups
 	}
 
-	// Admin ला file पाठवा (userbot द्वारे)
-	adminChatID := u.EffectiveChat().GetID()
+	// InputMediaUploadedDocument — नवीन file, forward नाही
+	inputMedia := &tg.InputMediaUploadedDocument{
+		File:     uploadedFile,
+		MimeType: file.MimeType,
+		Attributes: []tg.DocumentAttributeClass{
+			&tg.DocumentAttributeFilename{FileName: file.FileName},
+		},
+	}
 
-	// Admin चा InputPeer userbot च्या storage मधून मिळवा
+	// LOG_CHANNEL मध्ये copy करा
+	if markCopied(chatID, msgID) {
+		go copyToLogChannelUploaded(tgMsg, inputMedia)
+	}
+
+	// Admin ला पाठवा
+	adminChatID := u.EffectiveChat().GetID()
 	adminPeer := userbotClient.PeerStorage.GetInputPeerById(adminChatID)
 
 	caption := fmt.Sprintf(
@@ -216,8 +216,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		formatSize(file.FileSize),
 	)
 
-	inputMedia := buildInputMediaFromFile(file)
-
 	_, err = userbotClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 		Peer:       adminPeer,
 		Media:      inputMedia,
@@ -226,13 +224,10 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		RandomID:   rand.Int63(),
 	})
 	if err != nil {
-		// Fallback: bot client द्वारे try करा (LOG_CHANNEL मध्ये copy झाल्यावर)
-		reply(ctx, u, "⚠️ Userbot send failed: "+err.Error()+
-			"\n\nFile LOG_CHANNEL मध्ये copy झाली असेल — `/adminstream` वापरा.")
+		reply(ctx, u, "❌ Send error: "+err.Error())
 		return dispatcher.EndGroups
 	}
 
-	// Loading message delete करा
 	if sentMsg != nil {
 		_ = ctx.DeleteMessages(adminChatID, []int{sentMsg.ID})
 	}
@@ -240,10 +235,42 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// ── copyToLogChannel ──────────────────────────────────────────────────────────
-// Userbot द्वारे fetch केलेली file LOG_CHANNEL ला copy करतो.
-// Forward protection bypass: MessagesForwardMessages नाही,
-// MessagesSendMedia (independent re-upload) वापरतो.
+// ── downloadAndReupload ───────────────────────────────────────────────────────
+// File userbot द्वारे download करतो आणि नवीन file म्हणून re-upload करतो.
+// हे CHAT_FORWARDS_RESTRICTED bypass करतो कारण InputMediaDocument नाही.
+
+func downloadAndReupload(ctx context.Context, client *gotgproto.Client, file *types.File) (tg.InputFileClass, error) {
+	pr, pw := io.Pipe()
+
+	// Download goroutine मध्ये
+	dlErrCh := make(chan error, 1)
+	go func() {
+		defer pw.Close()
+		d := downloader.NewDownloader()
+		_, err := d.Download(client.API(), file.Location).
+			WithSize(file.FileSize).
+			DC(file.DCID).
+			ToWriter(ctx, pw)
+		dlErrCh <- err
+	}()
+
+	// Upload (pipe वरून read होतो)
+	u := uploader.NewUploader(client.API())
+	uploadedFile, upErr := u.FromReader(ctx, file.FileName, pr)
+
+	// Download error check करा
+	dlErr := <-dlErrCh
+	if dlErr != nil {
+		return nil, fmt.Errorf("download failed: %w", dlErr)
+	}
+	if upErr != nil {
+		return nil, fmt.Errorf("upload failed: %w", upErr)
+	}
+
+	return uploadedFile, nil
+}
+
+// ── copyToLogChannel (re-uploaded version) ────────────────────────────────────
 
 var (
 	copiedOnce   = make(map[string]struct{})
@@ -260,6 +287,41 @@ func markCopied(chatID int64, messageID int) bool {
 	copiedOnce[key] = struct{}{}
 	return true
 }
+
+func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass) {
+	botClient := MainBotClient
+	if botClient == nil {
+		return
+	}
+
+	bgCtx := context.Background()
+
+	logCh, err := utils.GetLogChannelPeer(bgCtx, botClient.API(), botClient.PeerStorage)
+	if err != nil {
+		utils.Logger.Error("copyToLogChannel: GetLogChannelPeer failed", zap.Error(err))
+		return
+	}
+
+	toPeer := &tg.InputPeerChannel{
+		ChannelID:  logCh.ChannelID,
+		AccessHash: logCh.AccessHash,
+	}
+
+	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, &tg.MessagesSendMediaRequest{
+		Peer:     toPeer,
+		Media:    inputMedia,
+		Message:  msg.GetMessage(),
+		RandomID: rand.Int63(),
+		Silent:   true,
+	})
+	if sendErr != nil {
+		utils.Logger.Error("copyToLogChannel: send failed", zap.Error(sendErr))
+	} else {
+		utils.Logger.Info("copyToLogChannel: copied to log channel")
+	}
+}
+
+// ── copyToLogChannel (old — LOG_CHANNEL साठी, non-restricted) ────────────────
 
 func copyToLogChannel(msg *tg.Message, file *types.File) {
 	botClient := MainBotClient
@@ -304,7 +366,6 @@ func copyToLogChannel(msg *tg.Message, file *types.File) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// buildInputMedia — tg.Message मधून InputMediaClass बनवतो.
 func buildInputMedia(msg *tg.Message) (tg.InputMediaClass, error) {
 	switch m := msg.Media.(type) {
 	case *tg.MessageMediaDocument:
@@ -338,7 +399,6 @@ func buildInputMedia(msg *tg.Message) (tg.InputMediaClass, error) {
 	}
 }
 
-// buildInputMediaFromFile — types.File मधून InputMediaClass बनवतो.
 func buildInputMediaFromFile(file *types.File) tg.InputMediaClass {
 	if file.FileType == "photo" {
 		return &tg.InputMediaPhoto{
@@ -358,14 +418,13 @@ func buildInputMediaFromFile(file *types.File) tg.InputMediaClass {
 	}
 }
 
-// formatSize — bytes ला human-readable string करतो.
 func formatSize(bytes int64) string {
 	switch {
-	case bytes >= 1<<30:
+	case bytes >= 1 << 30:
 		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(1<<30))
-	case bytes >= 1<<20:
+	case bytes >= 1 << 20:
 		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(1<<20))
-	case bytes >= 1<<10:
+	case bytes >= 1 << 10:
 		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(1<<10))
 	default:
 		return fmt.Sprintf("%d B", bytes)
