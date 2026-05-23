@@ -97,7 +97,8 @@ func RecordOTPLockFailure(email string) (nowLocked bool, msg string) {
 	isLocked := newCount >= MaxOTPLockAttempts
 	lockedUntil := time.Time{}
 	if isLocked {
-		lockedUntil = time.Now().Add(OTPLockDuration)
+		ist := time.FixedZone("IST", 5*60*60+30*60)
+        lockedUntil = time.Now().In(ist).Add(OTPLockDuration)
 	}
 
 	update := bson.M{
