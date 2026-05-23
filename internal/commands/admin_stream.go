@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strconv"
 	"sync"
+	"time"
 
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/types"
@@ -126,6 +127,9 @@ func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 // Forward-restricted channels साठी: InputMediaDocument नाही,
 // Download → Re-upload → InputMediaUploadedDocument वापरतो.
 // त्यामुळे CHAT_FORWARDS_RESTRICTED येत नाही.
+//
+// ⚡ सगळे heavy work goroutine मध्ये होतो — handler ताबडतोब return होतो.
+// त्यामुळे streaming site वर कोणताही affect नाही.
 
 func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
@@ -164,82 +168,156 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
+	// ── Initial progress message (synchronous) ────────────────────────────────
 	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(
-		fmt.Sprintf("⏳ Channel %d मधून message %d download करत आहे...", chatIDRaw, msgID),
+		fmt.Sprintf("⏳ Channel `%d` | Msg `%d`\n📡 Starting...", chatIDRaw, msgID),
 	), nil)
 
-	// Message fetch करा (caption साठी)
-	tgMsg, err := utils.GetTGMessageInChannel(ctx, userbotClient, msgID, chatID)
-	if err != nil {
-		reply(ctx, u, "❌ Message fetch error: "+err.Error())
-		return dispatcher.EndGroups
+	sentMsgID := 0
+	if sentMsg != nil {
+		sentMsgID = sentMsg.ID
 	}
-
-	// File metadata fetch करा
-	file, err := utils.FileFromMessageInChannel(ctx, userbotClient, msgID, chatID)
-	if err != nil {
-		reply(ctx, u, "❌ File metadata error: "+err.Error())
-		return dispatcher.EndGroups
-	}
-
-	// ── Download + Re-upload (CHAT_FORWARDS_RESTRICTED bypass) ───────────────
-	// InputMediaDocument forward check trigger करतो.
-	// Download करून नवीन file म्हणून upload केल्यास restriction नाही.
-	uploadedFile, err := downloadAndReupload(ctx, userbotClient, file)
-	if err != nil {
-		reply(ctx, u, "❌ Download/Re-upload error: "+err.Error())
-		return dispatcher.EndGroups
-	}
-
-	// InputMediaUploadedDocument — नवीन file, forward नाही
-	inputMedia := &tg.InputMediaUploadedDocument{
-		File:     uploadedFile,
-		MimeType: file.MimeType,
-		Attributes: []tg.DocumentAttributeClass{
-			&tg.DocumentAttributeFilename{FileName: file.FileName},
-		},
-	}
-
-	// LOG_CHANNEL मध्ये copy करा
-	if markCopied(chatID, msgID) {
-		go copyToLogChannelUploaded(tgMsg, inputMedia)
-	}
-
-	// Admin ला पाठवा
 	adminChatID := u.EffectiveChat().GetID()
 	adminPeer := userbotClient.PeerStorage.GetInputPeerById(adminChatID)
 
-	caption := fmt.Sprintf(
-		"📥 Userbot DL\n📌 Chat: %d | Msg: %d\n📄 File: %s\n💾 Size: %s\n🔒 Forward protected",
-		chatIDRaw, msgID,
-		file.FileName,
-		formatSize(file.FileSize),
-	)
+	// ── Heavy work goroutine मध्ये — handler ताबडतोब return होतो ───────────
+	go func() {
+		bgCtx := context.Background()
 
-	_, err = userbotClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-		Peer:       adminPeer,
-		Media:      inputMedia,
-		Message:    caption,
-		Noforwards: true,
-		RandomID:   rand.Int63(),
-	})
-	if err != nil {
-		reply(ctx, u, "❌ Send error: "+err.Error())
-		return dispatcher.EndGroups
-	}
+		// Progress message edit helper (Telegram flood avoid: min 3s gap)
+		var lastEdit time.Time
+		editMsg := func(text string) {
+			if sentMsgID == 0 {
+				return
+			}
+			if time.Since(lastEdit) < 3*time.Second {
+				return
+			}
+			lastEdit = time.Now()
+			_, _ = userbotClient.API().MessagesEditMessage(bgCtx, &tg.MessagesEditMessageRequest{
+				Peer:    adminPeer,
+				ID:      sentMsgID,
+				Message: text,
+			})
+		}
 
-	if sentMsg != nil {
-		_ = ctx.DeleteMessages(adminChatID, []int{sentMsg.ID})
-	}
+		// Error helper — message edit करतो आणि return
+		failMsg := func(text string) {
+			if sentMsgID == 0 {
+				return
+			}
+			_, _ = userbotClient.API().MessagesEditMessage(bgCtx, &tg.MessagesEditMessageRequest{
+				Peer:    adminPeer,
+				ID:      sentMsgID,
+				Message: text,
+			})
+		}
 
+		// ── Step 1: Message fetch ─────────────────────────────────────────────
+		editMsg(fmt.Sprintf("⏳ Channel `%d` | Msg `%d`\n📡 Fetching message...", chatIDRaw, msgID))
+
+		tgMsg, err := utils.GetTGMessageInChannel(bgCtx, userbotClient, msgID, chatID)
+		if err != nil {
+			failMsg("❌ Message fetch error:\n`" + err.Error() + "`")
+			return
+		}
+
+		// ── Step 2: File metadata ─────────────────────────────────────────────
+		file, err := utils.FileFromMessageInChannel(bgCtx, userbotClient, msgID, chatID)
+		if err != nil {
+			failMsg("❌ File metadata error:\n`" + err.Error() + "`")
+			return
+		}
+
+		editMsg(fmt.Sprintf(
+			"📥 Downloading...\n📄 `%s`\n💾 Size: %s\n⏳ 0%%",
+			file.FileName, formatSize(file.FileSize),
+		))
+
+		// ── Step 3: Download + Re-upload with progress ────────────────────────
+		uploadedFile, err := downloadAndReupload(bgCtx, userbotClient, file,
+			func(written, total int64) {
+				if total <= 0 {
+					return
+				}
+				pct := written * 100 / total
+				bar := progressBar(int(pct))
+				editMsg(fmt.Sprintf(
+					"📥 Downloading...\n📄 `%s`\n💾 %s / %s\n%s %d%%",
+					file.FileName,
+					formatSize(written), formatSize(total),
+					bar, pct,
+				))
+			},
+		)
+		if err != nil {
+			failMsg("❌ Download/Re-upload error:\n`" + err.Error() + "`")
+			return
+		}
+
+		// ── Step 4: Prepare media ─────────────────────────────────────────────
+		editMsg(fmt.Sprintf(
+			"📤 Uploading to Telegram...\n📄 `%s`\n💾 %s",
+			file.FileName, formatSize(file.FileSize),
+		))
+
+		inputMedia := &tg.InputMediaUploadedDocument{
+			File:     uploadedFile,
+			MimeType: file.MimeType,
+			Attributes: []tg.DocumentAttributeClass{
+				&tg.DocumentAttributeFilename{FileName: file.FileName},
+			},
+		}
+
+		// ── Step 5: LOG_CHANNEL copy ──────────────────────────────────────────
+		if markCopied(chatID, msgID) {
+			go copyToLogChannelUploaded(tgMsg, inputMedia)
+		}
+
+		// ── Step 6: Admin ला पाठवा ─────────────────────────────────────────
+		caption := fmt.Sprintf(
+			"📥 Userbot DL\n📌 Chat: %d | Msg: %d\n📄 File: %s\n💾 Size: %s\n🔒 Forward protected",
+			chatIDRaw, msgID,
+			file.FileName,
+			formatSize(file.FileSize),
+		)
+
+		_, err = userbotClient.API().MessagesSendMedia(bgCtx, &tg.MessagesSendMediaRequest{
+			Peer:       adminPeer,
+			Media:      inputMedia,
+			Message:    caption,
+			Noforwards: true,
+			RandomID:   rand.Int63(),
+		})
+		if err != nil {
+			failMsg("❌ Send error:\n`" + err.Error() + "`")
+			return
+		}
+
+		// ── Step 7: Progress message delete ──────────────────────────────────
+		if sentMsgID != 0 {
+			_, _ = userbotClient.API().MessagesDeleteMessages(bgCtx, &tg.MessagesDeleteMessagesRequest{
+				Revoke: true,
+				ID:     []int{sentMsgID},
+			})
+		}
+	}()
+
+	// Handler ताबडतोब return — site वर affect नाही
 	return dispatcher.EndGroups
 }
 
 // ── downloadAndReupload ───────────────────────────────────────────────────────
 // File userbot द्वारे download करतो आणि नवीन file म्हणून re-upload करतो.
 // हे CHAT_FORWARDS_RESTRICTED bypass करतो कारण InputMediaDocument नाही.
+// onProgress: दर काही bytes ला written/total कळवतो.
 
-func downloadAndReupload(ctx context.Context, client *gotgproto.Client, file *types.File) (tg.InputFileClass, error) {
+func downloadAndReupload(
+	ctx context.Context,
+	client *gotgproto.Client,
+	file *types.File,
+	onProgress func(written, total int64),
+) (tg.InputFileClass, error) {
 	pr, pw := io.Pipe()
 
 	// Download goroutine मध्ये
@@ -247,8 +325,16 @@ func downloadAndReupload(ctx context.Context, client *gotgproto.Client, file *ty
 	go func() {
 		defer pw.Close()
 		d := downloader.NewDownloader()
+		var w io.Writer = pw
+		if onProgress != nil {
+			w = &progressWriter{
+				w:          pw,
+				total:      file.FileSize,
+				onProgress: onProgress,
+			}
+		}
 		_, err := d.Download(client.API(), file.Location).
-			Stream(ctx, pw)
+			Stream(ctx, w)
 		dlErrCh <- err
 	}()
 
@@ -266,6 +352,49 @@ func downloadAndReupload(ctx context.Context, client *gotgproto.Client, file *ty
 	}
 
 	return uploadedFile, nil
+}
+
+// ── progressWriter ────────────────────────────────────────────────────────────
+// io.Writer wrapper — दर 5% ला onProgress callback trigger होतो.
+
+type progressWriter struct {
+	w          io.Writer
+	total      int64
+	written    int64
+	lastPct    int64
+	onProgress func(written, total int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.written += int64(n)
+
+	if p.total > 0 {
+		pct := p.written * 100 / p.total
+		// दर 5% ला update (100% आणि 0% सुद्धा)
+		if pct >= p.lastPct+5 || p.written >= p.total {
+			p.lastPct = pct
+			if p.onProgress != nil {
+				p.onProgress(p.written, p.total)
+			}
+		}
+	}
+	return n, err
+}
+
+// ── progressBar ──────────────────────────────────────────────────────────────
+
+func progressBar(pct int) string {
+	filled := pct / 10 // 0–10 blocks
+	bar := ""
+	for i := 0; i < 10; i++ {
+		if i < filled {
+			bar += "▓"
+		} else {
+			bar += "░"
+		}
+	}
+	return bar
 }
 
 // ── copyToLogChannel (re-uploaded version) ────────────────────────────────────
