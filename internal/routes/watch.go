@@ -131,6 +131,7 @@ func handleWatch(c *gin.Context) {
 		downloadURL = "/pdf-download/" + tokenStr
 	}
 
+	setPlayerSecurityHeaders(c)
 	c.HTML(http.StatusOK, "player.html", gin.H{
 		"title":       title,
 		"streamURL":   "/watch-stream/" + tokenStr + "?n=" + nonce,
@@ -189,7 +190,16 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// 3c. Concurrent stream limit
+	// 3c. Referer check — फक्त आपल्या player page वरूनच stream होऊ शकेल
+	if !requirePlayerReferer(c) {
+		c.HTML(http.StatusForbidden, "error.html", gin.H{
+			"code":    403,
+			"message": "Direct stream access is blocked. Please use the course player.",
+		})
+		return
+	}
+
+	// 3d. Concurrent stream limit
 	if r.Method != "HEAD" {
 		release, ok := acquireStream(currentUserID.Hex())
 		if !ok {
@@ -334,6 +344,40 @@ func setAntiDownloadHeaders(c *gin.Context) {
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 	c.Header("Pragma", "no-cache")
 	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("X-Frame-Options", "DENY")
+}
+
+// setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
+// Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
+func setPlayerSecurityHeaders(c *gin.Context) {
+	host := config.ValueOf.Host
+	c.Header("X-Frame-Options", "DENY")
+	c.Header("Content-Security-Policy",
+		"default-src 'self'; "+
+			"media-src 'self' "+host+"; "+
+			"script-src 'self' 'unsafe-inline'; "+
+			"style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data:; "+
+			"connect-src 'self'; "+
+			"frame-ancestors 'none'")
+}
+
+// requirePlayerReferer — watch-stream वर येणारी request
+// आपल्याच /watch/ page वरून आली आहे का ते check करतो.
+// Direct URL access, curl, wget, external downloaders block होतात.
+func requirePlayerReferer(c *gin.Context) bool {
+	referer := c.Request.Header.Get("Referer")
+	if referer == "" {
+		// Range requests (video seeking) मध्ये browser Referer पाठवत नाही —
+		// पण nonce check आधीच झाला आहे, त्यामुळे Range requests ला सोडतो.
+		if c.Request.Header.Get("Range") != "" {
+			return true
+		}
+		return false
+	}
+	host := config.ValueOf.Host
+	// Referer आपल्याच /watch/ page वरून असणे आवश्यक
+	return strings.HasPrefix(referer, host+"/watch/")
 }
 
 // ── /pdf-download/:token ──────────────────────────────────────────────────────
