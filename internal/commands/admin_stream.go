@@ -247,8 +247,14 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		))
 
 		// ── Step 3: Download + Re-upload ─────────────────────────────────────
-		uploadedFile, err := downloadAndReupload(bgCtx, userbotClient, file,
+		// Stall detection: 90s मध्ये progress नाही → cancel → error message
+		stallCtx, stallCancel := context.WithCancel(bgCtx)
+		defer stallCancel()
+		stallTimer := time.AfterFunc(90*time.Second, stallCancel)
+
+		uploadedFile, err := downloadAndReupload(stallCtx, userbotClient, file,
 			func(written, total int64) {
+				stallTimer.Reset(90 * time.Second)
 				if total <= 0 {
 					return
 				}
@@ -262,8 +268,16 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				))
 			},
 		)
+		stallTimer.Stop()
 		if err != nil {
-			failMsg(fmt.Sprintf("❌ Download/Re-upload error:\n`%s`", err.Error()))
+			if stallCtx.Err() != nil {
+				failMsg(fmt.Sprintf(
+					"❌ Download stalled (90s no progress)\n📄 `%s`\n💡 Retry: `/userbotdl %d %d`",
+					file.FileName, chatIDRaw, msgID,
+				))
+			} else {
+				failMsg(fmt.Sprintf("❌ Download/Re-upload error:\n`%s`", err.Error()))
+			}
 			return
 		}
 
