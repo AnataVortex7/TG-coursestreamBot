@@ -14,6 +14,7 @@ import (
 	workerreg "EverythingSuckz/fsb/internal/worker"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/spf13/cobra"
