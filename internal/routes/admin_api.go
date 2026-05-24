@@ -11,7 +11,9 @@ import (
 	"EverythingSuckz/fsb/internal/utils"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
+	fmt "fmt"
 	golog "log"
 	"net/http"
 	"os"
@@ -43,8 +45,6 @@ func adminPass() string {
 }
 
 // ─── Admin session store (in-memory, HttpOnly cookie) ────────────────────────
-// Credentials (ADMIN_USER / ADMIN_PASS) are only checked once at login.
-// A random token is then stored in an HttpOnly cookie — JS can never read it.
 
 var (
 	adminSessions   sync.Map // token(string) → expiry(time.Time)
@@ -58,24 +58,158 @@ func genAdminToken() string {
 	return hex.EncodeToString(b)
 }
 
+// ─── Brute Force Limiter ──────────────────────────────────────────────────────
+// Per-IP: max 5 failed attempts in 15 min → 30 min lockout.
+
+type loginAttempt struct {
+	failures  int
+	lastFail  time.Time
+	lockedAt  time.Time
+}
+
+var (
+	loginAttempts   sync.Map // ip(string) → *loginAttempt
+	maxFailures     = 5
+	window          = 15 * time.Minute
+	lockoutDuration = 30 * time.Minute
+)
+
+func checkBruteForce(ip string) (locked bool, remaining time.Duration) {
+	v, _ := loginAttempts.LoadOrStore(ip, &loginAttempt{})
+	a := v.(*loginAttempt)
+
+	// Lockout active?
+	if !a.lockedAt.IsZero() {
+		unlockAt := a.lockedAt.Add(lockoutDuration)
+		if time.Now().Before(unlockAt) {
+			return true, time.Until(unlockAt)
+		}
+		// Lockout expired — reset
+		a.failures = 0
+		a.lockedAt = time.Time{}
+	}
+
+	// Window expired — reset counter
+	if time.Since(a.lastFail) > window {
+		a.failures = 0
+	}
+	return false, 0
+}
+
+func recordFailure(ip string) {
+	v, _ := loginAttempts.LoadOrStore(ip, &loginAttempt{})
+	a := v.(*loginAttempt)
+	a.failures++
+	a.lastFail = time.Now()
+	if a.failures >= maxFailures {
+		a.lockedAt = time.Now()
+		log.Warn(fmt.Sprintf("Admin brute force lockout: IP %s (%d failures)", ip, a.failures))
+	}
+}
+
+func recordSuccess(ip string) {
+	loginAttempts.Delete(ip) // success → counter reset
+}
+
+// ─── Admin IP whitelist (optional) ───────────────────────────────────────────
+// ADMIN_ALLOWED_IPS="1.2.3.4,5.6.7.8" set केल्यास फक्त त्याच IPs ला login होतो.
+// Not set = all IPs allowed.
+
+func allowedAdminIPs() []string {
+	v := os.Getenv("ADMIN_ALLOWED_IPS")
+	if v == "" {
+		return nil
+	}
+	var ips []string
+	for _, ip := range strings.Split(v, ",") {
+		if trimmed := strings.TrimSpace(ip); trimmed != "" {
+			ips = append(ips, trimmed)
+		}
+	}
+	return ips
+}
+
+func isIPAllowed(ip string) bool {
+	allowed := allowedAdminIPs()
+	if len(allowed) == 0 {
+		return true // whitelist नाही — सर्व allow
+	}
+	for _, a := range allowed {
+		if a == ip {
+			return true
+		}
+	}
+	return false
+}
+
 // adminLogin — POST /api/admin/login
-// Body: form fields "user" and "pass"
-// Sets an HttpOnly cookie. JS never sees the credentials.
 func adminLogin(c *gin.Context) {
+	ip := c.ClientIP()
+
+	// ── 1. IP whitelist check ─────────────────────────────────────────────────
+	if !isIPAllowed(ip) {
+		log.Warn(fmt.Sprintf("Admin login blocked: IP %s not in whitelist", ip))
+		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied"})
+		return
+	}
+
+	// ── 2. Brute force check ──────────────────────────────────────────────────
+	if locked, remaining := checkBruteForce(ip); locked {
+		mins := int(remaining.Minutes()) + 1
+		log.Warn(fmt.Sprintf("Admin login blocked (lockout): IP %s, %dm remaining", ip, mins))
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": fmt.Sprintf("Too many failed attempts. Try again in %d minutes.", mins),
+		})
+		return
+	}
+
+	// ── 3. Credentials ────────────────────────────────────────────────────────
 	u := strings.TrimSpace(c.PostForm("user"))
 	p := c.PostForm("pass")
 	if u == "" || p == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "user ani pass required"})
 		return
 	}
-	if u != adminUser() || p != adminPass() {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Chukicha credentials"})
+
+	// Constant-time comparison — timing attack नाही
+	uOK := subtle.ConstantTimeCompare([]byte(u), []byte(adminUser())) == 1
+	pOK := subtle.ConstantTimeCompare([]byte(p), []byte(adminPass())) == 1
+
+	if !uOK || !pOK {
+		recordFailure(ip)
+		v, _ := loginAttempts.Load(ip)
+		a := v.(*loginAttempt)
+		left := maxFailures - a.failures
+		log.Warn(fmt.Sprintf("Admin login failed: IP %s, user=%q, attempts_left=%d", ip, u, left))
+		if left <= 0 {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": fmt.Sprintf("Too many failed attempts. Locked for %d minutes.", int(lockoutDuration.Minutes())),
+			})
+		} else {
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error": fmt.Sprintf("Invalid credentials. %d attempts remaining.", left),
+			})
+		}
 		return
 	}
+
+	// ── 4. Success ────────────────────────────────────────────────────────────
+	recordSuccess(ip)
+
+	// Single active session — जुने sessions invalidate करतो
+	adminSessions.Range(func(k, _ any) bool {
+		adminSessions.Delete(k)
+		return true
+	})
+
 	tok := genAdminToken()
 	adminSessions.Store(tok, time.Now().Add(adminSessionTTL))
-	// HttpOnly=true — JS ला token दिसत नाही
-	c.SetCookie(adminCookieName, tok, int(adminSessionTTL.Seconds()), "/", "", false, true)
+
+	// Secure=true in production (HTTPS), false in dev
+	secure := !config.ValueOf.Dev
+	c.SetCookie(adminCookieName, tok, int(adminSessionTTL.Seconds()), "/", "", secure, true)
+
+	log.Info(fmt.Sprintf("Admin login success: IP %s", ip))
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
