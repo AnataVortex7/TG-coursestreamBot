@@ -64,7 +64,7 @@ func SendOTPHandler(c *gin.Context) {
 	user, err := db.GetUserByMobileOrEmail(emailAddr)
 	if err != nil || user == nil {
 		// Generic response — don't reveal non-existence
-		c.JSON(http.StatusOK, gin.H{"message": "OTP sent! Check your inbox."})
+		c.JSON(http.StatusOK, gin.H{"message": "If this email is registered, you will receive an OTP shortly."})
 		return
 	}
 	if !user.IsActive {
@@ -109,7 +109,7 @@ func SendOTPHandler(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "OTP sent! Check your inbox."})
+	c.JSON(http.StatusOK, gin.H{"message": "If this email is registered, you will receive an OTP shortly."})
 }
 
 // ─── Verify OTP ───────────────────────────────────────────────────────────────
