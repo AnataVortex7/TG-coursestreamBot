@@ -906,3 +906,59 @@ func SetUserTelegramID(userID primitive.ObjectID, telegramID int64) error {
 	)
 	return err
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WATCH POSITION  (resume playback)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// SaveWatchPosition — user ने video pause/exit केल्यावर position save करा.
+// watch_history च्या existing record मध्येच update होतो — extra collection नाही.
+// seconds < 5 असेल तर ignore (beginning).
+// seconds >= 95% of duration असेल तर 0 save करतो (completed).
+func SaveWatchPosition(userID primitive.ObjectID, messageID int, channelID int64, seconds float64) error {
+	if seconds < 5 {
+		return nil
+	}
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	filter := bson.M{
+		"user_id":    userID,
+		"message_id": messageID,
+		"channel_id": channelID,
+	}
+	update := bson.M{
+		"$set": bson.M{
+			"watch_position":            seconds,
+			"watch_position_updated_at": time.Now(),
+		},
+		// Record नसेल तर insert होतो (RecordView नंतरच call होतो — record असेलच)
+		"$setOnInsert": bson.M{
+			"_id":     primitive.NewObjectID(),
+			"user_id": userID,
+		},
+	}
+	_, err := ColWatchHistory.UpdateOne(ctx, filter, update, options.Update().SetUpsert(true))
+	return err
+}
+
+// GetWatchPosition — player load झाल्यावर saved position मिळव.
+// 0 return = no saved position (first time / completed).
+func GetWatchPosition(userID primitive.ObjectID, messageID int, channelID int64) (float64, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var h WatchHistory
+	err := ColWatchHistory.FindOne(ctx, bson.M{
+		"user_id":    userID,
+		"message_id": messageID,
+		"channel_id": channelID,
+	}).Decode(&h)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	return h.WatchPosition, nil
+}

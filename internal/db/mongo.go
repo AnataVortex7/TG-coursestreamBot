@@ -117,6 +117,9 @@ type WatchHistory struct {
 	CourseID     primitive.ObjectID `bson:"course_id"          json:"course_id"`
 	ViewCount    int                `bson:"view_count"         json:"view_count"`
 	LastViewedAt time.Time          `bson:"last_viewed_at"     json:"last_viewed_at"`
+	// Resume position — user ने video कुठे सोडला ते track करतो
+	WatchPosition          float64   `bson:"watch_position"            json:"watch_position"`
+	WatchPositionUpdatedAt time.Time `bson:"watch_position_updated_at" json:"watch_position_updated_at"`
 }
 
 // Announcement — admin broadcast message shown as popup (global) or course banner (course-specific).
