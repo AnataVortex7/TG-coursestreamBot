@@ -1,9 +1,9 @@
 package routes
 
 import (
+	"crypto/subtle"
 	"net/http"
-	"crypto/subtle"  
-    "os"        
+	"os"
 
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
@@ -32,15 +32,20 @@ type workerRegisterRequest struct {
 	WorkerURL string `json:"worker_url" binding:"required"`
 }
 
-// worker_api.go — handleWorkerRegister मध्ये
 func handleWorkerRegister(c *gin.Context) {
-    // ── Secret check ──────────────────────────────
-    secret := c.GetHeader("X-Worker-Secret")
-    expected := os.Getenv("STREAM_SECRET") // already exists in env
-    if subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) != 1 {
-        c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
-        return
-    }
+	// ── Secret check ──────────────────────────────
+	secret := c.GetHeader("X-Worker-Secret")
+	expected := os.Getenv("STREAM_SECRET")
+	if subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
+		return
+	}
+
+	var req workerRegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_url is required"})
+		return
+	}
 
 	workerreg.RegisterWorker(req.WorkerURL)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -54,6 +59,14 @@ type workerHeartbeatRequest struct {
 }
 
 func handleWorkerHeartbeat(c *gin.Context) {
+	// ── Secret check ──────────────────────────────
+	secret := c.GetHeader("X-Worker-Secret")
+	expected := os.Getenv("STREAM_SECRET")
+	if subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
+		return
+	}
+
 	var req workerHeartbeatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_url is required"})
