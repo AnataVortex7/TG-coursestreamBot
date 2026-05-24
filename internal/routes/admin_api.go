@@ -288,7 +288,7 @@ func isAllowedOrigin(origin string) bool {
 func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// Public endpoints — no auth required
 	r.Engine.POST("/api/admin/login", adminLogin)
-	r.Engine.POST("/api/admin/logout", adminLogout)
+	r.Engine.POST("/api/admin/logout", adminAuthMiddleware(), adminLogout)
 
 	api := r.Engine.Group("/api/admin", adminAuthMiddleware())
 
