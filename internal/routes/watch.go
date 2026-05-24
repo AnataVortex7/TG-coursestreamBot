@@ -50,6 +50,9 @@ func (e *allRoutes) LoadWatch(r *Route) {
 	r.Engine.GET("/watch/:token", auth.RequireAuth, handleWatch)
 	r.Engine.GET("/watch-stream/:token", auth.RequireAuth, handleWatchStream)
 	r.Engine.GET("/pdf-download/:token", auth.RequireAuth, handlePDFDownload)
+
+	// Resume position API
+	r.Engine.POST("/api/watch/position/:token", auth.RequireAuth, handleSavePosition)
 }
 
 // ── /watch/:token ─────────────────────────────────────────────────────────────
@@ -131,12 +134,17 @@ func handleWatch(c *gin.Context) {
 		downloadURL = "/pdf-download/" + tokenStr
 	}
 
+	// Resume position — server-side load (no extra API call from player)
+	resumePos, _ := db.GetWatchPosition(currentUserID, verified.MessageID, verified.ChannelID)
+
 	setPlayerSecurityHeaders(c)
 	c.HTML(http.StatusOK, "player.html", gin.H{
-		"title":       title,
-		"streamURL":   "/watch-stream/" + tokenStr + "?n=" + nonce,
-		"mediaType":   mediaType,
-		"downloadURL": downloadURL,
+		"title":          title,
+		"streamURL":      "/watch-stream/" + tokenStr + "?n=" + nonce,
+		"mediaType":      mediaType,
+		"downloadURL":    downloadURL,
+		"resumePosition": resumePos,
+		"watchToken":     tokenStr,
 	})
 }
 
@@ -338,6 +346,43 @@ localStream:
 			log.Error("stream copy error", zap.Error(err))
 		}
 	}
+}
+
+
+// ── POST /api/watch/position/:token ──────────────────────────────────────────
+// JS player दर 10s ला current position save करतो.
+// Body: {"position": 123.4}
+
+func handleSavePosition(c *gin.Context) {
+	tokenStr := c.Param("token")
+
+	verified, err := token.Verify(tokenStr)
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "invalid token"})
+		return
+	}
+
+	currentUserID := auth.GetUserID(c)
+	tokenUserID, err := primitive.ObjectIDFromHex(verified.UserID)
+	if err != nil || tokenUserID != currentUserID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "token mismatch"})
+		return
+	}
+
+	var body struct {
+		Position float64 `json:"position"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+
+	// Fire-and-forget — player ला wait नको
+	go func() {
+		_ = db.SaveWatchPosition(currentUserID, verified.MessageID, verified.ChannelID, body.Position)
+	}()
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func setAntiDownloadHeaders(c *gin.Context) {
