@@ -271,6 +271,60 @@
     transition: color 0.2s;
   }
   #back-link:hover { color: #fff; }
+
+  /* ── Resume toast ── */
+  #resume-toast {
+    position: absolute;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    background: rgba(18, 18, 28, 0.96);
+    border: 1px solid rgba(124, 106, 247, 0.45);
+    border-radius: 12px;
+    padding: 14px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    min-width: 260px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+    backdrop-filter: blur(8px);
+  }
+  #resume-toast.hidden { display: none !important; }
+  #resume-toast p {
+    font-size: 13px;
+    color: rgba(255,255,255,0.75);
+    margin: 0;
+    text-align: center;
+  }
+  #resume-toast-btns {
+    display: flex;
+    gap: 10px;
+  }
+  #btn-resume {
+    background: #7c6af7;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    padding: 7px 18px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  #btn-resume:hover { background: #6254d4; }
+  #btn-restart {
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.7);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  #btn-restart:hover { background: rgba(255,255,255,0.15); }
 </style>
 </head>
 <body>
@@ -313,6 +367,16 @@
     <div id="spinner"><div class="spin"></div></div>
     <div id="play-flash"><span id="flash-icon">▶</span></div>
 
+
+    <!-- Resume toast — shown when saved position exists -->
+    <div id="resume-toast" class="hidden">
+      <p id="resume-msg">▶ Resume from <strong id="resume-time">0:00</strong></p>
+      <div id="resume-toast-btns">
+        <button id="btn-resume">Resume</button>
+        <button id="btn-restart">Start over</button>
+      </div>
+    </div>
+
     <div id="controls">
       <div id="progress-wrap">
         <div id="progress-fill"></div>
@@ -341,6 +405,10 @@
 <script>
 (function () {
   'use strict';
+
+  // ── Server-injected data ───────────────────────────────────────────────────
+  const RESUME_POSITION = parseFloat('{{ .resumePosition }}') || 0;
+  const WATCH_TOKEN     = '{{ .watchToken }}';
 
   // ── Right-click / drag block (applies to all media types) ─────────────────
   document.addEventListener('contextmenu', e => e.preventDefault());
@@ -392,12 +460,39 @@
   vid.addEventListener('pause', () => { btnPlay.textContent = '▶'; });
 
   // ── Progress ───────────────────────────────────────────────────────────────
+  // ── Auto-save position (every 10s) ────────────────────────────────────────
+  let lastSavedAt = 0;
+  function savePosition(seconds) {
+    if (!WATCH_TOKEN) return;
+    fetch('/api/watch/position/' + WATCH_TOKEN, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position: seconds }),
+      credentials: 'same-origin',
+    }).catch(() => {}); // silent fail — non-critical
+  }
+
   vid.addEventListener('timeupdate', () => {
     if (!vid.duration) return;
     const pct = (vid.currentTime / vid.duration) * 100;
     fill.style.width = pct + '%';
     seek.value = pct;
     timeLbl.textContent = fmt(vid.currentTime) + ' / ' + fmt(vid.duration);
+
+    // Auto-save every 10s
+    const now = Date.now();
+    if (now - lastSavedAt > 10000) {
+      lastSavedAt = now;
+      // 95%+ = video complete, save 0 (next open starts fresh)
+      savePosition(pct >= 95 ? 0 : vid.currentTime);
+    }
+  });
+
+  // Save on page unload (tab close / navigation)
+  window.addEventListener('beforeunload', () => {
+    if (!vid.duration || vid.currentTime < 5) return;
+    const pct = (vid.currentTime / vid.duration) * 100;
+    savePosition(pct >= 95 ? 0 : vid.currentTime);
   });
 
   seek.addEventListener('input', () => {
@@ -456,7 +551,34 @@
   vid.addEventListener('waiting',  () => spinner.classList.remove('hidden'));
   vid.addEventListener('canplay',  () => spinner.classList.add('hidden'));
   vid.addEventListener('playing',  () => spinner.classList.add('hidden'));
-  vid.addEventListener('loadeddata', () => spinner.classList.add('hidden'));
+  vid.addEventListener('loadeddata', () => {
+    spinner.classList.add('hidden');
+
+    // ── Resume toast ─────────────────────────────────────────────────────────
+    if (RESUME_POSITION > 5) {
+      const toast    = document.getElementById('resume-toast');
+      const timeSpan = document.getElementById('resume-time');
+      const btnRes   = document.getElementById('btn-resume');
+      const btnRst   = document.getElementById('btn-restart');
+
+      // Seek to saved position, keep paused
+      vid.currentTime = RESUME_POSITION;
+      timeSpan.textContent = fmt(RESUME_POSITION);
+      toast.classList.remove('hidden');
+      wrap.classList.add('show-controls');
+
+      btnRes.addEventListener('click', () => {
+        toast.classList.add('hidden');
+        vid.play();
+      });
+      btnRst.addEventListener('click', () => {
+        toast.classList.add('hidden');
+        vid.currentTime = 0;
+        savePosition(0); // clear saved position
+        vid.play();
+      });
+    }
+  });
 
   // ── Auto-hide controls ─────────────────────────────────────────────────────
   let hideTimer;
