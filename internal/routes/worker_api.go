@@ -30,12 +30,15 @@ type workerRegisterRequest struct {
 	WorkerURL string `json:"worker_url" binding:"required"`
 }
 
+// worker_api.go — handleWorkerRegister मध्ये
 func handleWorkerRegister(c *gin.Context) {
-	var req workerRegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_url is required"})
-		return
-	}
+    // ── Secret check ──────────────────────────────
+    secret := c.GetHeader("X-Worker-Secret")
+    expected := os.Getenv("STREAM_SECRET") // already exists in env
+    if subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) != 1 {
+        c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
+        return
+    }
 
 	workerreg.RegisterWorker(req.WorkerURL)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
