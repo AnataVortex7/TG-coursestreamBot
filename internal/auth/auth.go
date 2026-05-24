@@ -77,6 +77,22 @@ func parseToken(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
+// ─── Cookie security ─────────────────────────────────────────────────────────
+// Production (DEV=false) मध्ये Secure=true — cookie फक्त HTTPS वरच जातो.
+// Dev mode मध्ये Secure=false — localhost HTTP वर काम करतो.
+
+func isSecureCookie() bool {
+	return os.Getenv("DEV") != "true"
+}
+
+func setCookie(c *gin.Context, value string, maxAge int) {
+	c.SetCookie(cookieName, value, maxAge, "/", "", isSecureCookie(), true)
+}
+
+func deleteCookie(c *gin.Context) {
+	c.SetCookie(cookieName, "", -1, "/", "", isSecureCookie(), true)
+}
+
 // ─── Password helpers ────────────────────────────────────────────────────────
 
 func HashPassword(plain string) (string, error) {
@@ -173,7 +189,7 @@ func DoLogin(c *gin.Context) {
 
 	// Set secure cookie
 	maxAge := int(sessionExpiry.Seconds())
-	c.SetCookie(cookieName, tokenStr, maxAge, "/", "", false, true)
+	setCookie(c, tokenStr, maxAge)
 	c.Redirect(http.StatusFound, "/courses")
 }
 
@@ -380,7 +396,7 @@ func VerifyRegistrationOTP(c *gin.Context) {
 	_ = db.UpsertSession(user.ID, tokenStr, ip, ua, expiresAt)
 
 	maxAge := int(sessionExpiry.Seconds())
-	c.SetCookie(cookieName, tokenStr, maxAge, "/", "", false, true)
+	setCookie(c, tokenStr, maxAge)
 	c.JSON(http.StatusOK, gin.H{"redirect": "/courses"})
 }
 
@@ -389,7 +405,7 @@ func DoLogout(c *gin.Context) {
 	if tok, err := c.Cookie(cookieName); err == nil {
 		_ = db.DeleteSession(tok)
 	}
-	c.SetCookie(cookieName, "", -1, "/", "", false, true)
+	deleteCookie(c)
 	c.Redirect(http.StatusFound, "/login")
 }
 
@@ -457,7 +473,7 @@ func GetSessionToken(c *gin.Context) string {
 // ─── internal ─────────────────────────────────────────────────────────────────
 
 func clearCookie(c *gin.Context) {
-	c.SetCookie(cookieName, "", -1, "/", "", false, true)
+	deleteCookie(c)
 }
 
 func redirectOrUnauthorized(c *gin.Context) {

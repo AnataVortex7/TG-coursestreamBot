@@ -214,7 +214,7 @@ func VerifyOTPHandler(c *gin.Context) {
 	}
 
 	maxAge := int(sessionExpiry.Seconds())
-	c.SetCookie(cookieName, tokenStr, maxAge, "/", "", false, true)
+	setCookie(c, tokenStr, maxAge)
 	c.JSON(http.StatusOK, gin.H{"redirect": "/courses"})
 }
 
@@ -281,7 +281,7 @@ func DoPasswordLogin(c *gin.Context) {
 	}
 
 	maxAge := int(sessionExpiry.Seconds())
-	c.SetCookie(cookieName, tokenStr, maxAge, "/", "", false, true)
+	setCookie(c, tokenStr, maxAge)
 	c.JSON(http.StatusOK, gin.H{"redirect": "/courses"})
 }
 
