@@ -90,6 +90,34 @@ func runApp(cmd *cobra.Command, args []string) {
 	}
 }
 
+// globalSecurityHeaders — सर्व routes वर security headers लावतो.
+// XSS, clickjacking, MIME sniffing, info leak पासून protect करतो.
+func globalSecurityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// Clickjacking — page iframe मध्ये embed होणार नाही
+		c.Header("X-Frame-Options", "DENY")
+
+		// MIME sniffing — browser Content-Type ignore करणार नाही
+		c.Header("X-Content-Type-Options", "nosniff")
+
+		// XSS filter (older browsers साठी)
+		c.Header("X-XSS-Protection", "1; mode=block")
+
+		// Referrer — दुसऱ्या site वर URL leak होणार नाही
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		// HSTS — HTTPS वरच येणे force करतो (production only)
+		if os.Getenv("DEV") != "true" {
+			c.Header("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
+
+		// Server info hide करा
+		c.Header("Server", "")
+
+		c.Next()
+	}
+}
+
 func getRouter(log *zap.Logger) *gin.Engine {
 	if config.ValueOf.Dev {
 		gin.SetMode(gin.DebugMode)
@@ -103,6 +131,7 @@ func getRouter(log *zap.Logger) *gin.Engine {
  	   SkipPaths: []string{"/", "/courses", "/login"},
 	}))
 	router.Use(gin.ErrorLogger())
+	router.Use(globalSecurityHeaders())
 
 	router.LoadHTMLGlob("web/*")
 
@@ -114,14 +143,6 @@ func getRouter(log *zap.Logger) *gin.Engine {
 		})
 	})
 
-	// ── Worker status endpoint (optional — useful for monitoring) ─────────────
-	router.GET("/workers/status", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, gin.H{
-			"ok":      true,
-			"healthy": workerreg.HealthyCount(),
-			"workers": workerreg.Status(),
-		})
-	})
 
 	routes.Load(log, router)
 
