@@ -28,9 +28,10 @@ var (
 	ColWorkers      *mongo.Collection // external streaming workers
 	ColOTPs         *mongo.Collection // email OTP login records (TTL: 10 min)
 	ColPendingRegs  *mongo.Collection // unverified registration records (TTL: 10 min)
-	ColURLMonitors    *mongo.Collection // url monitor — persisted monitored URLs
-	ColWatchHistory   *mongo.Collection // user watch history + view counts
-	ColAnnouncements  *mongo.Collection // admin broadcast announcements
+	ColURLMonitors   *mongo.Collection // url monitor — persisted monitored URLs
+	ColWatchHistory  *mongo.Collection // user watch history + view counts
+	ColAnnouncements *mongo.Collection // admin broadcast announcements
+	ColFolders       *mongo.Collection // course folders (subject-wise grouping)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -67,10 +68,10 @@ type Course struct {
 	Thumbnail   string             `bson:"thumbnail"      json:"thumbnail"`    // telegram file_id or URL
 	Price       string             `bson:"price"          json:"price"`        // display string e.g. "₹999"
 	BuyLink     string             `bson:"buy_link"       json:"buy_link"`     // payment / WhatsApp link
-	ChannelID     int64              `bson:"channel_id"      json:"channel_id"`    // dedicated Telegram channel for this course
-	IsActive      bool               `bson:"is_active"       json:"is_active"`
-	CreatedAt     time.Time          `bson:"created_at"      json:"created_at"`
-	DownloadLimit int                `bson:"download_limit"  json:"download_limit"` // per-user daily offline download limit (0 = default 3)
+	ChannelID     int64            `bson:"channel_id"     json:"channel_id"`   // dedicated Telegram channel for this course
+	IsActive      bool             `bson:"is_active"      json:"is_active"`
+	CreatedAt     time.Time        `bson:"created_at"     json:"created_at"`
+	DownloadLimit int              `bson:"download_limit" json:"download_limit"` // per-user daily offline download limit (0 = default 3)
 }
 
 // Access — which user can access which course (no expiry by design)
@@ -144,6 +145,26 @@ type StreamNonce struct {
 	ExpiresAt  time.Time          `bson:"expires_at"`  // TTL index auto-deletes this
 }
 
+// FolderRange — एका folder मधला एक number range (e.g. 1–26)
+// Start आणि End म्हणजे files चा sort_order (sequential number)
+type FolderRange struct {
+	Start int `bson:"start" json:"start"`
+	End   int `bson:"end"   json:"end"`
+}
+
+// CourseFolder — course मधल्या files ला subject-wise group करतो.
+// एक course मध्ये multiple folders असू शकतात.
+// Ranges म्हणजे sort_order ranges — e.g. [{1,26}, {45,77}]
+// Range बाहेरचे files "Ungrouped" म्हणून दाखवले जातात.
+type CourseFolder struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	CourseID  primitive.ObjectID `bson:"course_id"     json:"course_id"`
+	Name      string             `bson:"name"          json:"name"`
+	Ranges    []FolderRange      `bson:"ranges"        json:"ranges"`
+	Order     int                `bson:"order"         json:"order"`      // display order (1, 2, 3...)
+	CreatedAt time.Time          `bson:"created_at"    json:"created_at"`
+}
+
 // Connect reads MONGODB_URI from env, connects, creates collections + indexes.
 // Call this once at startup (before bot and HTTP server start).
 func Connect() {
@@ -187,6 +208,7 @@ func Connect() {
 	ColURLMonitors  = Database.Collection("url_monitors")            // ← URL monitor
 	ColWatchHistory  = Database.Collection("watch_history")           // ← watch history
 	ColAnnouncements = Database.Collection("announcements")           // ← broadcast announcements
+	ColFolders       = Database.Collection("course_folders")          // ← course folders
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -283,6 +305,10 @@ func createIndexes() {
 	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "user_id", Value: 1}}, true)
 	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "suspicion_score", Value: -1}}, false)
 	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "is_blocked", Value: 1}}, false)
+
+	// course_folders: fast lookup by course_id, ordered by display order
+	ensureIndex(ctx, ColFolders, bson.D{{Key: "course_id", Value: 1}}, false)
+	ensureIndex(ctx, ColFolders, bson.D{{Key: "order", Value: 1}}, false)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
