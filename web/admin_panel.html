@@ -155,10 +155,17 @@
   .auto-refresh-dot{width:7px;height:7px;border-radius:50%;background:#2e7d32;animation:blink 1.4s infinite}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
 
-  /* TG Login steps */
   .tg-step-info{border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px}
   .tg-info-green{background:#e8f5e9;color:#2e7d32}
   .tg-info-orange{background:#fff3e0;color:#e65100}
+
+  /* ── Folder range row ── */
+  .range-row{display:flex;align-items:flex-end;gap:8px;margin-bottom:8px}
+  .range-row .range-inp{flex:1}
+  .range-row .range-inp label{font-size:11px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:4px}
+  .range-row .range-inp input{width:100%;padding:8px 10px;border:1.5px solid #e5e5e5;border-radius:7px;font-size:13px;outline:none;transition:border .15s}
+  .range-row .range-inp input:focus{border-color:#6c63ff}
+  .range-row .remove-range{background:#ffebee;color:#c62828;border:1.5px solid #ffcdd2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:13px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -195,6 +202,10 @@
       </div>
       <div class="nav-item" id="nav-courses" onclick="goto('courses',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Courses
+      </div>
+      <!-- ── NEW: Folders nav ── -->
+      <div class="nav-item" id="nav-folders" onclick="goto('folders',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Folders
       </div>
       <div class="nav-item" id="nav-access" onclick="goto('access',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>Access Control
@@ -350,6 +361,41 @@
       </div>
     </div>
 
+    <!-- FOLDERS (NEW) -->
+    <div class="page" id="page-folders">
+      <div class="page-header">
+        <div class="page-title">📁 Course Folders</div>
+        <div class="page-sub" id="folders-page-sub">Course list madhe "📁 Folders" click kara</div>
+      </div>
+      <div id="folders-no-course-msg" class="card">
+        <div class="card-body" style="text-align:center;padding:40px;color:#aaa">
+          <div style="font-size:40px;margin-bottom:12px">📚</div>
+          <div style="font-size:14px">Courses page var ja → course row madhe "📁 Folders" click kara</div>
+        </div>
+      </div>
+      <div id="folders-main" style="display:none">
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title" id="folders-course-name">—</div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-sm" onclick="loadFolders()">🔄 Refresh</button>
+              <button class="btn btn-primary btn-sm" onclick="openFolderModal(null)">➕ New Folder</button>
+            </div>
+          </div>
+          <div id="folders-body"><div class="loading">⏳ Loading...</div></div>
+        </div>
+        <div class="card" style="background:#fffde7;border-color:#ffe082">
+          <div class="card-body" style="font-size:13px;color:#5d4037;line-height:1.7">
+            <strong>📖 Folder कसे काम करतात?</strong><br>
+            • Folder delete केल्यावर files delete होत नाहीत — त्या <em>Ungrouped</em> म्हणून दिसतात.<br>
+            • Range म्हणजे files चा sequential number (sort_order) — e.g. 1–26 = 1 ते 26 वी file.<br>
+            • एका folder मध्ये multiple ranges असू शकतात — e.g. <code>1–10</code> आणि <code>45–50</code>.<br>
+            • Ranges overlap नसाव्यात.
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- ACCESS CONTROL -->
     <div class="page" id="page-access">
       <div class="page-header">
@@ -462,8 +508,6 @@
         <div class="page-title">📱 Telegram Account Login</div>
         <div class="page-sub">Userbot login kara — restricted channels access saathi</div>
       </div>
-
-      <!-- Status Card -->
       <div class="card">
         <div class="card-head">
           <div class="card-title">📡 Userbot Status</div>
@@ -473,32 +517,20 @@
           <div class="loading">⏳ Status check kartoy...</div>
         </div>
       </div>
-
-      <!-- Login Card — single card, JS controls content -->
       <div class="card" id="tg-login-card" style="display:none">
         <div class="card-head">
           <div class="card-title" id="tg-card-title">🔐 Telegram Phone Login</div>
         </div>
         <div class="card-body">
-          <!-- Info banner -->
           <div id="tg-info-banner" style="display:none;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px"></div>
-
-          <!-- Step label -->
           <div id="tg-step-label" style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px"></div>
-
-          <!-- Single input field — type/placeholder/value changes per step -->
           <div class="form-row">
             <label id="tg-input-label">Phone Number <span class="req">*</span></label>
-            <input id="tg-main-input"
-                   type="tel"
-                   placeholder="+919876543210"
-                   autocomplete="off"
+            <input id="tg-main-input" type="tel" placeholder="+919876543210" autocomplete="off"
                    style="max-width:300px;font-size:15px"
                    onkeydown="if(event.key==='Enter') tgMainAction()" />
             <div class="form-hint" id="tg-input-hint">Country code sah enter kara — India saathi +91</div>
           </div>
-
-          <!-- Action buttons -->
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
             <button class="btn btn-primary" id="tg-main-btn" onclick="tgMainAction()">📨 OTP Pathava</button>
             <button class="btn" id="tg-back-btn" style="display:none" onclick="tgResetLogin()">↩ Maghe</button>
@@ -507,20 +539,17 @@
       </div>
     </div>
 
-    <!-- STATS -->
+    <!-- BROADCAST -->
     <div class="page" id="page-broadcast">
       <div class="page-header">
         <div class="page-title">📢 Broadcast</div>
         <div class="page-sub">Users la announcement pathav — email + in-app</div>
       </div>
-
-      <!-- Send New Broadcast -->
       <div class="card" style="margin-bottom:20px">
         <div class="card-head">
           <div class="card-title">✉️ Nava Broadcast Pathav</div>
         </div>
         <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
-
           <div>
             <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Target *</label>
             <select id="bc-target" onchange="bcTargetChanged()"
@@ -529,7 +558,6 @@
               <option value="course">📖 Course-Specific Users</option>
             </select>
           </div>
-
           <div id="bc-course-row" style="display:none">
             <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Course *</label>
             <select id="bc-course-id"
@@ -537,33 +565,27 @@
               <option value="">— Course निवडा —</option>
             </select>
           </div>
-
           <div>
             <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Announcement Title *</label>
             <input id="bc-title" type="text" placeholder="e.g. New Batch Starting!"
               style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px;box-sizing:border-box" maxlength="150">
           </div>
-
           <div>
             <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Email Subject *</label>
             <input id="bc-subject" type="text" placeholder="e.g. Important Update for Course Students"
               style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px;box-sizing:border-box" maxlength="150">
           </div>
-
           <div>
             <label style="font-size:12px;font-weight:700;color:#888;display:block;margin-bottom:5px">Message *</label>
-            <textarea id="bc-message" rows="5" placeholder="Tumcha message yat lihа..."
+            <textarea id="bc-message" rows="5" placeholder="Tumcha message yat liha..."
               style="width:100%;padding:9px 12px;border:1.5px solid #2a2d3a;border-radius:8px;background:#12141c;color:#e8e9f0;font-size:14px;box-sizing:border-box;resize:vertical" maxlength="2000"></textarea>
           </div>
-
           <div style="display:flex;gap:10px;align-items:center">
             <button class="btn btn-primary" onclick="sendBroadcast()" id="bc-send-btn">📤 Broadcast Pathav</button>
             <div id="bc-status" style="font-size:13px;color:#888"></div>
           </div>
         </div>
       </div>
-
-      <!-- Active Announcements List -->
       <div class="card">
         <div class="card-head">
           <div class="card-title">📋 Sagalya Announcements</div>
@@ -573,6 +595,7 @@
       </div>
     </div>
 
+    <!-- STATS -->
     <div class="page" id="page-stats">
       <div class="page-header">
         <div class="page-title">Stats</div>
@@ -587,10 +610,10 @@
       </div>
     </div>
 
-  </div>
-</div>
+  </div><!-- /main -->
+</div><!-- /layout -->
 
-<!-- Confirm Modal -->
+<!-- ── Confirm Modal ── -->
 <div class="modal-overlay" id="delModal">
   <div class="modal">
     <div class="modal-title" id="modal-title">Confirm kara</div>
@@ -602,7 +625,7 @@
   </div>
 </div>
 
-<!-- History Modal -->
+<!-- ── History Modal ── -->
 <div class="modal-overlay" id="historyModal">
   <div class="modal modal-wide">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
@@ -616,7 +639,7 @@
   </div>
 </div>
 
-<!-- Send Message Modal -->
+<!-- ── Send Message Modal ── -->
 <div class="modal-overlay" id="msgModal">
   <div class="modal" style="max-width:500px">
     <div class="modal-title">📩 Send Message to User</div>
@@ -639,17 +662,37 @@
   </div>
 </div>
 
+<!-- ── Folder Create / Edit Modal (NEW) ── -->
+<div class="modal-overlay" id="folderModal">
+  <div class="modal" style="max-width:540px;max-height:90vh;overflow-y:auto">
+    <div class="modal-title" id="folder-modal-title">📁 Nava Folder</div>
+    <div class="form-row" style="margin-top:16px">
+      <label>Folder Name <span class="req">*</span></label>
+      <input type="text" id="fm-name" placeholder="e.g. Unit 1 - Basics" maxlength="80" />
+    </div>
+    <div style="font-size:12px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">
+      File Ranges <span class="req">*</span>
+    </div>
+    <div id="fm-ranges-wrap"></div>
+    <button class="btn btn-sm" style="margin-top:4px;margin-bottom:12px" onclick="addFolderRange()">➕ Range Add Kara</button>
+    <div style="font-size:11px;color:#999;margin-bottom:16px;line-height:1.6">
+      Range म्हणजे files चा sequential number (sort_order).<br>
+      e.g. <strong>1–26</strong> म्हणजे 1 ते 26 वी file. Multiple ranges असू शकतात.
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeFolderModal()">Cancel</button>
+      <button class="btn btn-primary" id="folder-modal-save" onclick="saveFolder()">💾 Save Folder</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
-// adminToken variable काढला — credentials JS मध्ये store होत नाहीत.
-// Login झाल्यावर server HttpOnly cookie set करतो — JS ला दिसत नाही.
 let cachedCourses = [];
 let cachedUsers = [];
 let umAutoRefreshTimer = null;
 
 // ─── CSRF Helper ──────────────────────────────────────────────────────────────
-// Server GET /admin वर fsb_csrf cookie (non-HttpOnly) set करतो.
-// POST/DELETE requests मध्ये X-CSRF-Token header म्हणून पाठवतो.
 function getCsrfToken() {
   const match = document.cookie.split('; ').find(r => r.startsWith('fsb_csrf='));
   return match ? decodeURIComponent(match.split('=')[1]) : '';
@@ -664,7 +707,7 @@ async function api(path, opts = {}) {
   }
   return fetch('/api/admin' + path, {
     ...opts,
-    credentials: 'same-origin', // cookie automatically जातो — token JS मध्ये नाही
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', ...extraHeaders, ...(opts.headers||{}) }
   });
 }
@@ -678,11 +721,8 @@ async function doLogin() {
   if (!u || !p) { err.style.display='block'; err.textContent='❌ User ID ani Password bhara'; return; }
   btn.disabled=true; btn.textContent='⏳ Verifying...'; err.style.display='none';
   try {
-    // Credentials faqt server la jataat — JS madhe store hot naahi
     const body = new URLSearchParams({ user: u, pass: p });
-    const res = await fetch('/api/admin/login', {
-      method: 'POST', credentials: 'same-origin', body
-    });
+    const res = await fetch('/api/admin/login', { method: 'POST', credentials: 'same-origin', body });
     if (res.ok) {
       document.getElementById('loginScreen').style.display='none';
       document.getElementById('panelScreen').style.display='flex';
@@ -699,15 +739,14 @@ async function doLogin() {
 async function doLogout() {
   cachedCourses=[]; cachedUsers=[];
   stopUMAutoRefresh();
-  // Server cookie clear karnar
   await fetch('/api/admin/logout', {
-    method: 'POST',
-    credentials: 'same-origin',
+    method: 'POST', credentials: 'same-origin',
     headers: { 'X-CSRF-Token': getCsrfToken() }
   }).catch(()=>{});
   document.getElementById('panelScreen').style.display='none';
   document.getElementById('loginScreen').style.display='flex';
-  document.getElementById('loginUser').value=''; document.getElementById('loginPass').value='';
+  document.getElementById('loginUser').value='';
+  document.getElementById('loginPass').value='';
   document.getElementById('loginErr').style.display='none';
 }
 
@@ -717,109 +756,15 @@ function goto(name, el) {
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-'+name).classList.add('active');
   if (el) el.classList.add('active');
-  if (name==='users') loadUsers();
-  if (name==='courses') loadCourses();
-  if (name==='sessions') loadSessions();
-  if (name==='stats') loadDetailStats();
-  if (name==='access') { loadUsers(); loadCourses(); }
-  if (name==='tglogin') loadTGStatus();
-  if (name==='broadcast') { loadAnnouncements(); loadCoursesForBroadcast(); }
-  if (name==='urlmonitor') { loadURLMonitor(); startUMAutoRefresh(); }
+  if (name==='users')       loadUsers();
+  if (name==='courses')     loadCourses();
+  if (name==='sessions')    loadSessions();
+  if (name==='stats')       loadDetailStats();
+  if (name==='access')      { loadUsers(); loadCourses(); }
+  if (name==='tglogin')     loadTGStatus();
+  if (name==='broadcast')   { loadAnnouncements(); loadCoursesForBroadcast(); }
+  if (name==='urlmonitor')  { loadURLMonitor(); startUMAutoRefresh(); }
   else stopUMAutoRefresh();
-}
-
-// ─── Broadcast ────────────────────────────────────────────────────────────────
-async function loadCoursesForBroadcast() {
-  try {
-    const res = await api('/courses');
-    const data = await res.json();
-    const sel = document.getElementById('bc-course-id');
-    sel.innerHTML = '<option value="">— Course निवडा —</option>';
-    (data||[]).forEach(c => {
-      const o = document.createElement('option');
-      o.value = c.id; o.textContent = c.title;
-      sel.appendChild(o);
-    });
-  } catch(e) { /* silent */ }
-}
-
-function bcTargetChanged() {
-  const t = document.getElementById('bc-target').value;
-  document.getElementById('bc-course-row').style.display = t==='course' ? '' : 'none';
-}
-
-async function sendBroadcast() {
-  const target  = document.getElementById('bc-target').value;
-  const title   = document.getElementById('bc-title').value.trim();
-  const subject = document.getElementById('bc-subject').value.trim();
-  const message = document.getElementById('bc-message').value.trim();
-  const courseID= document.getElementById('bc-course-id').value;
-  const btn     = document.getElementById('bc-send-btn');
-  const status  = document.getElementById('bc-status');
-
-  if (!title || !subject || !message) { toast('Title, subject ani message bhara', 'error'); return; }
-  if (target === 'course' && !courseID) { toast('Course निवडा', 'error'); return; }
-
-  btn.disabled = true; status.textContent = '⏳ Pathavt aahe...';
-  try {
-    const body = JSON.stringify(Object.assign({ title, subject, message, target }, target==='course' ? {course_id: courseID} : {}));
-    const res  = await api('/broadcast', { method:'POST', body });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Server error');
-    toast(`✅ Broadcast suru! ${data.email_queued} users la email queue madhe`, 'success');
-    status.textContent = `✅ ${data.email_queued} emails queued`;
-    document.getElementById('bc-title').value = '';
-    document.getElementById('bc-subject').value = '';
-    document.getElementById('bc-message').value = '';
-    loadAnnouncements();
-  } catch(e) {
-    toast('Broadcast failed: ' + (e.message||e), 'error');
-    status.textContent = '';
-  }
-  btn.disabled = false;
-}
-
-async function loadAnnouncements() {
-  const el = document.getElementById('bc-list');
-  if (!el) return;
-  el.innerHTML = '<div class="loading">⏳ Loading...</div>';
-  try {
-    const res  = await api('/announcements');
-    const list = await res.json();
-    if (!list || list.length === 0) {
-      el.innerHTML = '<div style="text-align:center;color:#555;padding:20px">Koi announcements nahi</div>';
-      return;
-    }
-    el.innerHTML = list.map(a => {
-      const scope = a.course_id ? `<span style="background:#6c63ff22;color:#a89fff;padding:2px 8px;border-radius:10px;font-size:11px">📖 Course</span>`
-                                : `<span style="background:#22c55e22;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:11px">🌐 Global</span>`;
-      const active = a.is_active
-        ? `<span style="background:#22c55e22;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:11px">Active</span>`
-        : `<span style="background:#f59e0b22;color:#fbbf24;padding:2px 8px;border-radius:10px;font-size:11px">Deleted</span>`;
-      const date = new Date(a.created_at).toLocaleString('en-IN');
-      return `<div style="background:#12141c;border:1px solid #2a2d3a;border-radius:10px;padding:14px 16px;margin-bottom:10px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-          <span style="font-weight:700;color:#e8e9f0;font-size:14px">${esc(a.title)}</span>
-          ${scope} ${active}
-          <span style="color:#555;font-size:11px;margin-left:auto">${date}</span>
-        </div>
-        <div style="color:#9097a5;font-size:13px;margin-bottom:10px;white-space:pre-line">${esc(a.message)}</div>
-        ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteAnnouncement('${a.id}')">🗑 Delete</button>` : ''}
-      </div>`;
-    }).join('');
-  } catch(e) {
-    el.innerHTML = `<div style="color:#f87171">Error: ${esc(e.message||String(e))}</div>`;
-  }
-}
-
-async function deleteAnnouncement(id) {
-  openModal('Announcement Delete', 'Ha announcement delete kara? (users la disanar nahi)', async () => {
-    try {
-      await api('/announcements/' + id, { method:'DELETE' });
-      toast('Announcement deleted', 'success');
-      loadAnnouncements();
-    } catch(e) { toast('Delete failed', 'error'); }
-  });
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
@@ -957,9 +902,7 @@ function deleteUser(id, name) {
   });
 }
 
-// ─── Messaging Modal ──────────────────────────────────────────────────────────
 let msgTargetUserID = '';
-
 function openMsgModal(userId, fullName, email) {
   msgTargetUserID = userId;
   document.getElementById('msg-modal-to').textContent = 'To: ' + fullName + ' <' + email + '>';
@@ -970,21 +913,16 @@ function openMsgModal(userId, fullName, email) {
   document.getElementById('msg-send-btn').textContent = '📤 Send Email';
   document.getElementById('msgModal').classList.add('open');
 }
-
 function closeMsgModal() {
   document.getElementById('msgModal').classList.remove('open');
   msgTargetUserID = '';
 }
-
 document.addEventListener('DOMContentLoaded', function() {
   const bodyEl = document.getElementById('msg-body');
-  if (bodyEl) {
-    bodyEl.addEventListener('input', function() {
-      document.getElementById('msg-char-count').textContent = this.value.length;
-    });
-  }
+  if (bodyEl) bodyEl.addEventListener('input', function() {
+    document.getElementById('msg-char-count').textContent = this.value.length;
+  });
 });
-
 async function sendMsgToUser() {
   const subject = document.getElementById('msg-subject').value.trim();
   const message = document.getElementById('msg-body').value.trim();
@@ -994,22 +932,11 @@ async function sendMsgToUser() {
   const btn = document.getElementById('msg-send-btn');
   btn.disabled = true; btn.textContent = '⏳ Sending...';
   try {
-    const res = await api('/send-message', {
-      method: 'POST',
-      body: JSON.stringify({ user_id: msgTargetUserID, subject, message })
-    });
+    const res = await api('/send-message', { method: 'POST', body: JSON.stringify({ user_id: msgTargetUserID, subject, message }) });
     const d = await res.json();
-    if (res.ok && d.ok) {
-      toast('✅ Message ' + (d.email || '') + ' var pathavla!');
-      closeMsgModal();
-    } else {
-      toast('❌ ' + (d.error || 'Message pathavta ala nahi'), 'error');
-      btn.disabled = false; btn.textContent = '📤 Send Email';
-    }
-  } catch {
-    toast('❌ Network error', 'error');
-    btn.disabled = false; btn.textContent = '📤 Send Email';
-  }
+    if (res.ok && d.ok) { toast('✅ Message ' + (d.email || '') + ' var pathavla!'); closeMsgModal(); }
+    else { toast('❌ ' + (d.error || 'Message pathavta ala nahi'), 'error'); btn.disabled = false; btn.textContent = '📤 Send Email'; }
+  } catch { toast('❌ Network error', 'error'); btn.disabled = false; btn.textContent = '📤 Send Email'; }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1047,7 +974,7 @@ async function loadCourses() {
     populateCourseDropdowns();
     if (!wrap) return;
     if (!cachedCourses.length){ wrap.innerHTML='<div class="empty"><div class="empty-icon">📚</div>Koni course nahi yet</div>'; return; }
-    let h='<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Channel ID</th><th style="width:180px">Actions</th></tr></thead><tbody>';
+    let h='<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Channel ID</th><th style="width:220px">Actions</th></tr></thead><tbody>';
     cachedCourses.forEach((c,i)=>{
       const syncRowId='sync-row-'+i;
       h+=`<tr>
@@ -1057,6 +984,7 @@ async function loadCourses() {
         <td style="font-family:monospace;font-size:11px;color:#888">${c.channel_id}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px">
           <button class="btn btn-warning btn-sm" onclick="toggleSync('${syncRowId}')">🔄 Sync</button>
+          <button class="btn btn-info btn-sm" onclick="openFoldersForCourse('${c.id}','${esc(c.title)}')">📁 Folders</button>
           <button class="btn btn-danger btn-sm" onclick="deleteCourse('${c.id}','${esc(c.title)}')">🗑 Delete</button>
         </td>
       </tr>
@@ -1126,6 +1054,253 @@ function deleteCourse(id, title) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// FOLDERS (NEW)
+// ═══════════════════════════════════════════════════════════════════════════════
+let folderCurrentCourseID   = null;
+let folderCurrentCourseName = null;
+let folderEditID            = null; // null = create mode, string = edit mode
+
+// Course table madhe "📁 Folders" click → folders page open
+function openFoldersForCourse(courseId, courseTitle) {
+  folderCurrentCourseID   = courseId;
+  folderCurrentCourseName = courseTitle;
+  document.getElementById('folders-course-name').textContent = '📚 ' + courseTitle;
+  document.getElementById('folders-page-sub').textContent    = courseTitle + ' — folders manage kara';
+  document.getElementById('folders-no-course-msg').style.display = 'none';
+  document.getElementById('folders-main').style.display = 'block';
+  goto('folders', document.getElementById('nav-folders'));
+  loadFolders();
+}
+
+async function loadFolders() {
+  if (!folderCurrentCourseID) return;
+  const wrap = document.getElementById('folders-body');
+  wrap.innerHTML = '<div class="loading">⏳ Loading folders...</div>';
+  try {
+    const res   = await api('/courses/' + folderCurrentCourseID + '/folders');
+    const data  = await res.json();
+    const folders = data.folders || [];
+    if (!folders.length) {
+      wrap.innerHTML = '<div class="empty"><div class="empty-icon">📁</div>Koni folder nahi — "New Folder" click kara</div>';
+      return;
+    }
+    let h = '<div class="table-wrap"><table><thead><tr><th>#</th><th>Folder Name</th><th>Ranges</th><th>Actions</th></tr></thead><tbody>';
+    folders.forEach((f, i) => {
+      const ranges = (f.ranges||[]).map(r =>
+        `<span class="badge badge-purple">${r.start}–${r.end}</span>`
+      ).join(' ');
+      h += `<tr>
+        <td style="color:#aaa;font-size:12px">${i+1}</td>
+        <td><strong>${esc(f.name)}</strong></td>
+        <td style="display:flex;gap:4px;flex-wrap:wrap;padding:12px 14px">${ranges||'<span class="badge badge-gray">—</span>'}</td>
+        <td>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-warning btn-sm" onclick='openFolderModal(${JSON.stringify(f)})'>✏️ Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteFolderConfirm('${f.id}','${esc(f.name)}')">🗑 Delete</button>
+          </div>
+        </td>
+      </tr>`;
+    });
+    h += '</tbody></table></div>';
+    wrap.innerHTML = h;
+  } catch(e) {
+    wrap.innerHTML = '<div class="empty"><div class="empty-icon">❌</div>Folders load hovu shakle nahi</div>';
+  }
+}
+
+// Folder modal open — folder=null means create, folder=object means edit
+function openFolderModal(folder) {
+  folderEditID = folder ? folder.id : null;
+  document.getElementById('folder-modal-title').textContent = folder ? '✏️ Folder Edit Kara' : '📁 Nava Folder';
+  document.getElementById('fm-name').value = folder ? folder.name : '';
+
+  const wrap = document.getElementById('fm-ranges-wrap');
+  wrap.innerHTML = '';
+  const ranges = folder ? (folder.ranges || []) : [{ start: '', end: '' }];
+  ranges.forEach(r => appendRangeRow(r.start, r.end));
+
+  document.getElementById('folderModal').classList.add('open');
+  setTimeout(() => document.getElementById('fm-name').focus(), 100);
+}
+
+function closeFolderModal() {
+  document.getElementById('folderModal').classList.remove('open');
+  folderEditID = null;
+}
+
+function appendRangeRow(start, end) {
+  const wrap = document.getElementById('fm-ranges-wrap');
+  const row  = document.createElement('div');
+  row.className = 'range-row';
+  row.innerHTML = `
+    <div class="range-inp">
+      <label>Start #</label>
+      <input type="number" min="1" class="fm-range-start" value="${start||''}" placeholder="1" />
+    </div>
+    <div class="range-inp">
+      <label>End #</label>
+      <input type="number" min="1" class="fm-range-end" value="${end||''}" placeholder="26" />
+    </div>
+    <button class="remove-range" onclick="this.parentElement.remove()" title="Range kadhun taka">✕</button>
+  `;
+  wrap.appendChild(row);
+}
+
+function addFolderRange() {
+  appendRangeRow('', '');
+}
+
+async function saveFolder() {
+  const name = document.getElementById('fm-name').value.trim();
+  if (!name) { toast('❌ Folder name bhara', 'error'); return; }
+
+  const startEls = document.querySelectorAll('#fm-ranges-wrap .fm-range-start');
+  const endEls   = document.querySelectorAll('#fm-ranges-wrap .fm-range-end');
+  const ranges   = [];
+  let valid = true;
+
+  startEls.forEach((s, i) => {
+    const start = parseInt(s.value);
+    const end   = parseInt(endEls[i].value);
+    if (!start || !end || start < 1 || end < 1 || start > end) {
+      valid = false; return;
+    }
+    ranges.push({ start, end });
+  });
+
+  if (!valid || !ranges.length) {
+    toast('❌ Valid ranges bhara — start >= 1, start <= end', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('folder-modal-save');
+  btn.disabled = true; btn.textContent = '⏳ Saving...';
+  try {
+    const url    = '/courses/' + folderCurrentCourseID + '/folders' + (folderEditID ? '/' + folderEditID : '');
+    const method = folderEditID ? 'PUT' : 'POST';
+    const res    = await api(url, { method, body: JSON.stringify({ name, ranges }) });
+    const data   = await res.json();
+    if (!res.ok) { toast('❌ ' + (data.error || 'Error'), 'error'); return; }
+    toast('✅ Folder ' + (folderEditID ? 'updated' : 'created') + '!');
+    closeFolderModal();
+    loadFolders();
+  } catch(e) {
+    toast('❌ Network error', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '💾 Save Folder';
+  }
+}
+
+function deleteFolderConfirm(folderId, folderName) {
+  openModal(
+    'Folder Delete kara?',
+    `"${folderName}" delete kelyavar files ungrouped hotil — files delete hona nahi.`,
+    async () => {
+      try {
+        const res = await api('/courses/' + folderCurrentCourseID + '/folders/' + folderId, { method: 'DELETE' });
+        if (res.ok) { toast('✅ Folder delete kela!'); loadFolders(); }
+        else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
+      } catch { toast('❌ Network error', 'error'); }
+    }
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BROADCAST
+// ═══════════════════════════════════════════════════════════════════════════════
+async function loadCoursesForBroadcast() {
+  try {
+    const res = await api('/courses');
+    const data = await res.json();
+    const sel = document.getElementById('bc-course-id');
+    sel.innerHTML = '<option value="">— Course निवडा —</option>';
+    (data||[]).forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.id; o.textContent = c.title;
+      sel.appendChild(o);
+    });
+  } catch(e) { /* silent */ }
+}
+
+function bcTargetChanged() {
+  const t = document.getElementById('bc-target').value;
+  document.getElementById('bc-course-row').style.display = t==='course' ? '' : 'none';
+}
+
+async function sendBroadcast() {
+  const target  = document.getElementById('bc-target').value;
+  const title   = document.getElementById('bc-title').value.trim();
+  const subject = document.getElementById('bc-subject').value.trim();
+  const message = document.getElementById('bc-message').value.trim();
+  const courseID= document.getElementById('bc-course-id').value;
+  const btn     = document.getElementById('bc-send-btn');
+  const status  = document.getElementById('bc-status');
+  if (!title || !subject || !message) { toast('Title, subject ani message bhara', 'error'); return; }
+  if (target === 'course' && !courseID) { toast('Course निवडा', 'error'); return; }
+  btn.disabled = true; status.textContent = '⏳ Pathavt aahe...';
+  try {
+    const body = JSON.stringify(Object.assign({ title, subject, message, target }, target==='course' ? {course_id: courseID} : {}));
+    const res  = await api('/broadcast', { method:'POST', body });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Server error');
+    toast(`✅ Broadcast suru! ${data.email_queued} users la email queue madhe`, 'success');
+    status.textContent = `✅ ${data.email_queued} emails queued`;
+    document.getElementById('bc-title').value = '';
+    document.getElementById('bc-subject').value = '';
+    document.getElementById('bc-message').value = '';
+    loadAnnouncements();
+  } catch(e) {
+    toast('Broadcast failed: ' + (e.message||e), 'error');
+    status.textContent = '';
+  }
+  btn.disabled = false;
+}
+
+async function loadAnnouncements() {
+  const el = document.getElementById('bc-list');
+  if (!el) return;
+  el.innerHTML = '<div class="loading">⏳ Loading...</div>';
+  try {
+    const res  = await api('/announcements');
+    const list = await res.json();
+    if (!list || list.length === 0) {
+      el.innerHTML = '<div style="text-align:center;color:#555;padding:20px">Koi announcements nahi</div>';
+      return;
+    }
+    el.innerHTML = list.map(a => {
+      const scope = a.course_id
+        ? `<span style="background:#6c63ff22;color:#a89fff;padding:2px 8px;border-radius:10px;font-size:11px">📖 Course</span>`
+        : `<span style="background:#22c55e22;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:11px">🌐 Global</span>`;
+      const active = a.is_active
+        ? `<span style="background:#22c55e22;color:#4ade80;padding:2px 8px;border-radius:10px;font-size:11px">Active</span>`
+        : `<span style="background:#f59e0b22;color:#fbbf24;padding:2px 8px;border-radius:10px;font-size:11px">Deleted</span>`;
+      const date = new Date(a.created_at).toLocaleString('en-IN');
+      return `<div style="background:#12141c;border:1px solid #2a2d3a;border-radius:10px;padding:14px 16px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <span style="font-weight:700;color:#e8e9f0;font-size:14px">${esc(a.title)}</span>
+          ${scope} ${active}
+          <span style="color:#555;font-size:11px;margin-left:auto">${date}</span>
+        </div>
+        <div style="color:#9097a5;font-size:13px;margin-bottom:10px;white-space:pre-line">${esc(a.message)}</div>
+        ${a.is_active ? `<button class="btn btn-danger btn-sm" onclick="deleteAnnouncement('${a.id}')">🗑 Delete</button>` : ''}
+      </div>`;
+    }).join('');
+  } catch(e) {
+    el.innerHTML = `<div style="color:#f87171">Error: ${esc(e.message||String(e))}</div>`;
+  }
+}
+
+async function deleteAnnouncement(id) {
+  openModal('Announcement Delete', 'Ha announcement delete kara?', async () => {
+    try {
+      await api('/announcements/' + id, { method:'DELETE' });
+      toast('Announcement deleted', 'success');
+      loadAnnouncements();
+    } catch(e) { toast('Delete failed', 'error'); }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // ACCESS CONTROL
 // ═══════════════════════════════════════════════════════════════════════════════
 async function execGrant() {
@@ -1140,7 +1315,9 @@ async function execGrant() {
     if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); return; }
     const label=months>0?months+' mahinyansathi':'Permanent';
     toast('✅ '+(d.full_name||d.username)+' la '+label+' access dila!');
-    document.getElementById('ga-user').value=''; document.getElementById('ga-course').value=''; document.getElementById('ga-months').value='0';
+    document.getElementById('ga-user').value='';
+    document.getElementById('ga-course').value='';
+    document.getElementById('ga-months').value='0';
   } catch{ toast('❌ Network error','error'); }
 }
 
@@ -1154,7 +1331,8 @@ async function execRevoke() {
     const d=await res.json();
     if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); return; }
     toast('✅ '+(d.full_name||d.username)+' cha access revoke kela!');
-    document.getElementById('ra-user').value=''; document.getElementById('ra-course').value='';
+    document.getElementById('ra-user').value='';
+    document.getElementById('ra-course').value='';
   } catch{ toast('❌ Network error','error'); }
 }
 
@@ -1199,7 +1377,6 @@ function startUMAutoRefresh() {
   const badge = document.getElementById('um-refresh-badge');
   if (badge) badge.style.display='flex';
 }
-
 function stopUMAutoRefresh() {
   if (umAutoRefreshTimer) { clearInterval(umAutoRefreshTimer); umAutoRefreshTimer=null; }
   const badge = document.getElementById('um-refresh-badge');
@@ -1211,9 +1388,7 @@ async function execAddURL() {
   const label = document.getElementById('um-label').value.trim();
   const interval = parseInt(document.getElementById('um-interval').value) || 30;
   if (!url) { toast('❌ URL required aahe','error'); return; }
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    toast('❌ URL http:// kiva https:// ne suruvat pahije','error'); return;
-  }
+  if (!url.startsWith('http://') && !url.startsWith('https://')) { toast('❌ URL http:// kiva https:// ne suruvat pahije','error'); return; }
   if (interval < 2) { toast('❌ Minimum interval 2 seconds aahe','error'); return; }
   const btn = document.getElementById('addURLBtn');
   btn.disabled=true; btn.textContent='⏳ Adding...';
@@ -1254,17 +1429,10 @@ async function loadURLMonitor() {
     let h = '<div class="table-wrap"><table><thead><tr><th>Status</th><th>Label / URL</th><th>Interval</th><th>Last Ping</th><th>Latency</th><th>Uptime %</th><th style="min-width:220px">Actions</th></tr></thead><tbody>';
     list.forEach(u => {
       const lr = u.last_result;
-      let statusBadge, dotClass;
-      if (!lr) {
-        statusBadge = '<span class="badge badge-gray">⚪ Unknown</span>';
-        dotClass = 'ping-dot-unknown';
-      } else if (lr.is_up) {
-        statusBadge = `<span class="badge badge-green">🟢 UP ${lr.status_code}</span>`;
-        dotClass = 'ping-dot-up';
-      } else {
-        statusBadge = `<span class="badge badge-red">🔴 DOWN${lr.status_code?' '+lr.status_code:''}</span>`;
-        dotClass = 'ping-dot-down';
-      }
+      let statusBadge;
+      if (!lr) statusBadge = '<span class="badge badge-gray">⚪ Unknown</span>';
+      else if (lr.is_up) statusBadge = `<span class="badge badge-green">🟢 UP ${lr.status_code}</span>`;
+      else statusBadge = `<span class="badge badge-red">🔴 DOWN${lr.status_code?' '+lr.status_code:''}</span>`;
       const lastPing = lr ? fmtTime(lr.timestamp) : '—';
       const latency = lr ? lr.latency_ms+'ms' : '—';
       const uptime = u.uptime_pct > 0 ? u.uptime_pct.toFixed(1)+'%' : (lr ? '0%' : '—');
@@ -1273,21 +1441,16 @@ async function loadURLMonitor() {
       const shortURL = u.url.length > 45 ? u.url.slice(0,45)+'…' : u.url;
       h += `<tr>
         <td>${statusBadge}</td>
-        <td>
-          ${label ? `<div class="um-label-cell">${esc(label)}</div>` : ''}
-          <div class="um-url-cell" title="${esc(u.url)}">${esc(shortURL)}</div>
-        </td>
+        <td>${label ? `<div class="um-label-cell">${esc(label)}</div>` : ''}<div class="um-url-cell" title="${esc(u.url)}">${esc(shortURL)}</div></td>
         <td><span class="badge badge-purple">⏱ ${u.interval_seconds}s</span></td>
         <td style="font-size:12px;color:#888">${lastPing}</td>
         <td style="font-size:12px;font-family:monospace">${latency}</td>
         <td style="font-weight:600;color:${uptimeColor}">${uptime}</td>
-        <td>
-          <div class="um-actions">
-            <button class="btn btn-info btn-sm" onclick="showHistory('${u.id}','${esc(u.label||u.url)}')">📊 History</button>
-            <button class="btn btn-warning btn-sm" onclick="manualCheck('${u.id}','${esc(u.label||shortURL)}')">⚡ Check</button>
-            <button class="btn btn-danger btn-sm" onclick="removeURL('${u.id}','${esc(u.label||shortURL)}')">🗑 Remove</button>
-          </div>
-        </td>
+        <td><div class="um-actions">
+          <button class="btn btn-info btn-sm" onclick="showHistory('${u.id}','${esc(u.label||u.url)}')">📊 History</button>
+          <button class="btn btn-warning btn-sm" onclick="manualCheck('${u.id}','${esc(u.label||shortURL)}')">⚡ Check</button>
+          <button class="btn btn-danger btn-sm" onclick="removeURL('${u.id}','${esc(u.label||shortURL)}')">🗑 Remove</button>
+        </div></td>
       </tr>`;
     });
     h += '</tbody></table></div>';
@@ -1323,9 +1486,7 @@ async function showHistory(id, label) {
     const sorted = [...history].reverse();
     let h = '<div class="history-table-wrap"><table><thead><tr><th>#</th><th>Time</th><th>Status</th><th>Code</th><th>Latency</th><th>Error</th></tr></thead><tbody>';
     sorted.forEach((p, i) => {
-      const statusDot = p.is_up
-        ? '<span class="ping-dot ping-dot-up"></span>UP'
-        : '<span class="ping-dot ping-dot-down"></span>DOWN';
+      const statusDot = p.is_up ? '<span class="ping-dot ping-dot-up"></span>UP' : '<span class="ping-dot ping-dot-down"></span>DOWN';
       const latencyColor = p.latency_ms < 300 ? '#2e7d32' : p.latency_ms < 1000 ? '#e65100' : '#c62828';
       h += `<tr>
         <td style="color:#bbb;font-size:11px">${sorted.length - i}</td>
@@ -1344,7 +1505,7 @@ async function showHistory(id, label) {
 }
 
 function removeURL(id, label) {
-  openModal('URL Remove kara?', `"${label}" remove kelyavar tyachi monitoring band hoil ani Mongo madhun delete hoil.`, async()=>{
+  openModal('URL Remove kara?', `"${label}" remove kelyavar tyachi monitoring band hoil.`, async()=>{
     try {
       const res = await api('/urlmonitor/'+id, {method:'DELETE'});
       if (res.ok){ toast('✅ '+label+' remove kela'); loadURLMonitor(); }
@@ -1353,7 +1514,6 @@ function removeURL(id, label) {
   });
 }
 
-// ─── Time helpers ─────────────────────────────────────────────────────────────
 function fmtTime(ts) {
   if (!ts) return '—';
   const d = new Date(ts);
@@ -1373,12 +1533,9 @@ function fmtTimeFull(ts) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TELEGRAM LOGIN — Single input approach (no display:none input bugs)
+// TELEGRAM LOGIN
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// State — JS variables, DOM la depend nahi
 const TG = { step: 'phone', phoneHash: '', phone: '', code: '' };
-// step values: 'phone' | 'otp' | '2fa'
 
 function tgSetStep(step) {
   TG.step = step;
@@ -1390,10 +1547,7 @@ function tgSetStep(step) {
   const title = document.getElementById('tg-card-title');
   const banner= document.getElementById('tg-info-banner');
   const slbl  = document.getElementById('tg-step-label');
-
-  // Clear input value for new step
   if (inp) { inp.value = ''; inp.removeAttribute('disabled'); }
-
   if (step === 'phone') {
     if (title)  title.textContent = '🔐 Telegram Phone Login';
     if (slbl)   slbl.textContent  = 'Step 1 of 3 — Phone Number';
@@ -1403,7 +1557,6 @@ function tgSetStep(step) {
     if (btn)  { btn.textContent = '📨 OTP Pathava'; btn.disabled = false; }
     if (back)   back.style.display = 'none';
     if (banner) banner.style.display = 'none';
-
   } else if (step === 'otp') {
     if (title)  title.textContent = '🔐 OTP Verify Kara';
     if (slbl)   slbl.textContent  = 'Step 2 of 3 — Telegram OTP';
@@ -1414,21 +1567,19 @@ function tgSetStep(step) {
     if (back)   back.style.display = '';
     if (banner) { banner.style.display=''; banner.style.background='#e8f5e9'; banner.style.color='#2e7d32'; banner.textContent='📩 OTP Telegram var pathavla aahe — app open kara ani OTP takaa'; }
     setTimeout(()=>{ if(inp) inp.focus(); }, 100);
-
   } else if (step === '2fa') {
     if (title)  title.textContent = '🔒 2FA Password';
     if (slbl)   slbl.textContent  = 'Step 3 of 3 — 2-Step Verification';
     if (lbl)    lbl.innerHTML     = '2FA Password <span class="req">*</span>';
     if (inp)  { inp.type = 'password'; inp.placeholder = 'Tumcha 2FA password'; inp.autocomplete = 'current-password'; inp.maxLength = 200; inp.style.letterSpacing=''; inp.style.fontSize='15px'; inp.style.textAlign=''; }
-    if (hint)   hint.textContent  = 'Tumchi Telegram 2-Step Verification password enter kara';
+    if (hint)   hint.textContent  = 'Telegram 2-Step Verification password enter kara';
     if (btn)  { btn.textContent = '🔓 2FA Verify Kara'; btn.disabled = false; }
     if (back)   back.style.display = '';
-    if (banner) { banner.style.display=''; banner.style.background='#fff3e0'; banner.style.color='#e65100'; banner.textContent='🔒 Tumchya account var 2FA enabled aahe. Telegram app > Settings > Privacy > 2-Step Verification cha password taka.'; }
+    if (banner) { banner.style.display=''; banner.style.background='#fff3e0'; banner.style.color='#e65100'; banner.textContent='🔒 Tumchya account var 2FA enabled aahe. Telegram > Settings > Privacy > 2-Step Verification cha password taka.'; }
     setTimeout(()=>{ if(inp) inp.focus(); }, 100);
   }
 }
 
-// Single action button — step nusaar different action
 async function tgMainAction() {
   if (TG.step === 'phone') await tgDoSendCode();
   else if (TG.step === 'otp')  await tgDoVerifyOTP();
@@ -1445,8 +1596,7 @@ async function tgDoSendCode() {
     const res = await api('/tg/send-code', {method:'POST', body:JSON.stringify({phone})});
     const d   = await res.json();
     if (!res.ok) { toast('❌ '+(d.error||'Error'),'error'); btn.disabled=false; btn.textContent='📨 OTP Pathava'; return; }
-    TG.phone     = phone;
-    TG.phoneHash = d.phone_hash;
+    TG.phone = phone; TG.phoneHash = d.phone_hash;
     toast('📨 OTP Telegram var pathavla!');
     tgSetStep('otp');
   } catch(e) { toast('❌ Network error','error'); btn.disabled=false; btn.textContent='📨 OTP Pathava'; }
@@ -1455,24 +1605,17 @@ async function tgDoSendCode() {
 async function tgDoVerifyOTP() {
   const inp  = document.getElementById('tg-main-input');
   const code = inp ? inp.value.trim() : '';
-  if (!code) { toast('❌ OTP enter kara — Telegram app madhe bagh','error'); if(inp) inp.focus(); return; }
-  TG.code = code;  // JS variable madhe save — DOM var depend nahi
+  if (!code) { toast('❌ OTP enter kara','error'); if(inp) inp.focus(); return; }
+  TG.code = code;
   const btn = document.getElementById('tg-main-btn');
   btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
   try {
-    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
-      phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code
-    })});
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code})});
     const d = await res.json();
-    if (res.status === 422 && d.needs_2fa) {
-      toast('🔒 2FA password required','info');
-      tgSetStep('2fa');
-      return; // btn already re-set in tgSetStep
-    }
+    if (res.status === 422 && d.needs_2fa) { toast('🔒 2FA password required','info'); tgSetStep('2fa'); return; }
     if (!res.ok) { toast('❌ '+(d.error||'Verify failed'),'error'); btn.disabled=false; btn.textContent='✅ OTP Verify Kara'; return; }
     toast('✅ Login successful! '+((d.user&&d.user.first_name)||''));
-    tgResetLogin();
-    loadTGStatus();
+    tgResetLogin(); loadTGStatus();
   } catch(e) { toast('❌ Network error','error'); btn.disabled=false; btn.textContent='✅ OTP Verify Kara'; }
 }
 
@@ -1483,14 +1626,11 @@ async function tgDoVerify2FA() {
   const btn = document.getElementById('tg-main-btn');
   btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
   try {
-    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({
-      phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code, password
-    })});
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code, password})});
     const d = await res.json();
     if (!res.ok) { toast('❌ '+(d.error||'2FA failed'),'error'); btn.disabled=false; btn.textContent='🔓 2FA Verify Kara'; return; }
     toast('✅ 2FA verify — Login successful!');
-    tgResetLogin();
-    loadTGStatus();
+    tgResetLogin(); loadTGStatus();
   } catch(e) { toast('❌ Network error','error'); btn.disabled=false; btn.textContent='🔓 2FA Verify Kara'; }
 }
 

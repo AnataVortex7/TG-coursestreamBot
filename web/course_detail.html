@@ -34,7 +34,31 @@
   .search-wrap input{width:100%;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:999px;padding:8px 16px 8px 38px;font-size:.85rem;outline:none;transition:border-color .2s}
   .search-wrap input:focus{border-color:var(--accent)}
   .search-wrap .icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted)}
+
+  /* ── Folder section ───────────────────────────────────────────── */
+  .folder-section{max-width:1300px;margin:20px auto 0;padding:0 20px}
+  .folder-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;user-select:none;transition:border-color .2s,background .2s;margin-bottom:2px}
+  .folder-header:hover{border-color:var(--accent);background:#26263a}
+  .folder-header.open{border-bottom-left-radius:0;border-bottom-right-radius:0;border-color:var(--accent);background:#26263a}
+  .folder-header-left{display:flex;align-items:center;gap:12px}
+  .folder-icon{font-size:1.3rem;transition:transform .25s}
+  .folder-header.open .folder-icon{transform:rotate(0deg)}
+  .folder-chevron{font-size:.9rem;color:var(--muted);transition:transform .25s}
+  .folder-header.open .folder-chevron{transform:rotate(180deg)}
+  .folder-title{font-size:1rem;font-weight:700;color:var(--text)}
+  .folder-meta{font-size:.78rem;color:var(--muted);margin-top:2px}
+  .folder-range-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  .range-badge{font-size:.72rem;background:rgba(124,106,247,.15);color:var(--accent);border:1px solid rgba(124,106,247,.3);border-radius:20px;padding:2px 10px;font-weight:600}
+  .folder-ungrouped .folder-header{border-color:#3f3f52;background:#1e1e2a}
+  .folder-ungrouped .folder-header:hover{border-color:#fb923c}
+  .folder-ungrouped .folder-title{color:var(--muted)}
+  .folder-body{border:1px solid var(--accent);border-top:none;border-bottom-left-radius:var(--radius);border-bottom-right-radius:var(--radius);background:#1e1e2c;overflow:hidden;display:none}
+  .folder-body.open{display:block}
+  .folder-ungrouped .folder-body{border-color:#3f3f52}
+
+  /* ── Cards grid ───────────────────────────────────────────────── */
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;padding:20px 20px 20px;max-width:1300px;margin:0 auto}
+  .folder-body .grid{max-width:100%;margin:0}
   .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow);transition:transform .2s,box-shadow .2s}
   .card:hover{transform:translateY(-3px);box-shadow:0 8px 32px rgba(0,0,0,.6)}
   .card-stripe{height:4px;width:100%}
@@ -82,10 +106,11 @@
   .jump-wrap button:hover{opacity:.85}
   .empty{grid-column:1/-1;text-align:center;padding:80px 20px;color:var(--muted)}
   .empty .emoji{font-size:3rem;display:block;margin-bottom:12px}
+  .folder-empty{text-align:center;padding:32px 20px;color:var(--muted);font-size:.85rem}
   ::-webkit-scrollbar{width:6px}
   ::-webkit-scrollbar-track{background:var(--bg)}
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
-  @media(max-width:480px){.grid{padding:12px 12px 16px;gap:12px}header h1{font-size:1.3rem}}
+  @media(max-width:480px){.grid{padding:12px 12px 16px;gap:12px}header h1{font-size:1.3rem}.folder-section{padding:0 10px}}
 </style>
 </head>
 <body>
@@ -103,8 +128,8 @@
   </div>
 </header>
 
-<!-- Course Announcements Banner (loaded dynamically) -->
-<div id="course-announcements" style="display:none;margin:0 0 12px;"></div>
+<!-- Course Announcements Banner -->
+<div id="course-announcements" style="display:none;margin:0 0 12px;padding:0 20px;max-width:1300px;margin-left:auto;margin-right:auto;margin-top:12px"></div>
 
 <div class="page-info">
   Showing <strong id="visibleCount">{{ .totalCount }}</strong> of <strong>{{ .totalCount }}</strong> files
@@ -118,6 +143,95 @@
   <button class="filter-btn" data-type="photo"    onclick="setFilter('photo',this)">🖼️ Photo</button>
   <button class="filter-btn" data-type="document" onclick="setFilter('document',this)">📦 Document</button>
 </div>
+
+<!-- ══════════════════════════════════════════════════════════════════
+     FOLDERS MODE  (hasFolders = true)
+════════════════════════════════════════════════════════════════════ -->
+{{ if .hasFolders }}
+
+{{ range $fi, $folder := .folderGroups }}
+<div class="folder-section {{ if $folder.IsUngrouped }}folder-ungrouped{{ end }}" data-folder-idx="{{ $fi }}">
+
+  <!-- Folder Header (click to expand/collapse) -->
+  <div class="folder-header" onclick="toggleFolder({{ $fi }})">
+    <div class="folder-header-left">
+      <span class="folder-icon">{{ if $folder.IsUngrouped }}📄{{ else }}📁{{ end }}</span>
+      <div>
+        <div class="folder-title">{{ $folder.Name }}</div>
+        <div class="folder-meta">{{ len $folder.Files }} files</div>
+      </div>
+    </div>
+    <span class="folder-chevron">▼</span>
+  </div>
+
+  <!-- Folder Body -->
+  <div class="folder-body" id="folder-body-{{ $fi }}">
+    {{ if $folder.Files }}
+    <div class="grid">
+      {{ range $folder.Files }}
+      <div class="card type-{{ .MediaType }}"
+           data-type="{{ .MediaType }}"
+           data-name="{{ .FileName }}"
+           data-title="{{ .Title }}">
+        <div class="card-stripe"></div>
+        <div class="card-body">
+          <div class="card-header-row">
+            <span class="type-badge">
+              {{ if eq .MediaType "video" }}🎬 Video
+              {{ else if eq .MediaType "audio" }}🎵 Audio
+              {{ else if eq .MediaType "pdf" }}📄 PDF
+              {{ else if eq .MediaType "photo" }}🖼️ Photo
+              {{ else }}📦 Document{{ end }}
+            </span>
+            <span class="msg-id">#{{ .Index }}</span>
+          </div>
+          {{ if .Title }}<div class="file-name">{{ .Title }}</div>{{ end }}
+          {{ if .Caption }}<div class="caption-text">💬 {{ .Caption }}</div>{{ end }}
+          {{ if .FileName }}<div class="file-name" style="color:var(--muted);font-size:.82rem">{{ .FileName }}</div>{{ end }}
+          <div class="meta">
+            {{ if .FileSize }}<span>💾 {{ .FileSize }}</span>{{ end }}
+            {{ if .MimeType }}<span>🏷️ {{ .MimeType }}</span>{{ end }}
+          </div>
+          {{ if .ViewCount }}
+          <div class="view-history">
+            <span class="view-count-badge">👁 {{ .ViewCount }} वेळा बघितलं</span>
+            {{ if .LastViewedAt }}<span class="last-viewed-badge">🕐 {{ .LastViewedAt }}</span>{{ end }}
+          </div>
+          {{ end }}
+        </div>
+        <div class="card-actions">
+          {{ if .HasMedia }}
+            {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-watch">▶ Watch</a>
+            {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-listen">🎵 Listen</a>
+            {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-view">📄 View PDF</a>
+            {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-photo">🖼️ View Photo</a>
+            {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
+            {{ if or (eq .MediaType "video") (eq .MediaType "audio") }}
+            <button class="btn btn-offline"
+              onclick="getOfflineToken('{{.CourseIDHex}}', {{.ID}}, {{.ChannelID}}, this)"
+              title="Telegram मध्ये offline download साठी token generate करा">
+              📥 Offline
+            </button>
+            {{ end }}
+          {{ else }}
+            <button class="btn btn-locked" disabled>🔒 Access Required</button>
+          {{ end }}
+        </div>
+      </div>
+      {{ end }}
+    </div>
+    {{ else }}
+    <div class="folder-empty">📭 या folder मध्ये अजून files नाहीत.</div>
+    {{ end }}
+  </div><!-- /folder-body -->
+
+</div><!-- /folder-section -->
+{{ end }}
+
+<!-- ══════════════════════════════════════════════════════════════════
+     FLAT MODE  (hasFolders = false — जुना behavior)
+════════════════════════════════════════════════════════════════════ -->
+{{ else }}
 
 <div class="grid" id="grid">
 {{ range .playlist }}
@@ -179,25 +293,49 @@
 </div>
 
 <div class="pagination" id="pagination">
-  <button id="btnFirst"    onclick="goToPage(1)">⏮ Start</button>
-  <button id="btnPrev"     onclick="goToPage(currentPage-1)">← Prev</button>
+  <button id="btnFirst" onclick="goToPage(1)">⏮ Start</button>
+  <button id="btnPrev"  onclick="goToPage(currentPage-1)">← Prev</button>
   <span class="page-label" id="pageLabel">Page 1</span>
-  <button id="btnNext"     onclick="goToPage(currentPage+1)">Next →</button>
+  <button id="btnNext"  onclick="goToPage(currentPage+1)">Next →</button>
   <div class="jump-wrap">
-    <input type="number" id="jumpInput" min="1" placeholder="Go#" title="Jump to page"
+    <input type="number" id="jumpInput" min="1" placeholder="Go#"
       onkeydown="if(event.key==='Enter') jumpToPage()"/>
     <button onclick="jumpToPage()">Go</button>
   </div>
 </div>
 
+{{ end }}<!-- /if .hasFolders -->
+
 <script>
-  const PAGE_SIZE = 50;
+  const HAS_FOLDERS = {{ .hasFolders }};
+  const PAGE_SIZE   = 50;
   let currentFilter = 'all';
   let currentPage   = 1;
   let filteredCards = [];
 
+  // ── Folder toggle ────────────────────────────────────────────────────────
+  function toggleFolder(idx) {
+    const header = document.querySelector('[data-folder-idx="' + idx + '"] .folder-header');
+    const body   = document.getElementById('folder-body-' + idx);
+    if (!header || !body) return;
+    const isOpen = body.classList.contains('open');
+    body.classList.toggle('open', !isOpen);
+    header.classList.toggle('open', !isOpen);
+  }
+
+  // Auto-open first folder on load
+  if (HAS_FOLDERS) {
+    const first = document.querySelector('[data-folder-idx="0"] .folder-header');
+    const firstBody = document.getElementById('folder-body-0');
+    if (first && firstBody) {
+      firstBody.classList.add('open');
+      first.classList.add('open');
+    }
+  }
+
+  // ── Flat mode: filter + pagination ──────────────────────────────────────
   function allCards() {
-    return Array.from(document.querySelectorAll('.card'));
+    return Array.from(document.querySelectorAll('#grid .card'));
   }
 
   function setFilter(type, btn) {
@@ -209,9 +347,40 @@
   }
 
   function applyFilters() {
+    if (HAS_FOLDERS) {
+      // Folder mode: filter/search across all folder bodies
+      const q = document.getElementById('searchInput').value.toLowerCase().trim();
+      let visible = 0;
+      document.querySelectorAll('.folder-body .card').forEach(card => {
+        const typeMatch  = currentFilter === 'all' || card.dataset.type === currentFilter;
+        const n = (card.dataset.name  || '').toLowerCase();
+        const t = (card.dataset.title || '').toLowerCase();
+        const searchMatch = !q || n.includes(q) || t.includes(q);
+        const show = typeMatch && searchMatch;
+        card.style.display = show ? '' : 'none';
+        if (show) visible++;
+      });
+      document.getElementById('visibleCount').textContent = visible;
+
+      // Auto-open folders that have visible cards when searching
+      if (q || currentFilter !== 'all') {
+        document.querySelectorAll('.folder-section').forEach((section, idx) => {
+          const hasVisible = [...section.querySelectorAll('.card')].some(c => c.style.display !== 'none');
+          const header = section.querySelector('.folder-header');
+          const body   = document.getElementById('folder-body-' + idx);
+          if (header && body) {
+            body.classList.toggle('open', hasVisible);
+            header.classList.toggle('open', hasVisible);
+          }
+        });
+      }
+      return;
+    }
+
+    // Flat mode
     const q = document.getElementById('searchInput').value.toLowerCase().trim();
     filteredCards = allCards().filter(card => {
-      const typeMatch = currentFilter === 'all' || card.dataset.type === currentFilter;
+      const typeMatch  = currentFilter === 'all' || card.dataset.type === currentFilter;
       const n = (card.dataset.name  || '').toLowerCase();
       const t = (card.dataset.title || '').toLowerCase();
       const searchMatch = !q || n.includes(q) || t.includes(q);
@@ -221,26 +390,20 @@
   }
 
   function renderPage() {
-    const total = filteredCards.length;
+    const total      = filteredCards.length;
     const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
     if (currentPage > totalPages) currentPage = totalPages;
-
     const start = (currentPage - 1) * PAGE_SIZE;
     const end   = start + PAGE_SIZE;
-
-    // hide all, show only current page slice
     allCards().forEach(c => c.style.display = 'none');
     filteredCards.forEach((c, i) => {
       c.style.display = (i >= start && i < end) ? '' : 'none';
     });
-
-    document.getElementById('visibleCount').textContent = total;
-    document.getElementById('pageLabel').textContent = `Page ${currentPage} / ${totalPages}`;
+    document.getElementById('visibleCount').textContent  = total;
+    document.getElementById('pageLabel').textContent     = 'Page ' + currentPage + ' / ' + totalPages;
     document.getElementById('btnFirst').disabled = currentPage === 1;
     document.getElementById('btnPrev').disabled  = currentPage === 1;
     document.getElementById('btnNext').disabled  = currentPage >= totalPages;
-
-    // hide pagination if only 1 page
     document.getElementById('pagination').style.display = totalPages <= 1 ? 'none' : 'flex';
   }
 
@@ -254,17 +417,15 @@
   function jumpToPage() {
     const input = document.getElementById('jumpInput');
     const p = parseInt(input.value, 10);
-    if (!isNaN(p) && p >= 1) {
-      goToPage(p);
-    }
+    if (!isNaN(p) && p >= 1) goToPage(p);
     input.value = '';
     input.blur();
   }
 
-  // init
-  applyFilters();
+  // Init flat mode
+  if (!HAS_FOLDERS) applyFilters();
 
-  // ── Course Announcements ──────────────────────────────────────────────────
+  // ── Course Announcements ─────────────────────────────────────────────────
   (async function loadCourseAnnouncements() {
     const courseID = window.location.pathname.split('/course/')[1];
     if (!courseID) return;
@@ -273,7 +434,6 @@
       if (!res.ok) return;
       const list = await res.json();
       if (!list || list.length === 0) return;
-
       const wrap = document.getElementById('course-announcements');
       wrap.style.display = 'block';
       wrap.innerHTML = list.map((a, i) => `
@@ -297,7 +457,6 @@
   function dismissCourseAnn(i) {
     const el = document.getElementById('ca-' + i);
     if (el) el.style.display = 'none';
-    // Check if all dismissed → hide container
     const wrap = document.getElementById('course-announcements');
     if (wrap && ![...wrap.children].some(c => c.style.display !== 'none')) {
       wrap.style.display = 'none';
@@ -309,26 +468,19 @@
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // ── Offline Token ──────────────────────────────────────────────────────────
-  // Bot username (server से)
+  // ── Offline Token ─────────────────────────────────────────────────────────
   const BOT_USERNAME = "{{ .botUsername }}";
 
   async function getOfflineToken(courseId, messageId, channelId, btn) {
     btn.disabled = true;
     btn.textContent = '⏳ ...';
-
     try {
       const resp = await fetch('/api/offline-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          course_id: courseId,
-          message_id: messageId,
-          channel_id: channelId
-        })
+        body: JSON.stringify({ course_id: courseId, message_id: messageId, channel_id: channelId })
       });
       const data = await resp.json();
-
       if (!resp.ok) {
         if (resp.status === 429) {
           showOfflineModal(null, data.used, data.limit);
@@ -337,9 +489,6 @@
         }
         return;
       }
-
-      // data.bot_link = "https://t.me/botname?start=dl_48271"
-      // User click करेल → Telegram उघडेल → direct video येईल
       showOfflineModal(data.bot_link, data.used_today + 1, data.limit);
     } catch(e) {
       alert('❌ Network error. पुन्हा प्रयत्न करा.');
@@ -352,14 +501,11 @@
   function showOfflineModal(botLink, used, limit) {
     const old = document.getElementById('offline-modal-overlay');
     if (old) old.remove();
-
     const remaining = limit - used;
-    const hasLink = !!botLink;
-
-    const overlay = document.createElement('div');
+    const hasLink   = !!botLink;
+    const overlay   = document.createElement('div');
     overlay.id = 'offline-modal-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
-
     overlay.innerHTML = `
       <div style="background:#1c1c2e;border:1px solid #3f3f52;border-radius:16px;padding:28px 24px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
         <div style="font-size:2rem;margin-bottom:8px">${hasLink ? '📥' : '⛔'}</div>
@@ -369,47 +515,28 @@
         <div style="font-size:.82rem;color:#9097a5;margin-bottom:20px">
           ${hasLink ? 'Telegram उघडेल → Bot direct video पाठवेल' : 'रात्री 12:00 IST ला reset होतील.'}
         </div>
-
         ${hasLink ? `
         <a href="${botLink}" target="_blank"
-          style="display:block;background:linear-gradient(135deg,#2481cc,#1a6aaa);color:#fff;text-decoration:none;border-radius:12px;padding:16px 20px;font-size:1rem;font-weight:700;margin-bottom:16px;text-align:center;box-shadow:0 4px 20px rgba(36,129,204,.4);">
+          style="display:block;background:linear-gradient(135deg,#2481cc,#1a6aaa);color:#fff;text-decoration:none;border-radius:12px;padding:16px 20px;font-size:1rem;font-weight:700;margin-bottom:16px;text-align:center;box-shadow:0 4px 20px rgba(36,129,204,.4)">
           📱 Telegram मध्ये Video मिळवा
           <div style="font-size:.75rem;font-weight:400;opacity:.85;margin-top:4px">Click करा → Bot direct पाठवेल</div>
         </a>
         <div style="font-size:.78rem;color:#9097a5;margin-bottom:16px;line-height:1.5">
           🔒 Video forward व save blocked असेल<br>
           ⏰ Link आज रात्री 12 वाजता expire होईल
-        </div>
-        ` : ''}
-
+        </div>` : ''}
         <div style="font-size:.8rem;color:#6b7280;margin-bottom:18px">
           📊 आजचे downloads: <strong style="color:${remaining > 0 ? '#4ade80' : '#f87171'}">${used}/${limit}</strong>
           ${remaining > 0 ? `&nbsp;(${remaining} शिल्लक)` : `&nbsp;— <span style="color:#f87171">संपले</span>`}
           <br><span style="font-size:.73rem">रात्री 12:00 IST ला reset होतात</span>
         </div>
-
         <button onclick="document.getElementById('offline-modal-overlay').remove()"
           style="background:#3a3a4e;color:#e8e9f0;border:none;border-radius:8px;padding:9px 28px;font-size:.85rem;font-weight:600;cursor:pointer">
           बंद करा
         </button>
       </div>`;
-
     document.body.appendChild(overlay);
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-  }
-
-  function copyOfflineCommand(text, el) {
-    navigator.clipboard.writeText(text).then(() => {
-      const orig = el.style.borderColor || el.style.color;
-      el.style.outline = '2px solid #4ade80';
-      setTimeout(() => el.style.outline = '', 1200);
-    }).catch(() => {
-      // Fallback
-      const ta = document.createElement('textarea');
-      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-      document.body.appendChild(ta); ta.select();
-      document.execCommand('copy'); document.body.removeChild(ta);
-    });
   }
 </script>
 </body>
