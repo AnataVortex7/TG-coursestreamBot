@@ -1077,7 +1077,7 @@ async function loadFolders() {
   const wrap = document.getElementById('folders-body');
   wrap.innerHTML = '<div class="loading">⏳ Loading folders...</div>';
   try {
-    const res   = await api('/courses/' + folderCurrentCourseID + '/folders');
+    const res   = await api('/folders/' + folderCurrentCourseID);
     const data  = await res.json();
     const folders = data.folders || [];
     if (!folders.length) {
@@ -1176,7 +1176,7 @@ async function saveFolder() {
   const btn = document.getElementById('folder-modal-save');
   btn.disabled = true; btn.textContent = '⏳ Saving...';
   try {
-    const url    = '/courses/' + folderCurrentCourseID + '/folders' + (folderEditID ? '/' + folderEditID : '');
+    const url    = '/folders/' + folderCurrentCourseID + (folderEditID ? '/' + folderEditID : '');
     const method = folderEditID ? 'PUT' : 'POST';
     const res    = await api(url, { method, body: JSON.stringify({ name, ranges }) });
     const data   = await res.json();
@@ -1197,7 +1197,7 @@ function deleteFolderConfirm(folderId, folderName) {
     `"${folderName}" delete kelyavar files ungrouped hotil — files delete hona nahi.`,
     async () => {
       try {
-        const res = await api('/courses/' + folderCurrentCourseID + '/folders/' + folderId, { method: 'DELETE' });
+        const res = await api('/folders/' + folderCurrentCourseID + '/' + folderId, { method: 'DELETE' });
         if (res.ok) { toast('✅ Folder delete kela!'); loadFolders(); }
         else { const d = await res.json(); toast('❌ ' + (d.error || 'Error'), 'error'); }
       } catch { toast('❌ Network error', 'error'); }
