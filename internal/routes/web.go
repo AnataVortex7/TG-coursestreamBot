@@ -2,13 +2,14 @@
 package routes
 
 import (
+	"net/http"
+	"strings"
+	"time"
+
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/token"
-	"net/http"
-	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -31,7 +32,7 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	// Logout
 	r.Engine.POST("/logout", auth.RequireAuth, auth.DoLogout)
 
-	// ── OTP login routes (NEW) ─────────────────────────────────────────────────
+	// ── OTP login routes ───────────────────────────────────────────────────────
 
 	// GET  /login/check-service  → {"up": true/false}  (Brevo health probe)
 	r.Engine.GET("/login/check-service", auth.CheckEmailService)
@@ -46,8 +47,6 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	r.Engine.POST("/login/password", auth.DoPasswordLogin)
 
 	// ── Admin Panel ────────────────────────────────────────────────────────────
-	// EnsureCSRFCookie: page load वर fsb_csrf cookie set करतो.
-	// admin_panel.html JS हा cookie वाचतो आणि X-CSRF-Token header म्हणून पाठवतो.
 	r.Engine.GET("/admin", auth.EnsureCSRFCookie, func(c *gin.Context) {
 		c.HTML(http.StatusOK, "admin_panel.html", gin.H{})
 	})
@@ -63,9 +62,7 @@ func (e *allRoutes) LoadWeb(r *Route) {
 		protected.GET("/courses", handleCoursesList)
 		protected.GET("/course/:id", handleCourseDetail)
 
-		// ── Announcements API (auth required) ──────────────────────────────
-		// GET /api/announcements         → global announcements (for popup)
-		// GET /api/announcements/:id     → course-specific announcements (access-gated)
+		// Announcements API (auth required)
 		protected.GET("/api/announcements", handleGlobalAnnouncements)
 		protected.GET("/api/announcements/:course_id", handleCourseAnnouncements)
 	}
@@ -77,7 +74,6 @@ func handleCoursesList(c *gin.Context) {
 	userID := auth.GetUserID(c)
 	username := auth.GetUsername(c)
 
-	// Access records with expiry info
 	accessList, err := db.ActiveAccessForUser(userID)
 	if err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -87,13 +83,11 @@ func handleCoursesList(c *gin.Context) {
 		return
 	}
 
-	// Build map: courseID → access record (for expiry info)
 	enrolledMap := make(map[primitive.ObjectID]db.Access, len(accessList))
 	for _, a := range accessList {
 		enrolledMap[a.CourseID] = a
 	}
 
-	// All courses in the system
 	allCourses, err := db.ListAllCourses()
 	if err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -111,8 +105,8 @@ func handleCoursesList(c *gin.Context) {
 		Price          string
 		BuyLink        string
 		FileCount      int64
-		ExpiresAt      string // empty = permanent; else "02 Jan 2006"
-		IsExpiringSoon bool   // true if < 7 days left
+		ExpiresAt      string
+		IsExpiringSoon bool
 	}
 
 	myCourses := make([]CourseCard, 0)
@@ -149,6 +143,32 @@ func handleCoursesList(c *gin.Context) {
 
 // ─── /course/:id ──────────────────────────────────────────────────────────────
 
+// VideoEntry — एक file चा template data
+type VideoEntry struct {
+	Index        int
+	ID           int
+	Title        string
+	Caption      string
+	FileName     string
+	MimeType     string
+	FileSize     string
+	StreamURL    string
+	MediaType    string
+	HasMedia     bool
+	ViewCount    int
+	LastViewedAt string
+	ChannelID    int64
+	CourseIDHex  string
+}
+
+// FolderGroup — template ला folder + त्यातले files एकत्र देतो
+type FolderGroup struct {
+	FolderID   string
+	Name       string
+	Files      []VideoEntry
+	IsUngrouped bool // true = folder नाही, range बाहेरचे files
+}
+
 func handleCourseDetail(c *gin.Context) {
 	userID := auth.GetUserID(c)
 	username := auth.GetUsername(c)
@@ -163,10 +183,8 @@ func handleCourseDetail(c *gin.Context) {
 		return
 	}
 
-	// Access check — don't block, just pass flag to template
 	hasAccess, _ := db.HasAccess(userID, courseID)
 
-	// Load course info
 	course, err := db.GetCourseByID(courseID)
 	if err != nil || course == nil {
 		c.HTML(http.StatusNotFound, "error.html", gin.H{
@@ -176,7 +194,7 @@ func handleCourseDetail(c *gin.Context) {
 		return
 	}
 
-	// Load all files for this course (sorted by sort_order)
+	// सर्व files sort_order नुसार
 	files, err := db.FilesForCourse(courseID)
 	if err != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
@@ -186,33 +204,21 @@ func handleCourseDetail(c *gin.Context) {
 		return
 	}
 
-	// Session token — embedded in stream token for active-session check
-	sessionToken := auth.GetSessionToken(c)
-
-	type VideoEntry struct {
-		Index        int
-		ID           int
-		Title        string
-		Caption      string
-		FileName     string
-		MimeType     string
-		FileSize     string
-		StreamURL    string
-		MediaType    string
-		HasMedia     bool
-		ViewCount    int
-		LastViewedAt string // empty if never viewed; else "02 Jan 2006, 3:04 PM"
-		ChannelID    int64  // needed for offline token API call
-		CourseIDHex  string // needed for offline token API call
+	// Folders for this course — order नुसार sorted
+	folders, err := db.GetFoldersForCourse(courseID)
+	if err != nil {
+		folders = []db.CourseFolder{} // error आला तरी page break नाही
 	}
 
-	// Load watch history for this course in one DB call (map for O(1) lookup)
+	sessionToken := auth.GetSessionToken(c)
+
+	// Watch history — एका DB call मध्ये
 	historyRecords, _ := db.GetWatchHistoryForCourse(userID, courseID)
 	type viewInfo struct {
 		count        int
 		lastViewedAt string
 	}
-	viewMap := make(map[int]viewInfo, len(historyRecords)) // keyed by messageID
+	viewMap := make(map[int]viewInfo, len(historyRecords))
 	for _, h := range historyRecords {
 		viewMap[h.MessageID] = viewInfo{
 			count:        h.ViewCount,
@@ -220,8 +226,8 @@ func handleCourseDetail(c *gin.Context) {
 		}
 	}
 
-	playlist := make([]VideoEntry, 0, len(files))
-	for i, f := range files {
+	// ── Build VideoEntry for each file ────────────────────────────────────────
+	buildEntry := func(i int, f db.CachedFile) VideoEntry {
 		mime := strings.ToLower(f.MimeType)
 		mediaType := "document"
 		switch {
@@ -238,15 +244,14 @@ func handleCourseDetail(c *gin.Context) {
 		streamURL := ""
 		hasMedia := false
 		if hasAccess {
-			streamToken, err := token.New(f.MessageID, f.ChannelID, userID.Hex(), sessionToken)
-			if err == nil {
-				streamURL = "/watch/" + streamToken
+			if tok, err := token.New(f.MessageID, f.ChannelID, userID.Hex(), sessionToken); err == nil {
+				streamURL = "/watch/" + tok
 				hasMedia = true
 			}
 		}
 
 		vi := viewMap[f.MessageID]
-		playlist = append(playlist, VideoEntry{
+		return VideoEntry{
 			Index:        i + 1,
 			ID:           f.MessageID,
 			Title:        f.Title,
@@ -261,16 +266,82 @@ func handleCourseDetail(c *gin.Context) {
 			LastViewedAt: vi.lastViewedAt,
 			ChannelID:    f.ChannelID,
 			CourseIDHex:  courseIDHex,
+		}
+	}
+
+	// ── Group files into folders ───────────────────────────────────────────────
+	// Folders नसल्यास flat playlist (जसं आधी होतं — backward compat)
+	if len(folders) == 0 {
+		playlist := make([]VideoEntry, 0, len(files))
+		for i, f := range files {
+			playlist = append(playlist, buildEntry(i, f))
+		}
+		c.HTML(http.StatusOK, "course_detail.html", gin.H{
+			"username":     username,
+			"course":       course,
+			"playlist":     playlist,      // flat list — जुना template काम करतो
+			"folderGroups": []FolderGroup{}, // empty — template folder section skip करतो
+			"hasFolders":   false,
+			"totalCount":   len(playlist),
+			"hasAccess":    hasAccess,
+			"botUsername":  config.ValueOf.BotUsername,
 		})
+		return
+	}
+
+	// Folder असल्यास — group करतो
+	// map: folderID → FolderGroup (pointer for in-place append)
+	groupMap := make(map[primitive.ObjectID]*FolderGroup, len(folders))
+	orderedGroups := make([]*FolderGroup, 0, len(folders)+1)
+
+	for _, f := range folders {
+		g := &FolderGroup{
+			FolderID:    f.ID.Hex(),
+			Name:        f.Name,
+			Files:       []VideoEntry{},
+			IsUngrouped: false,
+		}
+		groupMap[f.ID] = g
+		orderedGroups = append(orderedGroups, g)
+	}
+
+	// Ungrouped — range बाहेरचे files
+	ungrouped := &FolderGroup{
+		FolderID:    "ungrouped",
+		Name:        "Ungrouped",
+		Files:       []VideoEntry{},
+		IsUngrouped: true,
+	}
+
+	for i, f := range files {
+		entry := buildEntry(i, f)
+		matchedFolder := db.FolderForSortOrder(folders, f.SortOrder)
+		if matchedFolder == nil {
+			ungrouped.Files = append(ungrouped.Files, entry)
+		} else {
+			groupMap[matchedFolder.ID].Files = append(groupMap[matchedFolder.ID].Files, entry)
+		}
+	}
+
+	// Final ordered list — empty folders दाखवतो (admin ला visible असतात)
+	result := make([]FolderGroup, 0, len(orderedGroups)+1)
+	for _, g := range orderedGroups {
+		result = append(result, *g)
+	}
+	// Ungrouped files असतील तरच शेवटी add करतो
+	if len(ungrouped.Files) > 0 {
+		result = append(result, *ungrouped)
 	}
 
 	c.HTML(http.StatusOK, "course_detail.html", gin.H{
-		"username":    username,
-		"course":      course,
-		"playlist":    playlist,
-		"totalCount":  len(playlist),
-		"hasAccess":   hasAccess,
-		"botUsername": config.ValueOf.BotUsername,
+		"username":     username,
+		"course":       course,
+		"playlist":     []VideoEntry{}, // folders असताना हे empty — template folderGroups वापरतो
+		"folderGroups": result,
+		"hasFolders":   true,
+		"totalCount":   len(files),
+		"hasAccess":    hasAccess,
+		"botUsername":  config.ValueOf.BotUsername,
 	})
 }
 
@@ -332,8 +403,7 @@ func itoa(n int) string {
 	return string(buf[pos:])
 }
 
-
-// ─── /api/announcements  (global popup) ──────────────────────────────────────
+// ─── /api/announcements (global popup) ───────────────────────────────────────
 
 func handleGlobalAnnouncements(c *gin.Context) {
 	list, err := db.GetGlobalAnnouncements()
@@ -344,7 +414,7 @@ func handleGlobalAnnouncements(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
-// ─── /api/announcements/:course_id  (course banner — access-gated) ───────────
+// ─── /api/announcements/:course_id (course banner — access-gated) ─────────────
 
 func handleCourseAnnouncements(c *gin.Context) {
 	userID := auth.GetUserID(c)
@@ -355,10 +425,9 @@ func handleCourseAnnouncements(c *gin.Context) {
 		return
 	}
 
-	// Only return announcements to users who have access to the course
 	hasAccess, err := db.HasAccess(userID, courseID)
 	if err != nil || !hasAccess {
-		c.JSON(http.StatusOK, []db.Announcement{}) // empty — no leak of existence
+		c.JSON(http.StatusOK, []db.Announcement{})
 		return
 	}
 

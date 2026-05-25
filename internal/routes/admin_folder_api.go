@@ -1,0 +1,222 @@
+// internal/routes/admin_folder_api.go
+package routes
+
+import (
+	"net/http"
+	"strings"
+
+	"EverythingSuckz/fsb/internal/db"
+
+	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+// LoadFolderAPI — reflection-based auto-load (method name "Load" ne suruvat)
+func (e *allRoutes) LoadFolderAPI(r *Route) {
+	api := r.Engine.Group("/api/admin/courses/:course_id/folders", adminAuthMiddleware())
+	api.GET("", adminListFolders)
+	api.POST("", adminCreateFolder)
+	api.PUT("/:folder_id", adminUpdateFolder)
+	api.DELETE("/:folder_id", adminDeleteFolder)
+	api.POST("/reorder", adminReorderFolders)
+}
+
+// ── GET /api/admin/courses/:course_id/folders ─────────────────────────────────
+
+func adminListFolders(c *gin.Context) {
+	courseID, err := parseCourseID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	folders, err := db.GetFoldersForCourse(courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// nil slice → empty array in JSON
+	if folders == nil {
+		folders = []db.CourseFolder{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "folders": folders})
+}
+
+// ── POST /api/admin/courses/:course_id/folders ────────────────────────────────
+// Body: { "name": "Unit 1", "ranges": [{"start":1,"end":26}] }
+
+func adminCreateFolder(c *gin.Context) {
+	courseID, err := parseCourseID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	var body struct {
+		Name   string           `json:"name"`
+		Ranges []db.FolderRange `json:"ranges"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Folder name required"})
+		return
+	}
+	if len(body.Ranges) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one range required"})
+		return
+	}
+
+	// Validate ranges — start <= end, no negatives
+	for _, r := range body.Ranges {
+		if r.Start <= 0 || r.End <= 0 || r.Start > r.End {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid range: start must be > 0 and <= end"})
+			return
+		}
+	}
+
+	folder, err := db.CreateFolder(courseID, body.Name, body.Ranges)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "folder": folder})
+}
+
+// ── PUT /api/admin/courses/:course_id/folders/:folder_id ─────────────────────
+// Body: { "name": "Unit 1 - Updated", "ranges": [{"start":1,"end":30}] }
+
+func adminUpdateFolder(c *gin.Context) {
+	courseID, err := parseCourseID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	folderID, err := parseFolderID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid folder ID"})
+		return
+	}
+
+	// Folder course शी belong करतो का verify करतो
+	existing, err := db.GetFolderByID(folderID)
+	if err != nil || existing == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Folder not found"})
+		return
+	}
+	if existing.CourseID != courseID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Folder does not belong to this course"})
+		return
+	}
+
+	var body struct {
+		Name   string           `json:"name"`
+		Ranges []db.FolderRange `json:"ranges"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Folder name required"})
+		return
+	}
+	if len(body.Ranges) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one range required"})
+		return
+	}
+
+	for _, r := range body.Ranges {
+		if r.Start <= 0 || r.End <= 0 || r.Start > r.End {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid range: start must be > 0 and <= end"})
+			return
+		}
+	}
+
+	if err := db.UpdateFolder(folderID, body.Name, body.Ranges); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ── DELETE /api/admin/courses/:course_id/folders/:folder_id ──────────────────
+
+func adminDeleteFolder(c *gin.Context) {
+	courseID, err := parseCourseID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	folderID, err := parseFolderID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid folder ID"})
+		return
+	}
+
+	// Folder course शी belong करतो का verify करतो
+	existing, err := db.GetFolderByID(folderID)
+	if err != nil || existing == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Folder not found"})
+		return
+	}
+	if existing.CourseID != courseID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Folder does not belong to this course"})
+		return
+	}
+
+	if err := db.DeleteFolder(folderID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ── POST /api/admin/courses/:course_id/folders/reorder ───────────────────────
+// Body: { "orders": {"folderID1": 1, "folderID2": 2, "folderID3": 3} }
+
+func adminReorderFolders(c *gin.Context) {
+	courseID, err := parseCourseID(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	var body struct {
+		Orders map[string]int `json:"orders"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || len(body.Orders) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "orders map required"})
+		return
+	}
+
+	if err := db.ReorderFolders(courseID, body.Orders); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ─── Param helpers ────────────────────────────────────────────────────────────
+
+func parseCourseID(c *gin.Context) (primitive.ObjectID, error) {
+	return primitive.ObjectIDFromHex(c.Param("course_id"))
+}
+
+func parseFolderID(c *gin.Context) (primitive.ObjectID, error) {
+	return primitive.ObjectIDFromHex(c.Param("folder_id"))
+}
