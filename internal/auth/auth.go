@@ -24,8 +24,17 @@ var jwtSecret []byte
 func init() {
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
-		// fallback — production must set JWT_SECRET
-		secret = ""
+		// JWT_SECRET not set — empty secret means ANYONE can forge valid tokens.
+		// Production वर हे critical vulnerability आहे.
+		// Server start होणे block करतो — silent failure पेक्षा panic better.
+		panic("FATAL: JWT_SECRET environment variable is not set. " +
+			"Set a strong random secret (min 32 chars) before running in production. " +
+			"Example: openssl rand -hex 32")
+	}
+	if len(secret) < 32 {
+		// Weak secret — brute-force attack शक्य आहे
+		panic("FATAL: JWT_SECRET must be at least 32 characters long. " +
+			"Generate one with: openssl rand -hex 32")
 	}
 	jwtSecret = []byte(secret)
 }
