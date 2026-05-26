@@ -1736,12 +1736,14 @@ function tgResetLogin() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // WORKERS
 // ═══════════════════════════════════════════════════════════════════════════════
+// Worker admin endpoints are now under /api/admin/worker/* so the standard
+// api() helper (which prepends /api/admin) works correctly here.
 
 async function loadWorkers() {
   const box = document.getElementById('workers-list');
   box.innerHTML = '<div class="loading">⏳ Loading...</div>';
   try {
-    const res = await api('/api/worker/list');
+    const res = await api('/worker/list');
     const d = await res.json();
     if (!d.ok || !d.workers || d.workers.length === 0) {
       box.innerHTML = '<div style="padding:20px;color:#888;text-align:center">कोणताही worker नाही. वर URL add करा.</div>';
@@ -1785,9 +1787,8 @@ async function addWorker() {
   if (!url) { msg.textContent = '❌ URL टाका'; msg.style.color='#f87171'; return; }
   msg.textContent = '⏳ Adding...'; msg.style.color='#888';
   try {
-    const res = await api('/api/worker/add', {
+    const res = await api('/worker/add', {
       method: 'POST',
-      headers: {'Content-Type':'application/json'},
       body: JSON.stringify({worker_url: url})
     });
     const d = await res.json();
@@ -1796,23 +1797,22 @@ async function addWorker() {
     input.value = '';
     setTimeout(loadWorkers, 2000);
   } catch(e) {
-    msg.textContent = '❌ Network error'; msg.style.color='#f87171';
+    msg.textContent = '❌ ' + e.message; msg.style.color='#f87171';
   }
 }
 
 async function removeWorker(url) {
   openModal('Worker Remove', `"${url}" remove करायचा?`, async () => {
     try {
-      const res = await api('/api/worker/remove', {
+      const res = await api('/worker/remove', {
         method: 'DELETE',
-        headers: {'Content-Type':'application/json'},
         body: JSON.stringify({worker_url: url})
       });
       const d = await res.json();
       if (d.ok) { toast('✅ Worker removed'); loadWorkers(); }
       else toast('❌ ' + (d.error || 'Error'), 'error');
     } catch(e) {
-      toast('❌ Network error', 'error');
+      toast('❌ ' + e.message, 'error');
     }
   });
 }
