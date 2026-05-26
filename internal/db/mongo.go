@@ -105,6 +105,7 @@ type Worker struct {
 	ID       primitive.ObjectID `bson:"_id"`
 	URL      string             `bson:"url"`       // "https://worker1.koyeb.app" (no trailing slash)
 	Status   string             `bson:"status"`    // "active" | "unhealthy" | "offline"
+	AddedBy  string             `bson:"added_by"`  // "env" | "admin"
 	LastSeen time.Time          `bson:"last_seen"`
 	AddedAt  time.Time          `bson:"added_at"`
 }

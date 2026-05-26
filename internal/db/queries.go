@@ -546,9 +546,9 @@ func GetStreamNonce(nonce string) (*StreamNonce, error) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // UpsertWorker inserts or updates a worker by URL.
-// On insert: sets status="active", added_at=now, last_seen=now.
-// On update: refreshes last_seen and sets status="active".
-func UpsertWorker(url string) error {
+// On insert: sets status="active", added_at=now, last_seen=now, added_by=addedBy.
+// On update: refreshes last_seen and status. added_by is preserved ($setOnInsert only).
+func UpsertWorker(url, addedBy string) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -563,6 +563,7 @@ func UpsertWorker(url string) error {
 		"$setOnInsert": bson.M{
 			"_id":      primitive.NewObjectID(),
 			"added_at": now,
+			"added_by": addedBy,
 		},
 	}
 	opts := options.Update().SetUpsert(true)
