@@ -551,6 +551,53 @@
   vid.addEventListener('waiting',  () => spinner.classList.remove('hidden'));
   vid.addEventListener('canplay',  () => spinner.classList.add('hidden'));
   vid.addEventListener('playing',  () => spinner.classList.add('hidden'));
+
+  // ── Video error handler ────────────────────────────────────────────────────
+  // Fires when the server returns a non-video response (e.g. HTTP 429 stream
+  // limit, 403 session expired). Without this, the spinner spins forever and
+  // the user sees no message — the browser silently fails to decode HTML as video.
+  vid.addEventListener('error', async () => {
+    spinner.classList.add('hidden');
+
+    let msg = 'Could not load the video. Please reload the page and try again.';
+    try {
+      // A HEAD fetch reads the status code without downloading the body.
+      const resp = await fetch(vid.src, { method: 'HEAD', credentials: 'same-origin' });
+      if (resp.status === 429) {
+        msg = '⚠️ Another stream is already active on your account. Please close other tabs and try again.';
+      } else if (resp.status === 403) {
+        msg = '🔒 Your session has expired. Please log in again.';
+      } else if (resp.status === 404) {
+        msg = '❌ File not found. Please go back and try a different video.';
+      }
+    } catch (_) { /* network error — keep generic message */ }
+
+    // Inject error overlay inside the player wrapper
+    let errDiv = document.getElementById('stream-error-overlay');
+    if (!errDiv) {
+      errDiv = document.createElement('div');
+      errDiv.id = 'stream-error-overlay';
+      errDiv.style.cssText = [
+        'position:absolute', 'inset:0', 'z-index:20',
+        'display:flex', 'flex-direction:column',
+        'align-items:center', 'justify-content:center',
+        'background:rgba(0,0,0,0.88)',
+        'color:#f87171', 'font-size:14px',
+        'font-weight:600', 'text-align:center',
+        'padding:24px', 'gap:14px',
+      ].join(';');
+      wrap.appendChild(errDiv);
+    }
+    errDiv.innerHTML = `
+      <span style="font-size:2.2rem">⛔</span>
+      <span>${msg}</span>
+      <button onclick="location.reload()"
+        style="margin-top:6px;padding:8px 22px;background:#7c6af7;color:#fff;
+               border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:700;">
+        Reload
+      </button>`;
+    errDiv.style.display = 'flex';
+  });
   vid.addEventListener('loadeddata', () => {
     spinner.classList.add('hidden');
 
