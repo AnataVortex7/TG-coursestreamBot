@@ -224,6 +224,9 @@
       <div class="nav-item" id="nav-urlmonitor" onclick="goto('urlmonitor',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>URL Monitor
       </div>
+      <div class="nav-item" id="nav-workers" onclick="goto('workers',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>Workers
+      </div>
       <div class="nav-item" id="nav-stats" onclick="goto('stats',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Stats
       </div>
@@ -596,6 +599,34 @@
     </div>
 
     <!-- STATS -->
+    <!-- WORKERS -->
+    <div class="page" id="page-workers">
+      <div class="page-header">
+        <div class="page-title">Workers</div>
+        <div class="page-sub">Render streaming workers — sleep/wake management</div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <div class="card-title">➕ Add Worker</div>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+            <input id="worker-url-input" type="text" placeholder="https://my-worker.onrender.com"
+              style="flex:1;min-width:260px;padding:9px 12px;border-radius:8px;border:1px solid #e0e0e0;font-size:13px;outline:none"/>
+            <button class="btn btn-primary btn-sm" onclick="addWorker()">➕ Add Worker</button>
+          </div>
+          <div id="worker-add-msg" style="margin-top:8px;font-size:12px;color:#888"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <div class="card-head">
+          <div class="card-title">🖥️ Registered Workers</div>
+          <button class="btn btn-primary btn-sm" onclick="loadWorkers()">🔄 Refresh</button>
+        </div>
+        <div class="card-body" id="workers-list"><div class="loading">⏳ Loading...</div></div>
+      </div>
+    </div>
+
     <div class="page" id="page-stats">
       <div class="page-header">
         <div class="page-title">Stats</div>
@@ -763,6 +794,7 @@ function goto(name, el) {
   if (name==='access')      { loadUsers(); loadCourses(); }
   if (name==='tglogin')     loadTGStatus();
   if (name==='broadcast')   { loadAnnouncements(); loadCoursesForBroadcast(); }
+  if (name==='workers')     loadWorkers();
   if (name==='urlmonitor')  { loadURLMonitor(); startUMAutoRefresh(); }
   else stopUMAutoRefresh();
 }
@@ -1699,6 +1731,90 @@ function tgResetLogin() {
   const inp = document.getElementById('tg-main-input');
   if (inp) inp.value = '';
   tgSetStep('phone');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WORKERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function loadWorkers() {
+  const box = document.getElementById('workers-list');
+  box.innerHTML = '<div class="loading">⏳ Loading...</div>';
+  try {
+    const res = await api('/api/worker/list');
+    const d = await res.json();
+    if (!d.ok || !d.workers || d.workers.length === 0) {
+      box.innerHTML = '<div style="padding:20px;color:#888;text-align:center">कोणताही worker नाही. वर URL add करा.</div>';
+      return;
+    }
+    let h = '<div class="table-wrap"><table><thead><tr>' +
+      '<th>URL</th><th>Added By</th><th>Status</th><th>Sleep</th><th>Last Seen</th><th>Added At</th><th style="width:100px">Action</th>' +
+      '</tr></thead><tbody>';
+    for (const w of d.workers) {
+      const statusColor = w.healthy ? '#4ade80' : '#f87171';
+      const sleepLabel = w.sleeping
+        ? '<span style="color:#f59e0b;font-size:11px">😴 Sleeping</span>'
+        : '<span style="color:#4ade80;font-size:11px">✅ Awake</span>';
+      const addedByLabel = w.added_by === 'env'
+        ? '<span style="font-size:11px;color:#60a5fa">🔧 ENV</span>'
+        : '<span style="font-size:11px;color:#a78bfa">👤 Admin</span>';
+      h += `<tr>
+        <td style="font-size:12px;word-break:break-all">${esc(w.url)}</td>
+        <td>${addedByLabel}</td>
+        <td><span style="color:${statusColor};font-size:12px">${w.healthy ? '🟢 Healthy' : '🔴 Unhealthy'}</span></td>
+        <td>${sleepLabel}</td>
+        <td style="font-size:11px;color:#888">${esc(w.last_seen)}</td>
+        <td style="font-size:11px;color:#888">${esc(w.added_at)}</td>
+        <td>
+          <button class="btn btn-sm" style="background:#fee2e2;color:#b91c1c;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px"
+            onclick="removeWorker('${esc(w.url)}')">🗑 Remove</button>
+        </td>
+      </tr>`;
+    }
+    h += '</tbody></table></div>';
+    box.innerHTML = h;
+  } catch(e) {
+    box.innerHTML = '<div style="padding:20px;color:#f87171">❌ Load failed: ' + e.message + '</div>';
+  }
+}
+
+async function addWorker() {
+  const input = document.getElementById('worker-url-input');
+  const msg = document.getElementById('worker-add-msg');
+  const url = input.value.trim();
+  if (!url) { msg.textContent = '❌ URL टाका'; msg.style.color='#f87171'; return; }
+  msg.textContent = '⏳ Adding...'; msg.style.color='#888';
+  try {
+    const res = await api('/api/worker/add', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({worker_url: url})
+    });
+    const d = await res.json();
+    if (!d.ok) { msg.textContent = '❌ ' + (d.error || 'Error'); msg.style.color='#f87171'; return; }
+    msg.textContent = '✅ Worker added! Health check सुरू आहे...'; msg.style.color='#4ade80';
+    input.value = '';
+    setTimeout(loadWorkers, 2000);
+  } catch(e) {
+    msg.textContent = '❌ Network error'; msg.style.color='#f87171';
+  }
+}
+
+async function removeWorker(url) {
+  openModal('Worker Remove', `"${url}" remove करायचा?`, async () => {
+    try {
+      const res = await api('/api/worker/remove', {
+        method: 'DELETE',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({worker_url: url})
+      });
+      const d = await res.json();
+      if (d.ok) { toast('✅ Worker removed'); loadWorkers(); }
+      else toast('❌ ' + (d.error || 'Error'), 'error');
+    } catch(e) {
+      toast('❌ Network error', 'error');
+    }
+  });
 }
 </script>
 </body>

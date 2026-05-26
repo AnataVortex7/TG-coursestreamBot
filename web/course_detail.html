@@ -538,6 +538,18 @@
     document.body.appendChild(overlay);
     overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
   }
+
+  // ── Presence heartbeat — worker sleep/wake साठी ───────────────────────────
+  // दर 30 सेकंदाला main server ला ping → workers awake राहतात जोपर्यंत user आहे
+  (function startPresenceHeartbeat() {
+    async function ping() {
+      try {
+        await fetch('/api/presence/ping', { method: 'POST' });
+      } catch(_) {}
+    }
+    ping(); // लगेच एकदा ping
+    setInterval(ping, 30000); // दर 30 सेकंदाला
+  })();
 </script>
 </body>
 </html>
