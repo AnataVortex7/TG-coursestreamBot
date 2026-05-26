@@ -335,6 +335,13 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	api.DELETE("/urlmonitor/:id", adminURLMonitorRemove)
 	api.GET("/urlmonitor/:id/history", adminURLMonitorHistory)
 	api.POST("/urlmonitor/:id/check", adminURLMonitorCheck)
+
+	// ── Workers (admin panel) ─────────────────────────────────────────────────
+	// adminAuthMiddleware() automatically applied via the api group above.
+	// Normal users cannot reach these — admin session + CSRF + Origin required.
+	api.GET("/worker/list", handleAdminWorkerList)
+	api.POST("/worker/add", handleAdminWorkerAdd)
+	api.DELETE("/worker/remove", handleAdminWorkerRemove)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

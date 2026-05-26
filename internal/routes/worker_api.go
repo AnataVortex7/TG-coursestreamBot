@@ -5,31 +5,35 @@ import (
 	"net/http"
 	"os"
 
-	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	workerreg "EverythingSuckz/fsb/internal/worker"
 
 	"github.com/gin-gonic/gin"
 )
 
-// LoadWorkerAPI registers the /api/worker/* routes.
-// Called automatically by routes.Load() via reflection.
+// LoadWorkerAPI registers all worker-related routes.
+//
+// Public (worker-to-server, protected by X-Worker-Secret):
+//   POST /api/worker/register   — worker self-registers on startup
+//   POST /api/worker/heartbeat  — worker heartbeat every 25s
+//
+// Admin-only (moved under /api/admin/worker/* via LoadAdminAPI):
+//   GET    /api/admin/worker/list
+//   POST   /api/admin/worker/add
+//   DELETE /api/admin/worker/remove
+//
+// Note: Admin endpoints are registered in LoadAdminAPI (admin_api.go) so they
+// automatically inherit adminAuthMiddleware() — admin session + CSRF + Origin.
+
 func (e *allRoutes) LoadWorkerAPI(r *Route) {
-	// Self-registration — called by workers on startup (no auth needed)
+	// ── Worker self-registration (no user auth — protected by STREAM_SECRET) ──
 	r.Engine.POST("/api/worker/register", handleWorkerRegister)
-
-	// Heartbeat — called by workers every 25s (no auth needed)
 	r.Engine.POST("/api/worker/heartbeat", handleWorkerHeartbeat)
-
-	// Admin-only management endpoints
-	r.Engine.GET("/api/worker/list", auth.RequireAuth, handleWorkerList)
-	r.Engine.DELETE("/api/worker/remove", auth.RequireAuth, handleWorkerRemove)
-
-	// Admin manually adds a worker URL via admin panel
-	r.Engine.POST("/api/worker/add", auth.RequireAuth, handleWorkerAdd)
 }
 
 // ── POST /api/worker/register ─────────────────────────────────────────────────
+// Called by the worker process on startup to register itself with main server.
+// Protected by X-Worker-Secret header (STREAM_SECRET env var).
 
 type workerRegisterRequest struct {
 	WorkerURL string `json:"worker_url" binding:"required"`
@@ -54,10 +58,11 @@ func handleWorkerRegister(c *gin.Context) {
 }
 
 // ── POST /api/worker/heartbeat ────────────────────────────────────────────────
+// Called by the worker every 25s to signal it is still alive.
+// Protected by X-Worker-Secret header.
 
 type workerHeartbeatRequest struct {
 	WorkerURL string `json:"worker_url" binding:"required"`
-	Status    string `json:"status"`
 }
 
 func handleWorkerHeartbeat(c *gin.Context) {
@@ -78,28 +83,21 @@ func handleWorkerHeartbeat(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-// ── GET /api/worker/list  (admin only) ────────────────────────────────────────
+// ── Admin worker handlers (registered in LoadAdminAPI under adminAuthMiddleware) ──
 
-func handleWorkerList(c *gin.Context) {
+// GET /api/admin/worker/list
+func handleAdminWorkerList(c *gin.Context) {
 	workers, err := db.GetAllWorkers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
 
-	// Enrich with live in-memory status (healthy + sleeping)
-	type liveInfo struct {
-		healthy  bool
-		sleeping bool
-		addedBy  string
-	}
-	liveMap := make(map[string]liveInfo)
+	// Enrich with live in-memory status
+	liveMap := make(map[string]map[string]interface{})
 	for _, s := range workerreg.Status() {
 		url, _ := s["url"].(string)
-		healthy, _ := s["healthy"].(bool)
-		sleeping, _ := s["sleeping"].(bool)
-		addedBy, _ := s["added_by"].(string)
-		liveMap[url] = liveInfo{healthy: healthy, sleeping: sleeping, addedBy: addedBy}
+		liveMap[url] = s
 	}
 
 	type workerView struct {
@@ -115,16 +113,20 @@ func handleWorkerList(c *gin.Context) {
 	out := make([]workerView, 0, len(workers))
 	for _, w := range workers {
 		live := liveMap[w.URL]
+		healthy, _ := live["healthy"].(bool)
+		sleeping, _ := live["sleeping"].(bool)
 		addedBy := w.AddedBy
 		if addedBy == "" {
-			addedBy = live.addedBy
+			if ab, ok := live["added_by"].(string); ok {
+				addedBy = ab
+			}
 		}
 		out = append(out, workerView{
 			URL:      w.URL,
 			Status:   w.Status,
 			AddedBy:  addedBy,
-			Healthy:  live.healthy,
-			Sleeping: live.sleeping,
+			Healthy:  healthy,
+			Sleeping: sleeping,
 			LastSeen: w.LastSeen.Format("2006-01-02 15:04:05 UTC"),
 			AddedAt:  w.AddedAt.Format("2006-01-02 15:04:05 UTC"),
 		})
@@ -133,34 +135,12 @@ func handleWorkerList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "workers": out})
 }
 
-// ── DELETE /api/worker/remove  (admin only) ───────────────────────────────────
-
-type workerRemoveRequest struct {
-	WorkerURL string `json:"worker_url" binding:"required"`
-}
-
-func handleWorkerRemove(c *gin.Context) {
-	var req workerRemoveRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_url is required"})
-		return
-	}
-
-	if err := workerreg.RemoveWorker(req.WorkerURL); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-// ── POST /api/worker/add  (admin panel — manual add) ─────────────────────────
-
+// POST /api/admin/worker/add
 type workerAddRequest struct {
 	WorkerURL string `json:"worker_url" binding:"required"`
 }
 
-func handleWorkerAdd(c *gin.Context) {
+func handleAdminWorkerAdd(c *gin.Context) {
 	var req workerAddRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_url is required"})
@@ -168,6 +148,26 @@ func handleWorkerAdd(c *gin.Context) {
 	}
 
 	if err := workerreg.AddAdminWorker(req.WorkerURL); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// DELETE /api/admin/worker/remove
+type workerRemoveRequest struct {
+	WorkerURL string `json:"worker_url" binding:"required"`
+}
+
+func handleAdminWorkerRemove(c *gin.Context) {
+	var req workerRemoveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_url is required"})
+		return
+	}
+
+	if err := workerreg.RemoveWorker(req.WorkerURL); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}
