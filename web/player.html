@@ -325,6 +325,37 @@
     transition: background 0.15s;
   }
   #btn-restart:hover { background: rgba(255,255,255,0.15); }
+
+  /* ── Double-tap seek indicators ── */
+  .seek-flash {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 6;
+    width: 40%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+  }
+  #seek-flash-left  { left: 0;  border-radius: 0 80% 80% 0 / 0 50% 50% 0; background: rgba(255,255,255,0.12); }
+  #seek-flash-right { right: 0; border-radius: 80% 0 0 80% / 50% 0 0 50%; background: rgba(255,255,255,0.12); }
+  .seek-flash.active { opacity: 1; transition: opacity 0s; }
+  .seek-flash-icon {
+    font-size: 28px;
+    filter: drop-shadow(0 1px 6px rgba(0,0,0,0.9));
+  }
+  .seek-flash-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    letter-spacing: 0.5px;
+    filter: drop-shadow(0 1px 4px rgba(0,0,0,0.9));
+  }
 </style>
 </head>
 <body>
@@ -367,6 +398,16 @@
     <div id="spinner"><div class="spin"></div></div>
     <div id="play-flash"><span id="flash-icon">▶</span></div>
 
+    <!-- Double-tap seek indicators -->
+    <div id="seek-flash-left"  class="seek-flash">
+      <span class="seek-flash-icon">⏪</span>
+      <span class="seek-flash-label">-10 sec</span>
+    </div>
+    <div id="seek-flash-right" class="seek-flash">
+      <span class="seek-flash-icon">⏩</span>
+      <span class="seek-flash-label">+10 sec</span>
+    </div>
+
 
     <!-- Resume toast — shown when saved position exists -->
     <div id="resume-toast" class="hidden">
@@ -399,7 +440,7 @@
 </div>
 
 <div id="below">
-  <a id="back-link" href="javascript:history.back()">← Back</a>
+  <a id="back-link" href="/courses">← Back</a>
 </div>
 
 <script>
@@ -410,7 +451,24 @@
   const RESUME_POSITION = parseFloat('{{ .resumePosition }}') || 0;
   const WATCH_TOKEN     = '{{ .watchToken }}';
 
-  // ── Right-click / drag block (applies to all media types) ─────────────────
+  // ── Back button — referrer → history → /courses fallback ──────────────────
+  const backLink = document.getElementById('back-link');
+  if (backLink) {
+    const ref = document.referrer;
+    if (ref && ref.startsWith(location.origin) && !ref.includes('/watch/') && !ref.includes('/watch-stream/')) {
+      // came from a page on the same site (e.g. course detail) — go back there
+      backLink.href = ref;
+    } else if (history.length > 1) {
+      // has browser history — use history.back()
+      backLink.href = 'javascript:void(0)';
+      backLink.addEventListener('click', () => history.back());
+    } else {
+      // no history, no referrer — go to courses list
+      backLink.href = '/courses';
+    }
+  }
+
+
   document.addEventListener('contextmenu', e => e.preventDefault());
 
   const vid = document.getElementById('vid');
@@ -453,7 +511,48 @@
     else            { vid.pause(); flashAnim('⏸'); }
   }
 
-  overlay.addEventListener('click', togglePlay);
+  // ── Double-tap seek (left = -10s, right = +10s) ───────────────────────────
+  const seekFlashLeft  = document.getElementById('seek-flash-left');
+  const seekFlashRight = document.getElementById('seek-flash-right');
+
+  function showSeekFlash(side) {
+    const el = side === 'left' ? seekFlashLeft : seekFlashRight;
+    el.classList.add('active');
+    clearTimeout(el._timer);
+    el._timer = setTimeout(() => el.classList.remove('active'), 600);
+  }
+
+  let tapTimer = null;
+  let tapCount = 0;
+  let tapSide  = null;
+
+  overlay.addEventListener('click', (e) => {
+    const rect = overlay.getBoundingClientRect();
+    const side = (e.clientX - rect.left) < rect.width / 2 ? 'left' : 'right';
+
+    tapCount++;
+    tapSide = side;
+
+    if (tapCount === 1) {
+      tapTimer = setTimeout(() => {
+        if (tapCount === 1) togglePlay();  // single tap → play/pause
+        tapCount = 0;
+        tapSide  = null;
+      }, 250);
+    } else if (tapCount >= 2) {
+      clearTimeout(tapTimer);
+      tapCount = 0;
+      if (tapSide === 'left') {
+        vid.currentTime = Math.max(0, vid.currentTime - 10);
+        showSeekFlash('left');
+      } else {
+        vid.currentTime = Math.min(vid.duration || 0, vid.currentTime + 10);
+        showSeekFlash('right');
+      }
+      tapSide = null;
+    }
+  });
+
   btnPlay.addEventListener('click', togglePlay);
 
   vid.addEventListener('play',  () => { btnPlay.textContent = '⏸'; });
@@ -572,6 +671,7 @@
       }
     } catch (_) { /* network error — keep generic message */ }
 
+    // Inject error overlay inside the p
     // Inject error overlay inside the player wrapper
     let errDiv = document.getElementById('stream-error-overlay');
     if (!errDiv) {
@@ -648,3 +748,4 @@
 </script>
 </body>
 </html>
+                       
