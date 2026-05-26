@@ -115,6 +115,27 @@ func globalSecurityHeaders() gin.HandlerFunc {
 		// Server info hide करा
 		c.Header("Server", "")
 
+		// ── Content Security Policy ───────────────────────────────────────────
+		// XSS attacks आणि malicious script injection रोखतो.
+		// 'unsafe-inline' हे inline <script> / <style> tags साठी आवश्यक आहे.
+		// object-src 'none': Flash/plugins block करतो.
+		// base-uri 'self': base tag injection रोखतो.
+		c.Header("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
+				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
+				"font-src 'self' https://fonts.gstatic.com data:; "+
+				"img-src 'self' data: https: blob:; "+
+				"media-src 'self' blob:; "+
+				"connect-src 'self'; "+
+				"frame-src 'none'; "+
+				"object-src 'none'; "+
+				"base-uri 'self'",
+		)
+
+		// Permissions Policy — camera/mic/location access block करतो
+		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+
 		c.Next()
 	}
 }
