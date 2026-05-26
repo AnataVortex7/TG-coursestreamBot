@@ -207,13 +207,22 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// 3d. Concurrent stream limit
-	if r.Method != "HEAD" {
+	// 3d. Concurrent stream limit — applies to ALL methods including HEAD.
+	// HEAD must NOT be exempt: the browser sends HEAD first to get video
+	// metadata (Content-Type, Content-Length), then GET for the actual bytes.
+	// Skipping HEAD lets the browser think the stream is valid, then the GET
+	// returns an HTML error page which the video decoder tries to parse as
+	// video data → silent buffering loop instead of a clean error message.
+	{
 		release, ok := acquireStream(currentUserID.Hex())
 		if !ok {
-			c.HTML(http.StatusTooManyRequests, "error.html", gin.H{
+			// Return JSON (not HTML) so the player's error handler can read
+			// the status code cleanly via a HEAD fetch on the error event.
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"ok":      false,
 				"code":    429,
-				"message": "Another stream session is already active for your account. Please close other tabs or tools and try again.",
+				"error":   "stream_limit",
+				"message": "Another stream session is already active for your account. Please close other tabs and try again.",
 			})
 			return
 		}
