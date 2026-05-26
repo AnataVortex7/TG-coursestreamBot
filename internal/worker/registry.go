@@ -161,39 +161,31 @@ func Init(log *zap.Logger) {
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-// Next returns the next healthy worker URL using priority round-robin:
-//  1. Env-var workers (always active, highest priority)
-//  2. Admin-added awake workers
-//  3. Returns "" → caller falls back to local stream
+// Next returns the next healthy worker URL using a single round-robin pool
+// that includes ALL healthy workers — both env-var and admin-added (awake).
+// Returns "" if no healthy worker is available → caller falls back to local stream.
 func Next() string {
 	Default.mu.RLock()
 	defer Default.mu.RUnlock()
 
-	// Priority 1: env workers
-	envHealthy := make([]*WorkerNode, 0)
+	// Build one pool: all healthy workers (env always included, admin only if awake)
+	var pool []*WorkerNode
 	for _, w := range Default.workers {
-		if w.Healthy && w.AddedBy == addedByEnv {
-			envHealthy = append(envHealthy, w)
+		if !w.Healthy {
+			continue
 		}
-	}
-	if len(envHealthy) > 0 {
-		idx := atomic.AddInt64(&Default.counter, 1)
-		return envHealthy[int(idx)%len(envHealthy)].BaseURL
+		if w.AddedBy == addedByAdmin && w.sleeping {
+			continue // sleeping admin workers are excluded
+		}
+		pool = append(pool, w)
 	}
 
-	// Priority 2: admin workers that are awake + healthy
-	adminHealthy := make([]*WorkerNode, 0)
-	for _, w := range Default.workers {
-		if w.Healthy && w.AddedBy == addedByAdmin && !w.sleeping {
-			adminHealthy = append(adminHealthy, w)
-		}
-	}
-	if len(adminHealthy) > 0 {
-		idx := atomic.AddInt64(&Default.counter, 1)
-		return adminHealthy[int(idx)%len(adminHealthy)].BaseURL
+	if len(pool) == 0 {
+		return "" // caller falls back to main server
 	}
 
-	return ""
+	idx := atomic.AddInt64(&Default.counter, 1)
+	return pool[int(idx)%len(pool)].BaseURL
 }
 
 // RegisterWorker is called by POST /api/worker/register (worker self-registers on startup).
