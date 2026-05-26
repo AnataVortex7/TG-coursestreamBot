@@ -24,6 +24,9 @@ func (e *allRoutes) LoadWorkerAPI(r *Route) {
 	// Admin-only management endpoints
 	r.Engine.GET("/api/worker/list", auth.RequireAuth, handleWorkerList)
 	r.Engine.DELETE("/api/worker/remove", auth.RequireAuth, handleWorkerRemove)
+
+	// Admin manually adds a worker URL via admin panel
+	r.Engine.POST("/api/worker/add", auth.RequireAuth, handleWorkerAdd)
 }
 
 // ── POST /api/worker/register ─────────────────────────────────────────────────
@@ -33,7 +36,6 @@ type workerRegisterRequest struct {
 }
 
 func handleWorkerRegister(c *gin.Context) {
-	// ── Secret check ──────────────────────────────
 	secret := c.GetHeader("X-Worker-Secret")
 	expected := os.Getenv("STREAM_SECRET")
 	if subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) != 1 {
@@ -59,7 +61,6 @@ type workerHeartbeatRequest struct {
 }
 
 func handleWorkerHeartbeat(c *gin.Context) {
-	// ── Secret check ──────────────────────────────
 	secret := c.GetHeader("X-Worker-Secret")
 	expected := os.Getenv("STREAM_SECRET")
 	if subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) != 1 {
@@ -86,28 +87,44 @@ func handleWorkerList(c *gin.Context) {
 		return
 	}
 
-	// Enrich with live in-memory health status
-	healthMap := make(map[string]bool)
+	// Enrich with live in-memory status (healthy + sleeping)
+	type liveInfo struct {
+		healthy  bool
+		sleeping bool
+		addedBy  string
+	}
+	liveMap := make(map[string]liveInfo)
 	for _, s := range workerreg.Status() {
-		if url, ok := s["url"].(string); ok {
-			healthMap[url] = s["healthy"].(bool)
-		}
+		url, _ := s["url"].(string)
+		healthy, _ := s["healthy"].(bool)
+		sleeping, _ := s["sleeping"].(bool)
+		addedBy, _ := s["added_by"].(string)
+		liveMap[url] = liveInfo{healthy: healthy, sleeping: sleeping, addedBy: addedBy}
 	}
 
 	type workerView struct {
 		URL      string `json:"url"`
 		Status   string `json:"status"`
+		AddedBy  string `json:"added_by"`
 		Healthy  bool   `json:"healthy"`
+		Sleeping bool   `json:"sleeping"`
 		LastSeen string `json:"last_seen"`
 		AddedAt  string `json:"added_at"`
 	}
 
 	out := make([]workerView, 0, len(workers))
 	for _, w := range workers {
+		live := liveMap[w.URL]
+		addedBy := w.AddedBy
+		if addedBy == "" {
+			addedBy = live.addedBy
+		}
 		out = append(out, workerView{
 			URL:      w.URL,
 			Status:   w.Status,
-			Healthy:  healthMap[w.URL],
+			AddedBy:  addedBy,
+			Healthy:  live.healthy,
+			Sleeping: live.sleeping,
 			LastSeen: w.LastSeen.Format("2006-01-02 15:04:05 UTC"),
 			AddedAt:  w.AddedAt.Format("2006-01-02 15:04:05 UTC"),
 		})
@@ -130,6 +147,27 @@ func handleWorkerRemove(c *gin.Context) {
 	}
 
 	if err := workerreg.RemoveWorker(req.WorkerURL); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ── POST /api/worker/add  (admin panel — manual add) ─────────────────────────
+
+type workerAddRequest struct {
+	WorkerURL string `json:"worker_url" binding:"required"`
+}
+
+func handleWorkerAdd(c *gin.Context) {
+	var req workerAddRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "worker_url is required"})
+		return
+	}
+
+	if err := workerreg.AddAdminWorker(req.WorkerURL); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return
 	}

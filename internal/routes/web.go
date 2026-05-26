@@ -10,6 +10,7 @@ import (
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/token"
+	workerreg "EverythingSuckz/fsb/internal/worker"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -47,9 +48,6 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	r.Engine.POST("/login/password", auth.DoPasswordLogin)
 
 	// ── Admin Panel ────────────────────────────────────────────────────────────
-	// Note: /admin ला स्वतःचा वेगळा login आहे (ADMIN_USER/ADMIN_PASS via fsb_admin cookie).
-	// Regular user RequireAuth इथे नाही — admin ला regular account नसेल तर block होईल.
-	// EnsureCSRFCookie: CSRF token set करतो (admin JS साठी)
 	r.Engine.GET("/admin", auth.EnsureCSRFCookie, func(c *gin.Context) {
 		c.HTML(http.StatusOK, "admin_panel.html", gin.H{})
 	})
@@ -173,6 +171,9 @@ type FolderGroup struct {
 }
 
 func handleCourseDetail(c *gin.Context) {
+	// Wake sleeping admin workers — user is about to watch a video
+	go workerreg.WakeAll()
+
 	userID := auth.GetUserID(c)
 	username := auth.GetUsername(c)
 
