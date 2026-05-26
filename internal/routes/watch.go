@@ -207,22 +207,13 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// 3d. Concurrent stream limit — applies to ALL methods including HEAD.
-	// HEAD must NOT be exempt: the browser sends HEAD first to get video
-	// metadata (Content-Type, Content-Length), then GET for the actual bytes.
-	// Skipping HEAD lets the browser think the stream is valid, then the GET
-	// returns an HTML error page which the video decoder tries to parse as
-	// video data → silent buffering loop instead of a clean error message.
-	{
+	// 3d. Concurrent stream limit
+	if r.Method != "HEAD" {
 		release, ok := acquireStream(currentUserID.Hex())
 		if !ok {
-			// Return JSON (not HTML) so the player's error handler can read
-			// the status code cleanly via a HEAD fetch on the error event.
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"ok":      false,
+			c.HTML(http.StatusTooManyRequests, "error.html", gin.H{
 				"code":    429,
-				"error":   "stream_limit",
-				"message": "Another stream session is already active for your account. Please close other tabs and try again.",
+				"message": "Another stream session is already active for your account. Please close other tabs or tools and try again.",
 			})
 			return
 		}
@@ -405,12 +396,24 @@ func setAntiDownloadHeaders(c *gin.Context) {
 // Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
 func setPlayerSecurityHeaders(c *gin.Context) {
 	host := config.ValueOf.Host
-	// Worker URLs पण media-src मध्ये add करायला हवेत —
+	// Env-var worker URLs + admin-added worker URLs दोन्ही media-src मध्ये हवेत —
 	// worker redirect नंतर browser CSP block करतो otherwise.
 	mediaSrc := "'self' " + host
+
+	// 1. Env-var workers
 	for _, wu := range config.ValueOf.WorkerURLs {
 		mediaSrc += " " + wu
 	}
+
+	// 2. Admin-added workers (DB मधून registered)
+	for _, s := range workerreg.Status() {
+		if s["added_by"] == "admin" {
+			if u, ok := s["url"].(string); ok && u != "" {
+				mediaSrc += " " + u
+			}
+		}
+	}
+
 	c.Header("X-Frame-Options", "DENY")
 	c.Header("Content-Security-Policy",
 		"default-src 'self'; "+
