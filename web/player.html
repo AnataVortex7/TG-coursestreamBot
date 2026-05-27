@@ -659,17 +659,37 @@
   });
 
   // ── Fullscreen ─────────────────────────────────────────────────────────────
+  // ── Landscape lock helper ─────────────────────────────────────────────────
+  function lockLandscape() {
+    if (screen.orientation && typeof screen.orientation.lock === 'function') {
+      screen.orientation.lock('landscape').catch(function() {});
+    }
+  }
+  function unlockOrientation() {
+    if (screen.orientation && typeof screen.orientation.unlock === 'function') {
+      screen.orientation.unlock();
+    }
+  }
+
   btnFS.addEventListener('click', () => {
     if (!document.fullscreenElement) {
       wrap.requestFullscreen && wrap.requestFullscreen();
+      lockLandscape(); // fullscreen + landscape एकत्र
     } else {
       document.exitFullscreen && document.exitFullscreen();
+      unlockOrientation(); // fullscreen बाहेर — orientation free
     }
   });
 
   document.addEventListener('fullscreenchange', () => {
     btnFS.textContent = document.fullscreenElement ? '✕' : '⛶';
+    if (!document.fullscreenElement) unlockOrientation();
   });
+
+  // ── Auto landscape on player page load (mobile) ────────────────────────────
+  if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+    lockLandscape();
+  }
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
   document.addEventListener('keydown', e => {

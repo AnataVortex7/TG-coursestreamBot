@@ -610,5 +610,24 @@ document.addEventListener('contextmenu', function(e){ e.preventDefault(); return
 })();
 </script>
 <!-- ██ END PROTECTION FINAL ██ -->
+
+<script>
+// ── Auto Landscape — Watch button click ──────────────────────────────────────
+// Mobile वर Watch button click केल्यावर landscape lock होतो.
+// Screen Orientation API support नसेल तर silently skip करतो.
+document.querySelectorAll('a.btn-watch').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    if (
+      screen.orientation &&
+      typeof screen.orientation.lock === 'function' &&
+      /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+    ) {
+      screen.orientation.lock('landscape').catch(function() {
+        // Permission denied किंवा API support नाही — ignore
+      });
+    }
+  });
+});
+</script>
 </body>
 </html>
