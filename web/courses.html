@@ -682,132 +682,106 @@ document.getElementById('announce-overlay').addEventListener('click', function(e
 
 
 
-<!-- ██ ANTI-DEBUG PROTECTION v5 ██ -->
+
+<!-- ██ ANTI-DEBUG PROTECTION FINAL ██ -->
 <script>
 (function(){
 'use strict';
 
-// ── Overlay setup ─────────────────────────────────────────────────
+// ── Overlay ───────────────────────────────────────────────────────
 var _overlay = document.createElement('div');
 _overlay.id = '__blk';
-_overlay.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0a0a0f;z-index:2147483647;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif';
-_overlay.innerHTML = '<div style="text-align:center"><div style="font-size:80px">🚫</div><h1 style="color:#ff3333;font-size:30px;margin:16px 0">Access Blocked</h1><p style="color:#666;font-size:14px">Developer tools detected.<br>Please close developer tools to continue.</p></div>';
-var _isBlocked = false;
+_overlay.style.cssText = [
+  'display:none',
+  'position:fixed',
+  'top:0','left:0',
+  'width:100vw','height:100vh',
+  'background:#0a0a0f',
+  'z-index:2147483647',
+  'flex-direction:column',
+  'align-items:center',
+  'justify-content:center',
+  'font-family:system-ui,sans-serif'
+].join(';');
+_overlay.innerHTML = [
+  '<div style="text-align:center">',
+  '<div style="font-size:72px;margin-bottom:12px">🚫</div>',
+  '<h1 style="color:#ff3333;font-size:26px;margin:0 0 10px">Access Blocked</h1>',
+  '<p style="color:#555;font-size:13px;line-height:1.7">Developer tools detected.<br>Close developer tools to continue.</p>',
+  '</div>'
+].join('');
 
-function _showBlock(){
-  if(_isBlocked) return;
-  _isBlocked = true;
-  document.querySelectorAll('video,audio').forEach(function(v){ try{ v.pause(); }catch(e){} });
-  document.querySelectorAll('body > *:not(#__blk)').forEach(function(el){
-    el.setAttribute('data-h', el.style.display || '');
+var _blocked  = false;
+
+function _show(){
+  if(_blocked) return;
+  _blocked = true;
+  document.querySelectorAll('video,audio').forEach(function(m){ try{ m.pause(); }catch(e){} });
+  document.querySelectorAll('body>*:not(#__blk)').forEach(function(el){
+    el.setAttribute('data-d', el.style.display || '');
     el.style.display = 'none';
   });
   _overlay.style.display = 'flex';
 }
 
-function _hideBlock(){
-  if(!_isBlocked) return;
-  _isBlocked = false;
-  document.querySelectorAll('body > *:not(#__blk)').forEach(function(el){
-    el.style.display = el.getAttribute('data-h') || '';
+function _hide(){
+  if(!_blocked) return;
+  _blocked = false;
+  document.querySelectorAll('body>*:not(#__blk)').forEach(function(el){
+    el.style.display = el.getAttribute('data-d') || '';
   });
   _overlay.style.display = 'none';
 }
 
-function _appendOverlay(){
-  if(document.body) document.body.appendChild(_overlay);
+function _mount(){
+  if(document.body && !document.getElementById('__blk')){
+    document.body.appendChild(_overlay);
+  }
 }
 if(document.readyState === 'loading'){
-  document.addEventListener('DOMContentLoaded', _appendOverlay);
-} else { _appendOverlay(); }
+  document.addEventListener('DOMContentLoaded', _mount);
+} else { _mount(); }
 
-// ── SAVE real console refs BEFORE anything else ───────────────────
-var _realLog   = window.console && console.log   ? console.log.bind(console)   : function(){};
-var _realClear = window.console && console.clear ? console.clear.bind(console) : function(){};
-
-// ── Method 1: Window size (docked devtools) ───────────────────────
-function _sizeDetect(){
+// ── Detection: Window size (most reliable, zero false positives) ──
+// outerWidth - innerWidth > 0 means browser chrome/devtools is taking space
+// We use 130px threshold: devtools panel is always > 130px wide/tall
+function _detect(){
   var dw = window.outerWidth  - window.innerWidth;
   var dh = window.outerHeight - window.innerHeight;
-  return dw > 100 || dh > 100;
+  return (dw > 130 || dh > 130);
 }
 
-// ── Method 2: Regex toString (works for ALL devtools - docked, undocked, separate window) ──
-// When Chrome console is OPEN and renders a log entry, it calls .toString() on objects
-// This does NOT trigger when console is closed — zero false positives
-var _regexTriggered = false;
-var _watchRegex = /./;
-_watchRegex.toString = function(){
-  _regexTriggered = true;
-  return '';
-};
-
-function _consoleDetect(){
-  _regexTriggered = false;
-  try{
-    _realLog(_watchRegex);   // Chrome calls toString() only when console panel is visible
-    _realClear();
-  }catch(e){}
-  return _regexTriggered;
-}
-
-// ── Method 3: Firebug / element.id getter ────────────────────────
-var _idTriggered = false;
-function _idDetect(){
-  _idTriggered = false;
-  try{
-    var el = document.createElement('div');
-    Object.defineProperty(el, 'id', {
-      get: function(){ _idTriggered = true; return 'x'; },
-      configurable: true
-    });
-    _realLog(el);
-    _realClear();
-  }catch(e){}
-  return _idTriggered;
-}
-
-// ── Detection loop ────────────────────────────────────────────────
-// Requires 2 consecutive detections before blocking (debounce)
-var _hitCount = 0;
+// ── Polling — starts after 1.5s so page loads cleanly first ───────
+var _ready = false;
+setTimeout(function(){ _ready = true; }, 1500);
 
 setInterval(function(){
-  var detected = _sizeDetect() || _consoleDetect() || _idDetect();
-
-  if(detected){
-    _hitCount++;
-    if(_hitCount >= 2) _showBlock();
-  } else {
-    _hitCount = 0;
-    _hideBlock();
-  }
+  if(!_ready) return;
+  if(_detect()){ _show(); }
+  else          { _hide(); }
 }, 500);
 
-// ── Keyboard block ────────────────────────────────────────────────
+// ── Keyboard shortcuts block ──────────────────────────────────────
 document.addEventListener('keydown', function(e){
   // F12
   if(e.keyCode === 123){ e.preventDefault(); return false; }
-  // Ctrl+Shift+I / J / C
-  if(e.ctrlKey && e.shiftKey && [73,74,67].indexOf(e.keyCode) !== -1){ e.preventDefault(); return false; }
-  // Ctrl+U (view source)
+  // Ctrl+Shift+I / J / C / K
+  if(e.ctrlKey && e.shiftKey && [73,74,67,75].indexOf(e.keyCode) !== -1){
+    e.preventDefault(); return false;
+  }
+  // Ctrl+U  (view-source)
   if(e.ctrlKey && e.keyCode === 85){ e.preventDefault(); return false; }
-  // Cmd+Option+I (Mac)
+  // Cmd+Option+I  (Mac)
   if(e.metaKey && e.altKey && e.keyCode === 73){ e.preventDefault(); return false; }
 }, true);
 
 // ── Right-click block ─────────────────────────────────────────────
-document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; }, true);
-
-// ── Console override (AFTER saving refs above) ────────────────────
-setTimeout(function(){
-  var _noop = function(){};
-  ['log','warn','error','info','debug','table','dir','trace','clear'].forEach(function(m){
-    try{ console[m] = _noop; }catch(e){}
-  });
-}, 100);
+document.addEventListener('contextmenu', function(e){
+  e.preventDefault(); return false;
+}, true);
 
 })();
 </script>
-<!-- ██ END PROTECTION v5 ██ -->
+<!-- ██ END PROTECTION FINAL ██ -->
 </body>
 </html>
