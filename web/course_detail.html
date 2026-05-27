@@ -555,17 +555,17 @@
 
 
 
-<!-- ██ ANTI-DEBUG PROTECTION v4 ██ -->
+
+<!-- ██ ANTI-DEBUG PROTECTION v5 ██ -->
 <script>
 (function(){
 'use strict';
 
-// ── Overlay ───────────────────────────────────────────────────────
+// ── Overlay setup ─────────────────────────────────────────────────
 var _overlay = document.createElement('div');
 _overlay.id = '__blk';
 _overlay.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0a0a0f;z-index:2147483647;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif';
 _overlay.innerHTML = '<div style="text-align:center"><div style="font-size:80px">🚫</div><h1 style="color:#ff3333;font-size:30px;margin:16px 0">Access Blocked</h1><p style="color:#666;font-size:14px">Developer tools detected.<br>Please close developer tools to continue.</p></div>';
-
 var _isBlocked = false;
 
 function _showBlock(){
@@ -573,7 +573,7 @@ function _showBlock(){
   _isBlocked = true;
   document.querySelectorAll('video,audio').forEach(function(v){ try{ v.pause(); }catch(e){} });
   document.querySelectorAll('body > *:not(#__blk)').forEach(function(el){
-    el.setAttribute('data-hide', el.style.display || '');
+    el.setAttribute('data-h', el.style.display || '');
     el.style.display = 'none';
   });
   _overlay.style.display = 'flex';
@@ -583,50 +583,105 @@ function _hideBlock(){
   if(!_isBlocked) return;
   _isBlocked = false;
   document.querySelectorAll('body > *:not(#__blk)').forEach(function(el){
-    el.style.display = el.getAttribute('data-hide') || '';
+    el.style.display = el.getAttribute('data-h') || '';
   });
   _overlay.style.display = 'none';
 }
 
-if(document.readyState === 'loading'){
-  document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(_overlay); });
-} else {
-  document.body.appendChild(_overlay);
+function _appendOverlay(){
+  if(document.body) document.body.appendChild(_overlay);
 }
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', _appendOverlay);
+} else { _appendOverlay(); }
 
-// ── Detection: Window Size Only (no false positives) ─────────────
-// Threshold 160px — safe, reliable, no flickering
-var _detectCount = 0; // consecutive detections before blocking
+// ── SAVE real console refs BEFORE anything else ───────────────────
+var _realLog   = window.console && console.log   ? console.log.bind(console)   : function(){};
+var _realClear = window.console && console.clear ? console.clear.bind(console) : function(){};
 
-function _isDevToolsOpen(){
+// ── Method 1: Window size (docked devtools) ───────────────────────
+function _sizeDetect(){
   var dw = window.outerWidth  - window.innerWidth;
   var dh = window.outerHeight - window.innerHeight;
-  return (dw > 160 || dh > 160);
+  return dw > 100 || dh > 100;
 }
 
+// ── Method 2: Regex toString (works for ALL devtools - docked, undocked, separate window) ──
+// When Chrome console is OPEN and renders a log entry, it calls .toString() on objects
+// This does NOT trigger when console is closed — zero false positives
+var _regexTriggered = false;
+var _watchRegex = /./;
+_watchRegex.toString = function(){
+  _regexTriggered = true;
+  return '';
+};
+
+function _consoleDetect(){
+  _regexTriggered = false;
+  try{
+    _realLog(_watchRegex);   // Chrome calls toString() only when console panel is visible
+    _realClear();
+  }catch(e){}
+  return _regexTriggered;
+}
+
+// ── Method 3: Firebug / element.id getter ────────────────────────
+var _idTriggered = false;
+function _idDetect(){
+  _idTriggered = false;
+  try{
+    var el = document.createElement('div');
+    Object.defineProperty(el, 'id', {
+      get: function(){ _idTriggered = true; return 'x'; },
+      configurable: true
+    });
+    _realLog(el);
+    _realClear();
+  }catch(e){}
+  return _idTriggered;
+}
+
+// ── Detection loop ────────────────────────────────────────────────
+// Requires 2 consecutive detections before blocking (debounce)
+var _hitCount = 0;
+
 setInterval(function(){
-  if(_isDevToolsOpen()){
-    _detectCount++;
-    // Block only after 2 consecutive detections (avoids false positive on resize)
-    if(_detectCount >= 2){ _showBlock(); }
+  var detected = _sizeDetect() || _consoleDetect() || _idDetect();
+
+  if(detected){
+    _hitCount++;
+    if(_hitCount >= 2) _showBlock();
   } else {
-    _detectCount = 0;
+    _hitCount = 0;
     _hideBlock();
   }
 }, 500);
 
-// ── Keyboard Block ────────────────────────────────────────────────
+// ── Keyboard block ────────────────────────────────────────────────
 document.addEventListener('keydown', function(e){
-  if(e.keyCode === 123){ e.preventDefault(); return false; } // F12
-  if(e.ctrlKey && e.shiftKey && [73,74,67].indexOf(e.keyCode) !== -1){ e.preventDefault(); return false; } // Ctrl+Shift+I/J/C
-  if(e.ctrlKey && e.keyCode === 85){ e.preventDefault(); return false; } // Ctrl+U
+  // F12
+  if(e.keyCode === 123){ e.preventDefault(); return false; }
+  // Ctrl+Shift+I / J / C
+  if(e.ctrlKey && e.shiftKey && [73,74,67].indexOf(e.keyCode) !== -1){ e.preventDefault(); return false; }
+  // Ctrl+U (view source)
+  if(e.ctrlKey && e.keyCode === 85){ e.preventDefault(); return false; }
+  // Cmd+Option+I (Mac)
+  if(e.metaKey && e.altKey && e.keyCode === 73){ e.preventDefault(); return false; }
 }, true);
 
-// ── Right Click Block ─────────────────────────────────────────────
+// ── Right-click block ─────────────────────────────────────────────
 document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; }, true);
+
+// ── Console override (AFTER saving refs above) ────────────────────
+setTimeout(function(){
+  var _noop = function(){};
+  ['log','warn','error','info','debug','table','dir','trace','clear'].forEach(function(m){
+    try{ console[m] = _noop; }catch(e){}
+  });
+}, 100);
 
 })();
 </script>
-<!-- ██ END PROTECTION v4 ██ -->
+<!-- ██ END PROTECTION v5 ██ -->
 </body>
 </html>
