@@ -625,21 +625,6 @@
         </div>
         <div class="card-body" id="workers-list"><div class="loading">⏳ Loading...</div></div>
       </div>
-
-      <!-- LIVE STREAMS -->
-      <div class="card" style="margin-top:16px">
-        <div class="card-head" style="display:flex;align-items:center;justify-content:space-between">
-          <div style="display:flex;align-items:center;gap:10px">
-            <div class="card-title">🔴 Live Streams</div>
-            <span id="live-stream-count" style="background:#ef4444;color:#fff;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:700;display:none">0</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span id="live-stream-refresh-indicator" style="font-size:11px;color:#888">Auto-refresh: 5s</span>
-            <button class="btn btn-primary btn-sm" onclick="loadLiveStreams()">🔄 Refresh</button>
-          </div>
-        </div>
-        <div class="card-body" id="live-streams-box"><div class="loading">⏳ Loading...</div></div>
-      </div>
     </div>
 
     <div class="page" id="page-stats">
@@ -809,8 +794,7 @@ function goto(name, el) {
   if (name==='access')      { loadUsers(); loadCourses(); }
   if (name==='tglogin')     loadTGStatus();
   if (name==='broadcast')   { loadAnnouncements(); loadCoursesForBroadcast(); }
-  if (name==='workers')     { loadWorkers(); loadLiveStreams(); startLiveStreamRefresh(); }
-  else stopLiveStreamRefresh();
+  if (name==='workers')     loadWorkers();
   if (name==='urlmonitor')  { loadURLMonitor(); startUMAutoRefresh(); }
   else stopUMAutoRefresh();
 }
@@ -901,7 +885,7 @@ async function loadUsers() {
     populateUserDropdowns();
     if (!wrap) return;
     if (!cachedUsers.length){ wrap.innerHTML='<div class="empty"><div class="empty-icon">👥</div>Koni user nahi yet</div>'; return; }
-    let h='<div class="table-wrap"><table><thead><tr><th>Full Name</th><th>Username</th><th>Mobile</th><th>Email</th><th>Status</th><th>Joined</th><th style="width:160px">Action</th></tr></thead><tbody>';
+    let h='<div class="table-wrap"><table><thead><tr><th>Full Name</th><th>Username</th><th>Mobile</th><th>Email</th><th>Status</th><th>Joined</th><th style="width:280px">Action</th></tr></thead><tbody>';
     cachedUsers.forEach(u=>{
       const badge=u.is_active?'<span class="badge badge-green">Active</span>':'<span class="badge badge-red">Disabled</span>';
       const joined=u.created_at?new Date(u.created_at).toLocaleDateString('en-IN'):'—';
@@ -915,6 +899,7 @@ async function loadUsers() {
         <td style="white-space:nowrap">
           ${u.is_active?`<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Disable</button>`:'<span style="font-size:12px;color:#bbb">Disabled</span>'}
           ${u.email?`<button class="btn btn-sm" style="background:#4f46e5;color:#fff;margin-left:4px" onclick="openMsgModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email)}')">📩 Msg</button>`:''}
+          ${u.is_active?`<button class="btn btn-sm" style="background:#0891b2;color:#fff;margin-left:4px;margin-top:3px" onclick="resetPasswordModal('${u.id}','${esc(u.full_name||u.username)}')">🔑 Pwd</button><button class="btn btn-sm" style="background:#059669;color:#fff;margin-left:4px;margin-top:3px" onclick="loginAsUser('${u.id}','${esc(u.full_name||u.username)}')">👁 Login As</button>`:''}
         </td>
       </tr>`;
     });
@@ -1817,115 +1802,105 @@ async function addWorker() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// LIVE STREAMS
-// ═══════════════════════════════════════════════════════════════════════════════
+async function removeWorker(url) {
+  openModal('Worker Remove', `"${url}" remove करायचा?`, async () => {
+    try {
+      const res = await api('/worker/remove', {
+        method: 'DELETE',
+        body: JSON.stringify({worker_url: url})
+      });
+      const d = await res.json();
+      if (d.ok) { toast('✅ Worker removed'); loadWorkers(); }
+      else toast('❌ ' + (d.error || 'Error'), 'error');
+    } catch(e) {
+      toast('❌ ' + e.message, 'error');
+    }
+  });
+}
+</script>
+<!-- ── Reset Password Modal ── -->
+<div class="modal-overlay" id="pwdModal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">🔑 Password Reset</div>
+    <p id="pwd-modal-name" style="font-size:13px;color:#888;margin:4px 0 16px;"></p>
+    <div style="margin-bottom:12px">
+      <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:4px">Nava Password *</label>
+      <input id="pwd-new" type="password" placeholder="Min 6 characters"
+             style="width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;box-sizing:border-box" />
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:4px">Confirm Password *</label>
+      <input id="pwd-confirm" type="password" placeholder="Repeat password"
+             style="width:100%;padding:9px 12px;border:1.5px solid #ddd;border-radius:8px;font-size:14px;box-sizing:border-box" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closePwdModal()">Cancel</button>
+      <button class="btn" style="background:#0891b2;color:#fff" id="pwd-save-btn" onclick="doResetPassword()">🔑 Reset Password</button>
+    </div>
+  </div>
+</div>
 
-let liveStreamRefreshTimer = null;
+<script>
+// ── Password Reset ────────────────────────────────────────────────────────────
+let pwdTargetUserID = '';
 
-function startLiveStreamRefresh() {
-  stopLiveStreamRefresh();
-  liveStreamRefreshTimer = setInterval(loadLiveStreams, 5000);
+function resetPasswordModal(userId, name) {
+  pwdTargetUserID = userId;
+  document.getElementById('pwd-modal-name').textContent = 'User: ' + name;
+  document.getElementById('pwd-new').value = '';
+  document.getElementById('pwd-confirm').value = '';
+  document.getElementById('pwdModal').classList.add('open');
 }
 
-function stopLiveStreamRefresh() {
-  if (liveStreamRefreshTimer) { clearInterval(liveStreamRefreshTimer); liveStreamRefreshTimer = null; }
+function closePwdModal() {
+  document.getElementById('pwdModal').classList.remove('open');
+  pwdTargetUserID = '';
 }
 
-function lsTimeAgo(utcStr) {
-  const diff = Math.floor((Date.now() - new Date(utcStr + (utcStr.endsWith('Z') ? '' : 'Z'))) / 1000);
-  if (diff < 5)   return 'just now';
-  if (diff < 60)  return diff + 's ago';
-  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-  return Math.floor(diff / 3600) + 'h ago';
-}
+async function doResetPassword() {
+  const pw  = document.getElementById('pwd-new').value;
+  const cpw = document.getElementById('pwd-confirm').value;
+  if (pw.length < 6)      { toast('❌ Password min 6 characters pahije', 'error'); return; }
+  if (pw !== cpw)          { toast('❌ Passwords match hot naahit', 'error'); return; }
 
-function lsWorkerLabel(url, isLocal) {
-  if (isLocal) return '<span style="color:#60a5fa;font-size:12px">🏠 Main Server</span>';
-  // Extract short name from URL (e.g. "my-worker" from "https://my-worker.onrender.com")
+  const btn = document.getElementById('pwd-save-btn');
+  btn.disabled = true; btn.textContent = '⏳ Saving...';
+
   try {
-    const host = new URL(url).hostname;
-    const short = host.split('.')[0];
-    return `<span style="color:#4ade80;font-size:12px" title="${esc(url)}">⚡ ${esc(short)}</span>`;
-  } catch { return `<span style="color:#4ade80;font-size:12px">⚡ ${esc(url)}</span>`; }
-}
-
-async function loadLiveStreams() {
-  const box = document.getElementById('live-streams-box');
-  const countBadge = document.getElementById('live-stream-count');
-  const indicator = document.getElementById('live-stream-refresh-indicator');
-  if (!box) return;
-
-  // Update refresh timestamp without clearing content
-  if (indicator) indicator.textContent = 'Updated: ' + new Date().toLocaleTimeString();
-
-  try {
-    const res = await api('/stream/live');
+    const res = await api('/users/' + pwdTargetUserID + '/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ new_password: pw })
+    });
     const d = await res.json();
-    if (!d.ok) { box.innerHTML = '<div style="padding:16px;color:#f87171">❌ Load failed</div>'; return; }
-
-    const active = d.active || [];
-    const replaced = d.recently_replaced || [];
-
-    // Update count badge
-    if (countBadge) {
-      countBadge.textContent = active.length;
-      countBadge.style.display = active.length > 0 ? 'inline-block' : 'none';
-    }
-
-    let h = '';
-
-    // ── Active Streams ──
-    if (active.length === 0) {
-      h += '<div style="padding:20px;color:#888;text-align:center;font-size:13px">📭 सध्या कोणताही active stream नाही</div>';
+    if (res.ok) {
+      toast('✅ ' + (d.username || 'User') + ' cha password reset zala. Session kill kela.');
+      closePwdModal();
     } else {
-      h += `<div style="font-size:12px;font-weight:600;color:#a89fff;margin-bottom:8px;padding:0 2px">🟢 Active — ${active.length} stream${active.length > 1 ? 's' : ''}</div>`;
-      h += '<div class="table-wrap"><table><thead><tr>' +
-        '<th>User</th><th>File</th><th>Worker</th><th>Key (hint)</th><th>Started</th>' +
-        '</tr></thead><tbody>';
-      for (const s of active) {
-        const userLabel = s.user_name
-          ? `<div style="font-weight:600;font-size:12px">${esc(s.user_name)}</div><div style="font-size:11px;color:#888">${esc(s.user_email)}</div>`
-          : `<div style="font-size:12px">${esc(s.user_email || s.user_id)}</div>`;
-        h += `<tr>
-          <td>${userLabel}</td>
-          <td style="font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.file_name)}">${esc(s.file_name)}</td>
-          <td>${lsWorkerLabel(s.worker_url, s.is_local)}</td>
-          <td style="font-size:11px;color:#888;font-family:monospace">${esc(s.stream_key_hint)}</td>
-          <td style="font-size:11px;color:#888" title="${esc(s.started_at)}">${lsTimeAgo(s.started_at)}</td>
-        </tr>`;
-      }
-      h += '</tbody></table></div>';
+      toast('❌ ' + (d.error || 'Error'), 'error');
     }
+  } catch { toast('❌ Network error', 'error'); }
+  finally  { btn.disabled = false; btn.textContent = '🔑 Reset Password'; }
+}
 
-    // ── Recently Replaced (killed) ──
-    if (replaced.length > 0) {
-      h += `<div style="margin-top:16px;padding:10px 12px;background:rgba(245,158,11,.08);border-radius:8px;border:1px solid rgba(245,158,11,.2)">`;
-      h += `<div style="font-size:12px;font-weight:600;color:#f59e0b;margin-bottom:8px">⚠️ Recently Replaced — जुना stream kill झाला (2 min visible)</div>`;
-      h += '<div class="table-wrap"><table><thead><tr>' +
-        '<th>User</th><th>File</th><th>Old Worker</th><th>Killed At</th>' +
-        '</tr></thead><tbody>';
-      for (const r of replaced) {
-        const userLabel = r.user_name
-          ? `<div style="font-weight:600;font-size:12px">${esc(r.user_name)}</div><div style="font-size:11px;color:#888">${esc(r.user_email)}</div>`
-          : `<div style="font-size:12px">${esc(r.user_email)}</div>`;
-        const oldWorker = r.was_local
-          ? '<span style="color:#60a5fa;font-size:12px">🏠 Main Server</span>'
-          : (() => { try { return `<span style="font-size:12px;color:#f87171" title="${esc(r.old_worker_url)}">⚡ ${esc(new URL(r.old_worker_url).hostname.split('.')[0])}</span>`; } catch { return `<span style="font-size:12px;color:#f87171">${esc(r.old_worker_url)}</span>`; } })();
-        h += `<tr>
-          <td>${userLabel}</td>
-          <td style="font-size:12px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.file_name)}">${esc(r.file_name)}</td>
-          <td>${oldWorker} <span style="font-size:10px;color:#f87171">→ Killed</span></td>
-          <td style="font-size:11px;color:#888" title="${esc(r.replaced_at)}">${lsTimeAgo(r.replaced_at)}</td>
-        </tr>`;
-      }
-      h += '</tbody></table></div></div>';
+// ── Login As User ─────────────────────────────────────────────────────────────
+// Silent impersonation — user ला कळत नाही, admin session touch होत नाही.
+// Nava tab madhe user account open hoto.
+
+async function loginAsUser(userId, name) {
+  // Simple confirm — no extra info exposed to user side
+  if (!confirm('Admin म्हणून "' + name + '" च्या account मध्ये जायचे?\n\nNew tab मध्ये user account open होईल.')) return;
+
+  try {
+    const res = await api('/users/' + userId + '/login-as', { method: 'POST' });
+    const d   = await res.json();
+    if (res.ok && d.redirect) {
+      // Nava tab — admin panel open rahato
+      window.open(d.redirect, '_blank');
+      toast('👁 ' + (d.username || name) + ' च्या account मध्ये गेलात (new tab)');
+    } else {
+      toast('❌ ' + (d.error || 'Login as failed'), 'error');
     }
-
-    box.innerHTML = h;
-  } catch(e) {
-    box.innerHTML = '<div style="padding:16px;color:#f87171">❌ ' + e.message + '</div>';
-  }
+  } catch { toast('❌ Network error', 'error'); }
 }
 </script>
 </body>
