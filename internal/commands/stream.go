@@ -6,6 +6,7 @@ import (
 
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/utils"
+	tokenpkg "EverythingSuckz/fsb/internal/token"
 
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
@@ -91,7 +92,13 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 	
-	link := fmt.Sprintf("%s/stream/%d", config.ValueOf.Host, messageID)
+	// Public token generate करतो — 3 तास valid, कोणीही access करू शकतो
+	pubToken, err := tokenpkg.NewPublicToken(messageID)
+	if err != nil {
+		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("Error generating stream token - %s", err.Error())), nil)
+		return dispatcher.EndGroups
+	}
+	link := fmt.Sprintf("%s/stream/%s", config.ValueOf.Host, pubToken)
 	text := styling.Code(link)
 	row := tg.KeyboardButtonRow{
 		Buttons: []tg.KeyboardButtonClass{
@@ -128,3 +135,4 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	}
 	return dispatcher.EndGroups
 }
+
