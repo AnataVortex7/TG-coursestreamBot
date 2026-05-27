@@ -554,12 +554,13 @@
 
 
 
-<!-- ██ ANTI-DEBUG PROTECTION v3 ██ -->
+
+<!-- ██ ANTI-DEBUG PROTECTION v4 ██ -->
 <script>
 (function(){
 'use strict';
 
-// ── Block Overlay ────────────────────────────────────────────────
+// ── Overlay ───────────────────────────────────────────────────────
 var _overlay = document.createElement('div');
 _overlay.id = '__blk';
 _overlay.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0a0a0f;z-index:2147483647;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif';
@@ -570,13 +571,9 @@ var _isBlocked = false;
 function _showBlock(){
   if(_isBlocked) return;
   _isBlocked = true;
-  // Pause all media
-  document.querySelectorAll('video,audio').forEach(function(v){
-    try{ v.pause(); }catch(e){}
-  });
-  // Hide page content
+  document.querySelectorAll('video,audio').forEach(function(v){ try{ v.pause(); }catch(e){} });
   document.querySelectorAll('body > *:not(#__blk)').forEach(function(el){
-    el.setAttribute('data-was-visible', el.style.display || '');
+    el.setAttribute('data-hide', el.style.display || '');
     el.style.display = 'none';
   });
   _overlay.style.display = 'flex';
@@ -585,132 +582,51 @@ function _showBlock(){
 function _hideBlock(){
   if(!_isBlocked) return;
   _isBlocked = false;
-  // Restore page content
   document.querySelectorAll('body > *:not(#__blk)').forEach(function(el){
-    var prev = el.getAttribute('data-was-visible');
-    el.style.display = (prev === null || prev === 'none') ? '' : prev;
+    el.style.display = el.getAttribute('data-hide') || '';
   });
   _overlay.style.display = 'none';
-  // Resume video if was playing
-  document.querySelectorAll('video').forEach(function(v){
-    try{ v.play(); }catch(e){}
-  });
 }
 
-function _initOverlay(){
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', function(){ document.body.appendChild(_overlay); });
+} else {
   document.body.appendChild(_overlay);
 }
-if(document.readyState === 'loading'){
-  document.addEventListener('DOMContentLoaded', _initOverlay);
-} else { _initOverlay(); }
 
-// ── Save real console ref BEFORE any override ─────────────────────
-var _realLog   = console.log.bind(console);
-var _realClear = console.clear.bind(console);
+// ── Detection: Window Size Only (no false positives) ─────────────
+// Threshold 160px — safe, reliable, no flickering
+var _detectCount = 0; // consecutive detections before blocking
 
-// ── Detection Methods ─────────────────────────────────────────────
-
-// Method 1: Window size (docked devtools)
-function _sizeOpen(){
-  return (window.outerWidth  - window.innerWidth  > 100) ||
-         (window.outerHeight - window.innerHeight > 100);
+function _isDevToolsOpen(){
+  var dw = window.outerWidth  - window.innerWidth;
+  var dh = window.outerHeight - window.innerHeight;
+  return (dw > 160 || dh > 160);
 }
 
-// Method 2: toString trick (console open detection)
-var _tostrOpen = false;
-var _devObj = /./;
-_devObj.toString = function(){ _tostrOpen = true; };
-function _checkTostr(){
-  _tostrOpen = false;
-  _realLog('%c', _devObj);
-  _realClear();
-  return _tostrOpen;
-}
-
-// Method 3: element.id getter (undocked/separate window devtools)
-var _idOpen = false;
-function _checkId(){
-  _idOpen = false;
-  var el = document.createElement('div');
-  Object.defineProperty(el, 'id', {
-    get: function(){ _idOpen = true; return '__x'; }
-  });
-  _realLog(el);
-  _realClear();
-  return _idOpen;
-}
-
-// Method 4: debugger timing
-function _debuggerOpen(){
-  var t = performance.now();
-  (function(){ debugger; })();
-  return (performance.now() - t) > 200;
-}
-
-// ── Main Detection Loop ───────────────────────────────────────────
-var _tick = 0;
 setInterval(function(){
-  _tick++;
-  var detected = false;
-
-  // Check size every tick
-  if(_sizeOpen()) detected = true;
-
-  // Check console tricks every 2 ticks
-  if(!detected && _tick % 2 === 0){
-    if(_checkTostr()) detected = true;
-    if(_checkId())    detected = true;
+  if(_isDevToolsOpen()){
+    _detectCount++;
+    // Block only after 2 consecutive detections (avoids false positive on resize)
+    if(_detectCount >= 2){ _showBlock(); }
+  } else {
+    _detectCount = 0;
+    _hideBlock();
   }
+}, 500);
 
-  // Debugger timing every 4 ticks
-  if(!detected && _tick % 4 === 0){
-    if(_debuggerOpen()) detected = true;
-  }
-
-  // Apply or remove block based on detection
-  if(detected){ _showBlock(); }
-  else { _hideBlock(); }
-
-}, 300);
-
-// ── Continuous debugger (makes devtools very slow/unusable) ───────
-setInterval(function(){
-  (function(){ debugger; })();
-}, 150);
-
-// ── Keyboard Shortcuts Block ──────────────────────────────────────
+// ── Keyboard Block ────────────────────────────────────────────────
 document.addEventListener('keydown', function(e){
-  if(e.keyCode === 123){ e.preventDefault(); return false; }
-  if(e.ctrlKey && e.shiftKey && [73,74,67,75].indexOf(e.keyCode) !== -1){ e.preventDefault(); return false; }
-  if(e.ctrlKey && [85,83,80].indexOf(e.keyCode) !== -1){ e.preventDefault(); return false; }
-  if(e.metaKey && e.altKey && [73,74].indexOf(e.keyCode) !== -1){ e.preventDefault(); return false; }
+  if(e.keyCode === 123){ e.preventDefault(); return false; } // F12
+  if(e.ctrlKey && e.shiftKey && [73,74,67].indexOf(e.keyCode) !== -1){ e.preventDefault(); return false; } // Ctrl+Shift+I/J/C
+  if(e.ctrlKey && e.keyCode === 85){ e.preventDefault(); return false; } // Ctrl+U
 }, true);
 
-// ── Right Click / Drag / Select ───────────────────────────────────
+// ── Right Click Block ─────────────────────────────────────────────
 document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; }, true);
-document.addEventListener('dragstart',   function(e){ e.preventDefault(); return false; }, true);
-document.addEventListener('selectstart', function(e){ e.preventDefault(); return false; }, true);
-
-// ── Print Block ───────────────────────────────────────────────────
-window.addEventListener('beforeprint', function(){ _showBlock(); });
-
-// ── Console Override (AFTER saving refs) ─────────────────────────
-var _noop = function(){};
-['log','warn','error','info','debug','table','dir','dirxml',
- 'group','groupCollapsed','groupEnd','trace','assert',
- 'count','time','timeEnd','clear'].forEach(function(m){
-  try{ console[m] = _noop; }catch(e){}
-});
-try{
-  Object.defineProperty(window, 'console', {
-    get: function(){ return { log:_noop, warn:_noop, error:_noop, clear:_noop, table:_noop, dir:_noop }; },
-    configurable: false,
-    set: function(){}
-  });
-}catch(e){}
 
 })();
 </script>
-<!-- ██ END PROTECTION v3 ██ -->
+<!-- ██ END PROTECTION v4 ██ -->
 </body>
 </html>
