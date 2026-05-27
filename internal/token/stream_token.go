@@ -76,6 +76,13 @@ type WorkerTokenPayload struct {
 	MimeType      string `json:"fmime"`
 	DCID          int    `json:"dc"`
 
+	// Stream identity key — main server generates a unique key per stream.
+	// Worker sends this key in every heartbeat so main server can confirm
+	// this stream is still the latest active one for this user.
+	// If user starts a new stream, main server issues a new key → old key
+	// becomes invalid → worker detects it and kills the stream.
+	StreamKey string `json:"sk"`
+
 	// Expiry
 	ExpiresAt time.Time `json:"exp"`
 }
@@ -108,6 +115,7 @@ func New(messageID int, channelID int64, userID string, sessionToken string) (st
 //   - thumbSize                    — photo thumb type (empty for documents)
 //   - fileSize, fileName, mimeType — file metadata
 //   - dcID                         — Telegram DC where the file lives
+//   - streamKey                    — unique key for this stream session (heartbeat validation)
 func NewWorkerToken(
 	messageID int64, channelID int64, userID string,
 	apiID int32, apiHash string, botToken string,
@@ -116,6 +124,7 @@ func NewWorkerToken(
 	thumbSize string,
 	fileSize int64, fileName string, mimeType string,
 	dcID int,
+	streamKey string,
 ) (string, error) {
 	payload := WorkerTokenPayload{
 		MessageID:     messageID,
@@ -133,6 +142,7 @@ func NewWorkerToken(
 		FileName:      fileName,
 		MimeType:      mimeType,
 		DCID:          dcID,
+		StreamKey:     streamKey,
 		ExpiresAt:     time.Now().Add(WorkerTokenTTL),
 	}
 	return encryptWorker(payload)
