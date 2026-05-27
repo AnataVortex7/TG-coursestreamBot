@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"os"
+	"strings"
 
 	"EverythingSuckz/fsb/internal/db"
 	workerreg "EverythingSuckz/fsb/internal/worker"
@@ -29,6 +30,10 @@ func (e *allRoutes) LoadWorkerAPI(r *Route) {
 	// ── Worker self-registration (no user auth — protected by STREAM_SECRET) ──
 	r.Engine.POST("/api/worker/register", handleWorkerRegister)
 	r.Engine.POST("/api/worker/heartbeat", handleWorkerHeartbeat)
+
+	// ── Stream key check — worker polls this every 5s to verify its stream
+	// is still the latest active one for the user. ──────────────────────────
+	r.Engine.GET("/api/worker/stream-check", handleWorkerStreamCheck)
 }
 
 // ── POST /api/worker/register ─────────────────────────────────────────────────
@@ -81,6 +86,48 @@ func handleWorkerHeartbeat(c *gin.Context) {
 
 	workerreg.HeartbeatWorker(req.WorkerURL)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ── GET /api/worker/stream-check ──────────────────────────────────────────────
+// Worker दर 5 सेकंदाला हे call करतो हे verify करण्यासाठी की त्याचा stream
+// अजूनही latest active stream आहे का.
+//
+// Auth:   X-Worker-Secret header (= STREAM_SECRET env var)
+// Params: uid (userIDHex), key (streamKey issued with the worker token)
+//
+// Response:
+//   {"active": true}  — key match, stream valid, चालू ठेव
+//   {"active": false} — key mismatch (user started new stream), stream बंद कर
+//
+// Worker ला 2 consecutive non-active/fail responses आल्यास stream cancel करायचा.
+
+func handleWorkerStreamCheck(c *gin.Context) {
+	// 1. Auth — same STREAM_SECRET used by register/heartbeat
+	secret := c.GetHeader("X-Worker-Secret")
+	expected := os.Getenv("STREAM_SECRET")
+	if subtle.ConstantTimeCompare([]byte(secret), []byte(expected)) != 1 {
+		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "unauthorized"})
+		return
+	}
+
+	// 2. Params
+	uid := strings.TrimSpace(c.Query("uid"))
+	key := strings.TrimSpace(c.Query("key"))
+	if uid == "" || key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "uid and key are required"})
+		return
+	}
+
+	// 3. Check against in-memory registry
+	val, exists := activeStreamKeys.Load(uid)
+	if !exists {
+		// No active stream registered for this user at all
+		c.JSON(http.StatusOK, gin.H{"active": false})
+		return
+	}
+
+	active := val.(string) == key
+	c.JSON(http.StatusOK, gin.H{"active": active})
 }
 
 // ── Admin worker handlers (registered in LoadAdminAPI under adminAuthMiddleware) ──

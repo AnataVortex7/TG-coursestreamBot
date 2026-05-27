@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	range_parser "github.com/quantumsheep/range-parser"
@@ -29,19 +28,20 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ── Concurrent stream limiter ─────────────────────────────────────────────────
+// ── Active stream key registry ────────────────────────────────────────────────
+// प्रत्येक user साठी latest stream चा unique key store करतो.
+// नवीन stream सुरू झाला की नवीन key generate होतो — जुना key invalid होतो.
+// Worker दर 5 सेकंदाला हा key verify करतो; key मिळाला नाही तर stream बंद करतो.
 
-var streamCounters sync.Map
+var activeStreamKeys sync.Map // userIDHex → streamKey (string)
 
-func acquireStream(userIDHex string) (release func(), ok bool) {
-	v, _ := streamCounters.LoadOrStore(userIDHex, new(int32))
-	counter := v.(*int32)
-	n := atomic.AddInt32(counter, 1)
-	if n > 2 {
-		atomic.AddInt32(counter, -1)
-		return nil, false
+// genStreamKey generates a cryptographically random 16-byte hex key.
+func genStreamKey() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
 	}
-	return func() { atomic.AddInt32(counter, -1) }, true
+	return hex.EncodeToString(b), nil
 }
 
 // ── Route loader ──────────────────────────────────────────────────────────────
@@ -223,18 +223,17 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// 3d. Concurrent stream limit
-	if r.Method != "HEAD" {
-		release, ok := acquireStream(currentUserID.Hex())
-		if !ok {
-			c.HTML(http.StatusTooManyRequests, "error.html", gin.H{
-				"code":    429,
-				"message": "Another stream session is already active for your account. Please close other tabs or tools and try again.",
-			})
-			return
-		}
-		defer release()
+	// 3d. Generate a unique stream key for this stream session.
+	// This key is stored in-memory and included in the worker token.
+	// Worker sends it back every 5s via /api/worker/stream-check.
+	// When a new stream starts for the same user, a new key is stored —
+	// the old key becomes invalid and the worker kills its stream.
+	streamKey, skErr := genStreamKey()
+	if skErr != nil {
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Server error. Please try again."})
+		return
 	}
+	activeStreamKeys.Store(currentUserID.Hex(), streamKey)
 
 	// 4. File + access check
 	cachedFile, err := db.GetCachedFile(verified.MessageID, verified.ChannelID)
@@ -269,6 +268,7 @@ func handleWatchStream(c *gin.Context) {
 			file.ThumbSize,
 			file.FileSize, file.FileName, file.MimeType,
 			file.DCID,
+			streamKey,
 		)
 		if tokErr != nil {
 			log.Error("failed to generate worker token — falling back to local stream", zap.Error(tokErr))
