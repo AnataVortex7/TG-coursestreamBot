@@ -113,6 +113,24 @@ func CheckPassword(plain, hash string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plain)) == nil
 }
 
+// IssueImpersonationToken — admin ne user banuun browse karayla short-lived token.
+// 2 taas expire — normal 30-day session peksha khup kam.
+// User la kahi kalat nahi — silent.
+func IssueImpersonationToken(userID primitive.ObjectID, username string) (string, time.Time, error) {
+	expiresAt := time.Now().Add(2 * time.Hour)
+	claims := &Claims{
+		UserID:   userID.Hex(),
+		Username: username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(jwtSecret)
+	return signed, expiresAt, err
+}
+
 // ─── clientIP ─────────────────────────────────────────────────────────────────
 
 func clientIP(c *gin.Context) string {
@@ -495,4 +513,10 @@ func redirectOrUnauthorized(c *gin.Context) {
 	}
 	c.Redirect(http.StatusFound, "/login")
 	c.Abort()
+}
+
+// IssueTokenFor — admin impersonation साठी public wrapper.
+// admin_api.go मधून call होतो — user च्या नावाने JWT issue करतो.
+func IssueTokenFor(userID primitive.ObjectID, username string) (string, time.Time, error) {
+	return issueToken(userID, username)
 }
