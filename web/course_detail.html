@@ -551,5 +551,133 @@
     setInterval(ping, 30000); // दर 30 सेकंदाला
   })();
 </script>
+
+
+<!-- ██ ANTI-DEBUG PROTECTION v2 ██ -->
+<script>
+(function(){
+'use strict';
+
+// ── Block Overlay ────────────────────────────────────────────────
+var _blocked = false;
+var _overlay = document.createElement('div');
+_overlay.style.cssText='display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:#0a0a0f;z-index:2147483647;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif';
+_overlay.innerHTML='<div style="text-align:center"><div style="font-size:80px">🚫</div><h1 style="color:#ff3333;font-size:30px;margin:16px 0">Access Blocked</h1><p style="color:#666;font-size:14px">Developer tools detected.<br>This session has been terminated.</p></div>';
+
+function _block(){
+  if(_blocked) return;
+  _blocked = true;
+  document.querySelectorAll('video,audio').forEach(function(v){try{v.pause();v.src='';v.load();}catch(e){}});
+  document.querySelectorAll('body>*:not(#__blk)').forEach(function(el){el.style.display='none';});
+  _overlay.style.display='flex';
+  // Replace history so back button also blocked
+  try{history.pushState(null,'',location.href);}catch(e){}
+  window.onpopstate=function(){history.pushState(null,'',location.href);};
+}
+
+function _initOverlay(){
+  _overlay.id='__blk';
+  document.body.appendChild(_overlay);
+}
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',_initOverlay);}
+else{_initOverlay();}
+
+// ── Method 1: Window Size (Docked DevTools) ───────────────────────
+// Real console.log needed here — save reference BEFORE any override
+var _realLog = console.log.bind(console);
+var _realClear = console.clear.bind(console);
+
+function _checkSize(){
+  if(_blocked) return;
+  var dw = window.outerWidth - window.innerWidth;
+  var dh = window.outerHeight - window.innerHeight;
+  // Threshold 100px — works for docked devtools (left/right/bottom)
+  if(dw > 100 || dh > 100){ _block(); }
+}
+
+// ── Method 2: Console Object Getter Trick ─────────────────────────
+// Uses SAVED reference to real console.log — not affected by override
+var _devObj = /./;
+_devObj.toString = function(){ _block(); };
+
+function _checkConsole(){
+  if(_blocked) return;
+  _realLog('%c',_devObj);
+  _realClear();
+}
+
+// ── Method 3: Continuous Debugger (makes DevTools UNUSABLE) ───────
+// Every 150ms — when DevTools is open this freezes the browser tab
+// Even if they disable "pause on debugger", it creates massive lag
+var _dbgLoop = setInterval(function(){
+  if(_blocked) return;
+  var _t = performance.now();
+  (function(){debugger;})();
+  // If debugger paused even briefly, time diff will be large
+  if(performance.now() - _t > 200){ _block(); }
+}, 150);
+
+// ── Method 4: Undocked / Separate Window DevTools ─────────────────
+// When devtools is in separate window, size trick fails
+// But element.id getter trick still works
+var _firebugCheck = function(){
+  if(_blocked) return;
+  var _el = document.createElement('div');
+  Object.defineProperty(_el,'id',{
+    get: function(){ _block(); return '__x'; }
+  });
+  _realLog(_el);
+  _realClear();
+};
+
+// ── Method 5: Keyboard Shortcuts Block ───────────────────────────
+document.addEventListener('keydown',function(e){
+  if(e.keyCode===123){e.preventDefault();return false;}
+  if(e.ctrlKey&&e.shiftKey&&[73,74,67,75].indexOf(e.keyCode)!==-1){e.preventDefault();return false;}
+  if(e.ctrlKey&&[85,83,80,65].indexOf(e.keyCode)!==-1){e.preventDefault();return false;}
+  if(e.metaKey&&e.altKey&&[73,74].indexOf(e.keyCode)!==-1){e.preventDefault();return false;}
+},true);
+
+// ── Method 6: Right Click & Drag ─────────────────────────────────
+document.addEventListener('contextmenu',function(e){e.preventDefault();return false;},true);
+document.addEventListener('dragstart',function(e){e.preventDefault();return false;},true);
+document.addEventListener('selectstart',function(e){e.preventDefault();return false;},true);
+
+// ── Method 7: Print ───────────────────────────────────────────────
+window.addEventListener('beforeprint',function(){_block();});
+window.matchMedia('print').addListener(function(mq){if(mq.matches)_block();});
+
+// ── Method 8: Override Console (AFTER saving references) ──────────
+// Now safe to override — detection already uses saved _realLog
+var _noop=function(){};
+var _cm=['log','warn','error','info','debug','table','dir','dirxml','group','groupCollapsed','groupEnd','trace','assert','count','time','timeEnd','clear'];
+_cm.forEach(function(m){try{console[m]=_noop;}catch(e){}});
+try{
+  Object.defineProperty(window,'console',{
+    get:function(){return{log:_noop,warn:_noop,error:_noop,clear:_noop,table:_noop,dir:_noop};},
+    configurable:false,set:function(){}
+  });
+}catch(e){}
+
+// ── Polling: Run All Checks ───────────────────────────────────────
+var _tick=0;
+setInterval(function(){
+  if(_blocked) return;
+  _tick++;
+  _checkSize();
+  if(_tick%2===0) _checkConsole();
+  if(_tick%4===0) _firebugCheck();
+},300);
+
+// Run immediately on load
+setTimeout(function(){
+  _checkSize();
+  _checkConsole();
+  _firebugCheck();
+},200);
+
+})();
+</script>
+<!-- ██ END PROTECTION v2 ██ -->
 </body>
 </html>
