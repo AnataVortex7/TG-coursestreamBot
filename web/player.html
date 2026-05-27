@@ -326,6 +326,22 @@
   }
   #btn-restart:hover { background: rgba(255,255,255,0.15); }
 
+  /* ── Floating watermark ── */
+  #watermark {
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.18);
+    text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    white-space: nowrap;
+    user-select: none;
+    transition: top 0.8s cubic-bezier(0.4,0,0.2,1),
+                left 0.8s cubic-bezier(0.4,0,0.2,1);
+    letter-spacing: 0.3px;
+  }
+
   /* ── Double-tap seek indicators ── */
   .seek-flash {
     position: absolute;
@@ -398,6 +414,10 @@
     <div id="spinner"><div class="spin"></div></div>
     <div id="play-flash"><span id="flash-icon">▶</span></div>
 
+    {{ if .watermark }}
+    <div id="watermark">{{ .watermark }}</div>
+    {{ end }}
+
     <!-- Double-tap seek indicators -->
     <div id="seek-flash-left"  class="seek-flash">
       <span class="seek-flash-icon">⏪</span>
@@ -450,6 +470,24 @@
   // ── Server-injected data ───────────────────────────────────────────────────
   const RESUME_POSITION = parseFloat('{{ .resumePosition }}') || 0;
   const WATCH_TOKEN     = '{{ .watchToken }}';
+
+  // ── Watermark — दर 3 सेकंदाला random position वर हलवतो ───────────────────
+  const wmEl = document.getElementById('watermark');
+  if (wmEl) {
+    const playerWrap = document.getElementById('player-wrap');
+    function moveWatermark() {
+      const pw  = playerWrap.offsetWidth  || 640;
+      const ph  = playerWrap.offsetHeight || 360;
+      const wmW = wmEl.offsetWidth  || 260;
+      const wmH = wmEl.offsetHeight || 18;
+      const x = 10 + Math.random() * Math.max(10, pw - wmW - 20);
+      const y = 30 + Math.random() * Math.max(10, ph - wmH - 70);
+      wmEl.style.left = x + 'px';
+      wmEl.style.top  = y + 'px';
+    }
+    moveWatermark();
+    setInterval(moveWatermark, 3000);
+  }
 
   // ── Back button — referrer → history → /courses fallback ──────────────────
   const backLink = document.getElementById('back-link');
@@ -646,6 +684,7 @@
     }
   });
 
+  // ── Spinner ────────────────────────────────────────────────────────────────
   // ── Spinner ────────────────────────────────────────────────────────────────
   vid.addEventListener('waiting',  () => spinner.classList.remove('hidden'));
   vid.addEventListener('canplay',  () => spinner.classList.add('hidden'));
