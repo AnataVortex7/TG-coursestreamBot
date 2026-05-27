@@ -35,6 +35,91 @@ import (
 
 var activeStreamKeys sync.Map // userIDHex → streamKey (string)
 
+// ── Admin Panel: Live Stream Tracking ────────────────────────────────────────
+// प्रत्येक user चा current active stream info admin panel साठी store करतो.
+// Main server फक्त redirect करतो त्यामुळे stream end कळत नाही —
+// entry 2 तासांनंतर (token TTL) auto-expire होते.
+// User ने नवीन stream सुरू केला तर जुनी entry "replaced" म्हणून 2 min दाखवतो.
+
+type streamMetaEntry struct {
+	UserID    string
+	UserEmail string
+	UserName  string
+	FileName  string
+	WorkerURL string    // "" = main server local stream
+	StreamKey string
+	StartedAt time.Time
+	ExpiresAt time.Time
+}
+
+type replacedStreamEntry struct {
+	UserEmail    string
+	UserName     string
+	OldWorkerURL string
+	FileName     string
+	ReplacedAt   time.Time
+}
+
+var (
+	activeStreamMeta     sync.Map // userIDHex → *streamMetaEntry
+	recentlyReplacedMeta sync.Map // userIDHex → *replacedStreamEntry (2 min TTL)
+)
+
+// storeStreamMeta — stream सुरू होताना call करतो.
+// जुनी entry असल्यास replaced log मध्ये 2 min साठी save होते.
+func storeStreamMeta(userIDHex, userEmail, userName, fileName, workerURL, streamKey string) {
+	if existing, ok := activeStreamMeta.Load(userIDHex); ok {
+		old := existing.(*streamMetaEntry)
+		recentlyReplacedMeta.Store(userIDHex, &replacedStreamEntry{
+			UserEmail:    old.UserEmail,
+			UserName:     old.UserName,
+			OldWorkerURL: old.WorkerURL,
+			FileName:     old.FileName,
+			ReplacedAt:   time.Now(),
+		})
+		go func() {
+			time.Sleep(2 * time.Minute)
+			recentlyReplacedMeta.Delete(userIDHex)
+		}()
+	}
+	activeStreamMeta.Store(userIDHex, &streamMetaEntry{
+		UserID:    userIDHex,
+		UserEmail: userEmail,
+		UserName:  userName,
+		FileName:  fileName,
+		WorkerURL: workerURL,
+		StreamKey: streamKey,
+		StartedAt: time.Now(),
+		ExpiresAt: time.Now().Add(2 * time.Hour),
+	})
+}
+
+// liveStreamsList — admin panel साठी सर्व active streams देतो (expired clean करतो).
+func liveStreamsList() []*streamMetaEntry {
+	now := time.Now()
+	var out []*streamMetaEntry
+	activeStreamMeta.Range(func(k, v any) bool {
+		e := v.(*streamMetaEntry)
+		if now.After(e.ExpiresAt) {
+			activeStreamMeta.Delete(k)
+			return true
+		}
+		out = append(out, e)
+		return true
+	})
+	return out
+}
+
+// replacedStreamsList — recently replaced (killed) streams देतो (2 min TTL).
+func replacedStreamsList() []*replacedStreamEntry {
+	var out []*replacedStreamEntry
+	recentlyReplacedMeta.Range(func(_, v any) bool {
+		out = append(out, v.(*replacedStreamEntry))
+		return true
+	})
+	return out
+}
+
 // genStreamKey generates a cryptographically random 16-byte hex key.
 func genStreamKey() (string, error) {
 	b := make([]byte, 16)
@@ -235,6 +320,18 @@ func handleWatchStream(c *gin.Context) {
 	}
 	activeStreamKeys.Store(currentUserID.Hex(), streamKey)
 
+	// ── User info for admin live stream tracking ─────────────────────────────
+	// var ने declare करतो — goto localStream: label च्या आधी असणे आवश्यक आहे
+	// (Go मध्ये goto variable declaration cross करत नाही).
+	var liveUserEmail, liveUserName string
+	if u, _ := db.GetUserByID(currentUserID); u != nil {
+		liveUserEmail = u.Email
+		liveUserName = u.FullName
+		if liveUserName == "" {
+			liveUserName = u.Username
+		}
+	}
+
 	// 4. File + access check
 	cachedFile, err := db.GetCachedFile(verified.MessageID, verified.ChannelID)
 	if err != nil || cachedFile == nil {
@@ -280,12 +377,14 @@ func handleWatchStream(c *gin.Context) {
 			zap.String("worker", workerBase),
 			zap.Int("messageID", verified.MessageID),
 		)
+		storeStreamMeta(currentUserID.Hex(), liveUserEmail, liveUserName, cachedFile.FileName, workerBase, streamKey)
 		http.Redirect(w, r, workerURL, http.StatusFound)
 		return
 	}
 
 	// ── 6. Local stream fallback (no healthy workers) ──────────────────────
 localStream:
+	storeStreamMeta(currentUserID.Hex(), liveUserEmail, liveUserName, cachedFile.FileName, "", streamKey)
 	log.Debug("no healthy workers — streaming locally",
 		zap.Int("messageID", verified.MessageID),
 	)

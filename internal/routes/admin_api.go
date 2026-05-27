@@ -342,6 +342,9 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	api.GET("/worker/list", handleAdminWorkerList)
 	api.POST("/worker/add", handleAdminWorkerAdd)
 	api.DELETE("/worker/remove", handleAdminWorkerRemove)
+
+	// ── Live streams — admin panel real-time stream tracking ──────────────
+	api.GET("/stream/live", handleAdminLiveStreams)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1165,4 +1168,75 @@ func adminDeleteAnnouncement(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LIVE STREAMS — Admin panel real-time stream tracking
+// GET /api/admin/stream/live
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type liveStreamView struct {
+	UserID    string `json:"user_id"`
+	UserEmail string `json:"user_email"`
+	UserName  string `json:"user_name"`
+	FileName  string `json:"file_name"`
+	WorkerURL string `json:"worker_url"`
+	IsLocal   bool   `json:"is_local"`
+	StartedAt string `json:"started_at"`
+	StreamKey string `json:"stream_key_hint"` // last 8 chars only — for debug
+}
+
+type replacedStreamView struct {
+	UserEmail    string `json:"user_email"`
+	UserName     string `json:"user_name"`
+	OldWorkerURL string `json:"old_worker_url"`
+	WasLocal     bool   `json:"was_local"`
+	FileName     string `json:"file_name"`
+	ReplacedAt   string `json:"replaced_at"`
+}
+
+// handleAdminLiveStreams — सध्या चालू असलेल्या सर्व streams ची list देतो.
+// active: current live streams (प्रत्येक user एक)
+// recently_replaced: 2 min आधी kill झालेले streams (new stream ने replace केले)
+func handleAdminLiveStreams(c *gin.Context) {
+	// Active streams
+	active := liveStreamsList()
+	activeOut := make([]liveStreamView, 0, len(active))
+	for _, e := range active {
+		hint := e.StreamKey
+		if len(hint) > 8 {
+			hint = "…" + hint[len(hint)-8:]
+		}
+		activeOut = append(activeOut, liveStreamView{
+			UserID:    e.UserID,
+			UserEmail: e.UserEmail,
+			UserName:  e.UserName,
+			FileName:  e.FileName,
+			WorkerURL: e.WorkerURL,
+			IsLocal:   e.WorkerURL == "",
+			StartedAt: e.StartedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+			StreamKey: hint,
+		})
+	}
+
+	// Recently replaced (killed) streams — visible 2 min
+	replaced := replacedStreamsList()
+	replacedOut := make([]replacedStreamView, 0, len(replaced))
+	for _, r := range replaced {
+		replacedOut = append(replacedOut, replacedStreamView{
+			UserEmail:    r.UserEmail,
+			UserName:     r.UserName,
+			OldWorkerURL: r.OldWorkerURL,
+			WasLocal:     r.OldWorkerURL == "",
+			FileName:     r.FileName,
+			ReplacedAt:   r.ReplacedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":                true,
+		"active":            activeOut,
+		"recently_replaced": replacedOut,
+		"active_count":      len(activeOut),
+	})
 }
