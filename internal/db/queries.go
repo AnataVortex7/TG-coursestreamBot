@@ -963,3 +963,16 @@ func GetWatchPosition(userID primitive.ObjectID, messageID int, channelID int64)
 	}
 	return h.WatchPosition, nil
 }
+
+// UpdateUserPassword — admin द्वारे user चा password change करणे.
+// plain password नाही — bcrypt hash directly store होतो.
+func UpdateUserPassword(userID primitive.ObjectID, newPasswordHash string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{"password_hash": newPasswordHash}},
+	)
+	return err
+}
