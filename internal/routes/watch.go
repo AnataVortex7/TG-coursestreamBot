@@ -137,6 +137,21 @@ func handleWatch(c *gin.Context) {
 	// Resume position — server-side load (no extra API call from player)
 	resumePos, _ := db.GetWatchPosition(currentUserID, verified.MessageID, verified.ChannelID)
 
+	// Watermark — user चे email + mobile player वर दाखवण्यासाठी
+	watermark := ""
+	if user, err := db.GetUserByID(currentUserID); err == nil && user != nil {
+		if user.Email != "" {
+			watermark = user.Email
+		}
+		if user.Mobile != "" {
+			if watermark != "" {
+				watermark += "  •  " + user.Mobile
+			} else {
+				watermark = user.Mobile
+			}
+		}
+	}
+
 	setPlayerSecurityHeaders(c)
 	c.HTML(http.StatusOK, "player.html", gin.H{
 		"title":          title,
@@ -145,6 +160,7 @@ func handleWatch(c *gin.Context) {
 		"downloadURL":    downloadURL,
 		"resumePosition": resumePos,
 		"watchToken":     tokenStr,
+		"watermark":      watermark,
 	})
 }
 
@@ -557,3 +573,4 @@ func normalizeWatchMime(mime, fileName string) string {
 		return mime
 	}
 }
+
