@@ -336,16 +336,15 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	api.GET("/urlmonitor/:id/history", adminURLMonitorHistory)
 	api.POST("/urlmonitor/:id/check", adminURLMonitorCheck)
 
-	// User management — password reset + impersonation
-	api.POST("/users/:id/reset-password", adminResetUserPassword)
-	api.POST("/users/:id/login-as", adminLoginAsUser)
-
 	// ── Workers (admin panel) ─────────────────────────────────────────────────
 	// adminAuthMiddleware() automatically applied via the api group above.
 	// Normal users cannot reach these — admin session + CSRF + Origin required.
 	api.GET("/worker/list", handleAdminWorkerList)
 	api.POST("/worker/add", handleAdminWorkerAdd)
 	api.DELETE("/worker/remove", handleAdminWorkerRemove)
+
+	// ── Live streams — admin panel real-time stream tracking ──────────────
+	api.GET("/stream/live", handleAdminLiveStreams)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1172,135 +1171,72 @@ func adminDeleteAnnouncement(c *gin.Context) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ADMIN RESET USER PASSWORD
-// POST /api/admin/users/:id/reset-password
-// Body: { "password": "newpass123", "confirm_password": "newpass123" }
+// LIVE STREAMS — Admin panel real-time stream tracking
+// GET /api/admin/stream/live
 // ═══════════════════════════════════════════════════════════════════════════════
 
-func adminResetUserPassword(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-		return
-	}
-
-	var req struct {
-		Password string `json:"password"`
-		Confirm  string `json:"confirm_password"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
-		return
-	}
-	if len(req.Password) < 6 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Password at least 6 characters pahije"})
-		return
-	}
-	if req.Password != req.Confirm {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Passwords match hot nahi"})
-		return
-	}
-
-	user, err := db.GetUserByID(id)
-	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
-	}
-
-	hash, err := auth.HashPassword(req.Password)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Password hash karताना error"})
-		return
-	}
-
-	if err := db.UpdateUserPassword(id, hash); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Password update zala nahi: " + err.Error()})
-		return
-	}
-
-	// Existing session kill karto — user la re-login karava lagel
-	_ = db.DeleteAllSessionsForUser(id)
-
-	golog.Printf("[AdminResetPwd] Password reset: user=%s (%s)", user.Username, id.Hex())
-	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username})
+type liveStreamView struct {
+	UserID    string `json:"user_id"`
+	UserEmail string `json:"user_email"`
+	UserName  string `json:"user_name"`
+	FileName  string `json:"file_name"`
+	WorkerURL string `json:"worker_url"`
+	IsLocal   bool   `json:"is_local"`
+	StartedAt string `json:"started_at"`
+	StreamKey string `json:"stream_key_hint"` // last 8 chars only — for debug
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ADMIN LOGIN-AS-USER (Impersonation)
-// POST /api/admin/users/:id/login-as
-//
-// Admin cha session intact rahto. Ek temporary session issue hoto
-// user saathi — admin panel madhe navin tab madhe course open hoto.
-// User la kahi notification yet nahi — silent impersonation.
-// ═══════════════════════════════════════════════════════════════════════════════
+type replacedStreamView struct {
+	UserEmail    string `json:"user_email"`
+	UserName     string `json:"user_name"`
+	OldWorkerURL string `json:"old_worker_url"`
+	WasLocal     bool   `json:"was_local"`
+	FileName     string `json:"file_name"`
+	ReplacedAt   string `json:"replaced_at"`
+}
 
-func adminLoginAsUser(c *gin.Context) {
-	id, err := primitive.ObjectIDFromHex(c.Param("id"))
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
-		return
+// handleAdminLiveStreams — सध्या चालू असलेल्या सर्व streams ची list देतो.
+// active: current live streams (प्रत्येक user एक)
+// recently_replaced: 2 min आधी kill झालेले streams (new stream ने replace केले)
+func handleAdminLiveStreams(c *gin.Context) {
+	// Active streams
+	active := liveStreamsList()
+	activeOut := make([]liveStreamView, 0, len(active))
+	for _, e := range active {
+		hint := e.StreamKey
+		if len(hint) > 8 {
+			hint = "…" + hint[len(hint)-8:]
+		}
+		activeOut = append(activeOut, liveStreamView{
+			UserID:    e.UserID,
+			UserEmail: e.UserEmail,
+			UserName:  e.UserName,
+			FileName:  e.FileName,
+			WorkerURL: e.WorkerURL,
+			IsLocal:   e.WorkerURL == "",
+			StartedAt: e.StartedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+			StreamKey: hint,
+		})
 	}
 
-	user, err := db.GetUserByID(id)
-	if err != nil || user == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-		return
+	// Recently replaced (killed) streams — visible 2 min
+	replaced := replacedStreamsList()
+	replacedOut := make([]replacedStreamView, 0, len(replaced))
+	for _, r := range replaced {
+		replacedOut = append(replacedOut, replacedStreamView{
+			UserEmail:    r.UserEmail,
+			UserName:     r.UserName,
+			OldWorkerURL: r.OldWorkerURL,
+			WasLocal:     r.OldWorkerURL == "",
+			FileName:     r.FileName,
+			ReplacedAt:   r.ReplacedAt.UTC().Format("2006-01-02 15:04:05 UTC"),
+		})
 	}
-	if !user.IsActive {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "User disabled aahe"})
-		return
-	}
-
-	// User saathi short-lived JWT issue karto (2 taas) — admin session touch hot nahi
-	tokenStr, expiresAt, err := auth.IssueImpersonationToken(user.ID, user.Username)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Token issue karta ala nahi"})
-		return
-	}
-
-	ip := c.ClientIP()
-	ua := c.GetHeader("User-Agent") + " [admin-impersonation]"
-	if err := db.UpsertSession(user.ID, tokenStr, ip, ua, expiresAt); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Session create karta ala nahi"})
-		return
-	}
-
-	golog.Printf("[AdminImpersonate] Admin logged in as user=%s (%s) from IP=%s", user.Username, id.Hex(), ip)
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"token":    tokenStr,
-		"username": user.Username,
-		"redirect": "/courses",
+		"ok":                true,
+		"active":            activeOut,
+		"recently_replaced": replacedOut,
+		"active_count":      len(activeOut),
 	})
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// IMPERSONATE REDIRECT HANDLER
-// GET /impersonate?t=TOKEN
-// New tab madhe ha URL open hoto → cookie set → /courses redirect
-// Token already DB madhe UpsertSession ne save zala aahe.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-func handleImpersonate(c *gin.Context) {
-	token := c.Query("t")
-	if token == "" {
-		c.Redirect(http.StatusFound, "/login")
-		return
-	}
-
-	// Token valid aahe ka check karo — DB madhe session asel tar valid
-	sess, err := db.GetSessionByToken(token)
-	if err != nil || sess == nil {
-		c.Redirect(http.StatusFound, "/login")
-		return
-	}
-
-	// Cookie set karo — same way as normal login
-	secure := !config.ValueOf.Dev
-	c.SetCookie("fsb_session", token, int((30*24*time.Hour).Seconds()), "/", "", secure, true)
-
-	// URL madhun token clean karo — /courses la redirect
-	c.Redirect(http.StatusFound, "/courses")
 }
