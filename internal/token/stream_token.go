@@ -254,6 +254,65 @@ func decryptPayload(tokenStr string) (*StreamPayload, error) {
 	return &payload, nil
 }
 
+// ─── Public stream token (no auth — anyone with link can stream) ─────────────
+
+const PublicStreamTokenTTL = 3 * time.Hour
+
+type PublicStreamPayload struct {
+	MessageID int64     `json:"mid"`
+	ExpiresAt time.Time `json:"exp"`
+}
+
+// NewPublicToken creates a 3-hour encrypted token for open /stream/ links.
+// No user identity — anyone who has the URL can stream.
+func NewPublicToken(messageID int) (string, error) {
+	payload := PublicStreamPayload{
+		MessageID: int64(messageID),
+		ExpiresAt: time.Now().Add(PublicStreamTokenTTL),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return encryptBytes(raw)
+}
+
+// VerifyPublicToken decrypts and validates a public stream token.
+// Returns messageID on success.
+func VerifyPublicToken(tokenStr string) (int, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(tokenStr)
+	if err != nil {
+		return 0, ErrTokenInvalid
+	}
+
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return 0, ErrTokenInvalid
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return 0, ErrTokenInvalid
+	}
+	nonceSize := gcm.NonceSize()
+	if len(raw) < nonceSize {
+		return 0, ErrTokenInvalid
+	}
+	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return 0, ErrTokenInvalid
+	}
+
+	var payload PublicStreamPayload
+	if err = json.Unmarshal(plaintext, &payload); err != nil {
+		return 0, ErrTokenInvalid
+	}
+	if time.Now().After(payload.ExpiresAt) {
+		return 0, ErrTokenExpired
+	}
+	return int(payload.MessageID), nil
+}
+
 // ─── IP helper (kept for logging only — not used in auth) ────────────────────
 
 func ClientIP(forwardedFor, remoteAddr string) string {
