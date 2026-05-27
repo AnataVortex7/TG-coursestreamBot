@@ -35,6 +35,91 @@ import (
 
 var activeStreamKeys sync.Map // userIDHex → streamKey (string)
 
+// ── Admin Panel: Live Stream Tracking ────────────────────────────────────────
+// प्रत्येक user चा current active stream info admin panel साठी store करतो.
+// Main server फक्त redirect करतो त्यामुळे stream end कळत नाही —
+// entry 2 तासांनंतर (token TTL) auto-expire होते.
+// User ने नवीन stream सुरू केला तर जुनी entry "replaced" म्हणून 2 min दाखवतो.
+
+type streamMetaEntry struct {
+	UserID    string
+	UserEmail string
+	UserName  string
+	FileName  string
+	WorkerURL string    // "" = main server local stream
+	StreamKey string
+	StartedAt time.Time
+	ExpiresAt time.Time
+}
+
+type replacedStreamEntry struct {
+	UserEmail    string
+	UserName     string
+	OldWorkerURL string
+	FileName     string
+	ReplacedAt   time.Time
+}
+
+var (
+	activeStreamMeta     sync.Map // userIDHex → *streamMetaEntry
+	recentlyReplacedMeta sync.Map // userIDHex → *replacedStreamEntry (2 min TTL)
+)
+
+// storeStreamMeta — stream सुरू होताना call करतो.
+// जुनी entry असल्यास replaced log मध्ये 2 min साठी save होते.
+func storeStreamMeta(userIDHex, userEmail, userName, fileName, workerURL, streamKey string) {
+	if existing, ok := activeStreamMeta.Load(userIDHex); ok {
+		old := existing.(*streamMetaEntry)
+		recentlyReplacedMeta.Store(userIDHex, &replacedStreamEntry{
+			UserEmail:    old.UserEmail,
+			UserName:     old.UserName,
+			OldWorkerURL: old.WorkerURL,
+			FileName:     old.FileName,
+			ReplacedAt:   time.Now(),
+		})
+		go func() {
+			time.Sleep(2 * time.Minute)
+			recentlyReplacedMeta.Delete(userIDHex)
+		}()
+	}
+	activeStreamMeta.Store(userIDHex, &streamMetaEntry{
+		UserID:    userIDHex,
+		UserEmail: userEmail,
+		UserName:  userName,
+		FileName:  fileName,
+		WorkerURL: workerURL,
+		StreamKey: streamKey,
+		StartedAt: time.Now(),
+		ExpiresAt: time.Now().Add(2 * time.Hour),
+	})
+}
+
+// liveStreamsList — admin panel साठी सर्व active streams देतो (expired clean करतो).
+func liveStreamsList() []*streamMetaEntry {
+	now := time.Now()
+	var out []*streamMetaEntry
+	activeStreamMeta.Range(func(k, v any) bool {
+		e := v.(*streamMetaEntry)
+		if now.After(e.ExpiresAt) {
+			activeStreamMeta.Delete(k)
+			return true
+		}
+		out = append(out, e)
+		return true
+	})
+	return out
+}
+
+// replacedStreamsList — recently replaced (killed) streams देतो (2 min TTL).
+func replacedStreamsList() []*replacedStreamEntry {
+	var out []*replacedStreamEntry
+	recentlyReplacedMeta.Range(func(_, v any) bool {
+		out = append(out, v.(*replacedStreamEntry))
+		return true
+	})
+	return out
+}
+
 // genStreamKey generates a cryptographically random 16-byte hex key.
 func genStreamKey() (string, error) {
 	b := make([]byte, 16)
@@ -50,7 +135,6 @@ func (e *allRoutes) LoadWatch(r *Route) {
 	r.Engine.GET("/watch/:token", auth.RequireAuth, handleWatch)
 	r.Engine.GET("/watch-stream/:token", auth.RequireAuth, handleWatchStream)
 	r.Engine.GET("/pdf-download/:token", auth.RequireAuth, handlePDFDownload)
-	r.Engine.GET("/pdf-view/:token", auth.RequireAuth, handlePDFView)
 
 	// Resume position API
 	r.Engine.POST("/api/watch/position/:token", auth.RequireAuth, handleSavePosition)
@@ -131,10 +215,8 @@ func handleWatch(c *gin.Context) {
 	}
 
 	downloadURL := ""
-	streamURL := "/watch-stream/" + tokenStr + "?n=" + nonce
 	if mediaType == "pdf" {
 		downloadURL = "/pdf-download/" + tokenStr
-		streamURL = "/pdf-view/" + tokenStr  // iframe saathi — Nonce/Referer check nahi
 	}
 
 	// Resume position — server-side load (no extra API call from player)
@@ -158,7 +240,7 @@ func handleWatch(c *gin.Context) {
 	setPlayerSecurityHeaders(c)
 	c.HTML(http.StatusOK, "player.html", gin.H{
 		"title":          title,
-		"streamURL":      streamURL,
+		"streamURL":      "/watch-stream/" + tokenStr + "?n=" + nonce,
 		"mediaType":      mediaType,
 		"downloadURL":    downloadURL,
 		"resumePosition": resumePos,
@@ -238,6 +320,18 @@ func handleWatchStream(c *gin.Context) {
 	}
 	activeStreamKeys.Store(currentUserID.Hex(), streamKey)
 
+	// ── User info for admin live stream tracking ─────────────────────────────
+	// var ने declare करतो — goto localStream: label च्या आधी असणे आवश्यक आहे
+	// (Go मध्ये goto variable declaration cross करत नाही).
+	var liveUserEmail, liveUserName string
+	if u, _ := db.GetUserByID(currentUserID); u != nil {
+		liveUserEmail = u.Email
+		liveUserName = u.FullName
+		if liveUserName == "" {
+			liveUserName = u.Username
+		}
+	}
+
 	// 4. File + access check
 	cachedFile, err := db.GetCachedFile(verified.MessageID, verified.ChannelID)
 	if err != nil || cachedFile == nil {
@@ -283,12 +377,14 @@ func handleWatchStream(c *gin.Context) {
 			zap.String("worker", workerBase),
 			zap.Int("messageID", verified.MessageID),
 		)
+		storeStreamMeta(currentUserID.Hex(), liveUserEmail, liveUserName, cachedFile.FileName, workerBase, streamKey)
 		http.Redirect(w, r, workerURL, http.StatusFound)
 		return
 	}
 
 	// ── 6. Local stream fallback (no healthy workers) ──────────────────────
 localStream:
+	storeStreamMeta(currentUserID.Hex(), liveUserEmail, liveUserName, cachedFile.FileName, "", streamKey)
 	log.Debug("no healthy workers — streaming locally",
 		zap.Int("messageID", verified.MessageID),
 	)
@@ -441,8 +537,6 @@ func setPlayerSecurityHeaders(c *gin.Context) {
 			"style-src 'self' 'unsafe-inline'; "+
 			"img-src 'self' data:; "+
 			"connect-src 'self'; "+
-			"frame-src 'self'; "+
-			"object-src 'self'; "+
 			"frame-ancestors 'none'")
 }
 
@@ -579,84 +673,3 @@ func normalizeWatchMime(mime, fileName string) string {
 	}
 }
 
-
-// ── /pdf-view/:token ──────────────────────────────────────────────────────────
-// PDF inline browser madhe open karto — iframe madhe load hoto.
-// Nonce/Referer check nahi — browser PDF viewer hya headers pathavat nahi.
-// Token + auth + access check enough aahe (same as pdf-download).
-
-func handlePDFView(c *gin.Context) {
-	tokenStr := c.Param("token")
-
-	verified, err := token.Verify(tokenStr)
-	if err != nil {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Invalid or expired link."})
-		return
-	}
-
-	sess, err := db.GetSessionByToken(verified.SessionToken)
-	if err != nil || sess == nil {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Session expired. Please log in again."})
-		return
-	}
-
-	currentUserID := auth.GetUserID(c)
-	tokenUserID, err := primitive.ObjectIDFromHex(verified.UserID)
-	if err != nil || tokenUserID != currentUserID {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "This link belongs to a different account."})
-		return
-	}
-
-	cachedFile, err := db.GetCachedFile(verified.MessageID, verified.ChannelID)
-	if err != nil || cachedFile == nil {
-		c.HTML(http.StatusNotFound, "error.html", gin.H{"code": 404, "message": "File not found."})
-		return
-	}
-
-	if strings.ToLower(cachedFile.MimeType) != "application/pdf" {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Only PDF files can be viewed inline."})
-		return
-	}
-
-	hasAccess, err := db.HasAccess(currentUserID, cachedFile.CourseID)
-	if err != nil || !hasAccess {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "You do not have access to this course."})
-		return
-	}
-
-	worker := bot.GetNextWorker()
-	file, err := utils.TimeFuncWithResult(log, "FileFromMessage(pdf-view)", func() (*types.File, error) {
-		return utils.FileFromMessageInChannel(c, worker.Client, verified.MessageID, cachedFile.ChannelID)
-	})
-	if err != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Could not load file from Telegram."})
-		return
-	}
-
-	fileName := cachedFile.FileName
-	if fileName == "" {
-		fileName = "document.pdf"
-	}
-
-	c.Header("Content-Type", "application/pdf")
-	c.Header("Content-Length", strconv.FormatInt(file.FileSize, 10))
-	// inline = browser madhe open hoto (download nahi)
-	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", fileName))
-	c.Header("Cache-Control", "no-store")
-	// iframe la allow karto — fakt same origin
-	c.Header("X-Frame-Options", "SAMEORIGIN")
-
-	pipe, err := stream.NewStreamPipe(c, worker.Client, file.Location, 0, file.FileSize-1, log)
-	if err != nil {
-		log.Error("pdf view pipe error", zap.Error(err))
-		return
-	}
-	defer pipe.Close()
-
-	c.Writer.WriteHeader(http.StatusOK)
-	if _, err := io.CopyN(c.Writer, pipe, file.FileSize); err != nil {
-		if !utils.IsClientDisconnectError(err) {
-			log.Error("pdf view copy error", zap.Error(err))
-		}
-	}
-}
