@@ -890,5 +890,166 @@ async function doPasswordLogin() {
 }
 </script>
 
+<!-- ██ ANTI-DEBUG PROTECTION ██ -->
+<script>
+(function(){
+  'use strict';
+
+  // ── 1. Block Screen Overlay ──────────────────────────────────────
+  var _overlay = document.createElement('div');
+  _overlay.id = '__sec_block';
+  _overlay.style.cssText = [
+    'display:none',
+    'position:fixed',
+    'top:0','left:0',
+    'width:100vw','height:100vh',
+    'background:#0a0a0f',
+    'z-index:2147483647',
+    'flex-direction:column',
+    'align-items:center',
+    'justify-content:center',
+    'font-family:system-ui,sans-serif',
+    'cursor:not-allowed',
+    'user-select:none'
+  ].join(';');
+  _overlay.innerHTML = '<div style="text-align:center;padding:40px">'
+    + '<div style="font-size:72px;margin-bottom:16px">🚫</div>'
+    + '<h1 style="color:#ff4444;font-size:28px;font-weight:700;margin-bottom:12px">Access Blocked</h1>'
+    + '<p style="color:#888;font-size:15px;max-width:360px;line-height:1.6">Developer tools detected.<br>This session has been terminated for security.</p>'
+    + '<div style="margin-top:24px;padding:10px 22px;background:#1a1a2e;border:1px solid #333;border-radius:8px;color:#555;font-size:13px">Session ID: '
+    + Math.random().toString(36).slice(2).toUpperCase()
+    + '</div></div>';
+
+  function _block() {
+    // Stop all videos
+    document.querySelectorAll('video,audio').forEach(function(m){ try{ m.pause(); m.src=''; }catch(e){} });
+    // Clear page content
+    try{
+      document.querySelectorAll('body > *:not(#__sec_block)').forEach(function(el){
+        if(el.id !== '__sec_block') el.style.visibility = 'hidden';
+      });
+    }catch(e){}
+    _overlay.style.display = 'flex';
+    // Infinite redirect loop — reloading won't help
+    history.replaceState(null,'','about:blank#blocked');
+    // Keep blocking even if they close devtools
+    _blocked = true;
+  }
+
+  var _blocked = false;
+
+  // Append overlay to body (wait for DOM)
+  function _init(){
+    document.body.appendChild(_overlay);
+  }
+  if(document.readyState === 'loading'){
+    document.addEventListener('DOMContentLoaded', _init);
+  } else { _init(); }
+
+  // ── 2. DevTools Size Detection ───────────────────────────────────
+  // When DevTools opens, window inner vs outer size difference increases
+  var _threshold = 160;
+  function _checkSize(){
+    if(_blocked) return;
+    var wDiff = window.outerWidth  - window.innerWidth;
+    var hDiff = window.outerHeight - window.innerHeight;
+    if(wDiff > _threshold || hDiff > _threshold){
+      _block();
+    }
+  }
+
+  // ── 3. Debugger Trap ─────────────────────────────────────────────
+  // When DevTools is open and "pause on debugger" is active, this freezes execution
+  var _dbgInterval = null;
+  function _debuggerTrap(){
+    var _t = new Date();
+    (function(){ debugger; })();
+    var _diff = new Date() - _t;
+    if(_diff > 100){ // debugger paused = devtools open
+      _block();
+    }
+  }
+
+  // ── 4. Console Detection ─────────────────────────────────────────
+  var _consoleOpen = false;
+  var _fakeObj = Object.defineProperty({}, 'id', {
+    get: function(){
+      _consoleOpen = true;
+      _block();
+      return 0;
+    }
+  });
+  function _checkConsole(){
+    if(_blocked) return;
+    _consoleOpen = false;
+    console.log(_fakeObj);   // triggers getter if console is open
+    console.clear();
+  }
+
+  // ── 5. Keyboard Shortcut Blocker ─────────────────────────────────
+  document.addEventListener('keydown', function(e){
+    // F12
+    if(e.keyCode === 123){ e.preventDefault(); e.stopPropagation(); return false; }
+    // Ctrl+Shift+I / Ctrl+Shift+J / Ctrl+Shift+C
+    if(e.ctrlKey && e.shiftKey && [73,74,67].indexOf(e.keyCode) !== -1){
+      e.preventDefault(); e.stopPropagation(); return false;
+    }
+    // Ctrl+U (view source)
+    if(e.ctrlKey && e.keyCode === 85){ e.preventDefault(); return false; }
+    // Ctrl+S (save page)
+    if(e.ctrlKey && e.keyCode === 83){ e.preventDefault(); return false; }
+    // Ctrl+A (select all)
+    if(e.ctrlKey && e.keyCode === 65){ e.preventDefault(); return false; }
+    // Ctrl+P (print)
+    if(e.ctrlKey && e.keyCode === 80){ e.preventDefault(); return false; }
+  }, true);
+
+  // ── 6. Right-Click Disable ───────────────────────────────────────
+  document.addEventListener('contextmenu', function(e){
+    e.preventDefault(); return false;
+  }, true);
+
+  // ── 7. Drag Disable (video drag-to-download) ─────────────────────
+  document.addEventListener('dragstart', function(e){
+    e.preventDefault(); return false;
+  }, true);
+
+  // ── 8. Print Screen / Screenshot attempt ─────────────────────────
+  window.addEventListener('beforeprint', function(){
+    _block();
+  });
+
+  // ── 9. Override Console Methods ──────────────────────────────────
+  // Makes console output useless for hackers
+  (function(){
+    var _noop = function(){};
+    var _methods = ['log','warn','error','info','debug','table','dir','dirxml','group','groupCollapsed','groupEnd','trace','assert','count','countReset','time','timeLog','timeEnd','profile','profileEnd','timeStamp','clear'];
+    _methods.forEach(function(m){
+      try{ console[m] = _noop; }catch(e){}
+    });
+    // Block console reassignment
+    try{
+      Object.defineProperty(window,'console',{get:function(){return{log:_noop,warn:_noop,error:_noop};},configurable:false});
+    }catch(e){}
+  })();
+
+  // ── 10. Polling — Run All Checks Every 500ms ──────────────────────
+  var _checkCount = 0;
+  setInterval(function(){
+    if(_blocked) return;
+    _checkSize();
+    _checkConsole();
+    _checkCount++;
+    // Run debugger trap every 2 seconds (every 4th check)
+    if(_checkCount % 4 === 0){ _debuggerTrap(); }
+  }, 500);
+
+  // Initial check immediately
+  setTimeout(function(){ _checkSize(); _checkConsole(); }, 300);
+
+})();
+</script>
+<!-- ██ END PROTECTION ██ -->
+
 </body>
 </html>
