@@ -1887,15 +1887,14 @@ async function doResetPassword() {
 // Nava tab madhe user account open hoto.
 
 async function loginAsUser(userId, name) {
-  // Simple confirm — no extra info exposed to user side
   if (!confirm('Admin म्हणून "' + name + '" च्या account मध्ये जायचे?\n\nNew tab मध्ये user account open होईल.')) return;
 
   try {
     const res = await api('/users/' + userId + '/login-as', { method: 'POST' });
     const d   = await res.json();
-    if (res.ok && d.redirect) {
-      // Nava tab — admin panel open rahato
-      window.open(d.redirect, '_blank');
+    if (res.ok && d.token) {
+      // Token URL madhe pass karo — new tab madhe /impersonate cookie set karoon /courses la jato
+      window.open('/impersonate?t=' + encodeURIComponent(d.token), '_blank');
       toast('👁 ' + (d.username || name) + ' च्या account मध्ये गेलात (new tab)');
     } else {
       toast('❌ ' + (d.error || 'Login as failed'), 'error');
