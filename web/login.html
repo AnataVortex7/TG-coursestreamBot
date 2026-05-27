@@ -896,102 +896,55 @@ async function doPasswordLogin() {
 
 
 
+
+
 <!-- ██ ANTI-DEBUG PROTECTION FINAL ██ -->
 <script>
 (function(){
 'use strict';
 
-// ── Overlay ───────────────────────────────────────────────────────
-var _overlay = document.createElement('div');
-_overlay.id = '__blk';
-_overlay.style.cssText = [
-  'display:none',
-  'position:fixed',
-  'top:0','left:0',
-  'width:100vw','height:100vh',
-  'background:#0a0a0f',
-  'z-index:2147483647',
-  'flex-direction:column',
-  'align-items:center',
-  'justify-content:center',
-  'font-family:system-ui,sans-serif'
-].join(';');
-_overlay.innerHTML = [
-  '<div style="text-align:center">',
-  '<div style="font-size:72px;margin-bottom:12px">🚫</div>',
-  '<h1 style="color:#ff3333;font-size:26px;margin:0 0 10px">Access Blocked</h1>',
-  '<p style="color:#555;font-size:13px;line-height:1.7">Developer tools detected.<br>Close developer tools to continue.</p>',
-  '</div>'
-].join('');
-
-var _blocked  = false;
-
-function _show(){
-  if(_blocked) return;
-  _blocked = true;
-  document.querySelectorAll('video,audio').forEach(function(m){ try{ m.pause(); }catch(e){} });
-  document.querySelectorAll('body>*:not(#__blk)').forEach(function(el){
-    el.setAttribute('data-d', el.style.display || '');
-    el.style.display = 'none';
-  });
-  _overlay.style.display = 'flex';
+function _redirect(){
+  try{ window.location.replace('https://www.google.com'); }catch(e){}
 }
 
-function _hide(){
-  if(!_blocked) return;
-  _blocked = false;
-  document.querySelectorAll('body>*:not(#__blk)').forEach(function(el){
-    el.style.display = el.getAttribute('data-d') || '';
-  });
-  _overlay.style.display = 'none';
+function _sizeDetect(){
+  return (window.outerWidth  - window.innerWidth  > 130) ||
+         (window.outerHeight - window.innerHeight > 130);
 }
 
-function _mount(){
-  if(document.body && !document.getElementById('__blk')){
-    document.body.appendChild(_overlay);
-  }
-}
-if(document.readyState === 'loading'){
-  document.addEventListener('DOMContentLoaded', _mount);
-} else { _mount(); }
-
-// ── Detection: Window size (most reliable, zero false positives) ──
-// outerWidth - innerWidth > 0 means browser chrome/devtools is taking space
-// We use 130px threshold: devtools panel is always > 130px wide/tall
-function _detect(){
-  var dw = window.outerWidth  - window.innerWidth;
-  var dh = window.outerHeight - window.innerHeight;
-  return (dw > 130 || dh > 130);
+function _debuggerDetect(){
+  var t = performance.now();
+  (function(){ debugger; })();
+  return (performance.now() - t) > 100;
 }
 
-// ── Polling — starts after 1.5s so page loads cleanly first ───────
-var _ready = false;
-setTimeout(function(){ _ready = true; }, 1500);
+function _check(){
+  if(_sizeDetect() || _debuggerDetect()) _redirect();
+}
 
-setInterval(function(){
-  if(!_ready) return;
-  if(_detect()){ _show(); }
-  else          { _hide(); }
-}, 500);
+// ── 1. Check INSTANTLY before page even renders ───────────────────
+// Runs in <head> or top of body — catches "DevTools already open" case
+_check();
 
-// ── Keyboard shortcuts block ──────────────────────────────────────
+// ── 2. Check again on DOMContentLoaded ───────────────────────────
+document.addEventListener('DOMContentLoaded', function(){ _check(); });
+
+// ── 3. Check on full load ─────────────────────────────────────────
+window.addEventListener('load', function(){ _check(); });
+
+// ── 4. Poll every 300ms forever ───────────────────────────────────
+setInterval(_check, 300);
+
+// ── Keyboard shortcuts → instant redirect ────────────────────────
 document.addEventListener('keydown', function(e){
-  // F12
-  if(e.keyCode === 123){ e.preventDefault(); return false; }
-  // Ctrl+Shift+I / J / C / K
-  if(e.ctrlKey && e.shiftKey && [73,74,67,75].indexOf(e.keyCode) !== -1){
-    e.preventDefault(); return false;
-  }
-  // Ctrl+U  (view-source)
+  if(e.keyCode === 123){ e.preventDefault(); _redirect(); return false; }
+  if(e.ctrlKey && e.shiftKey && [73,74,67,75].indexOf(e.keyCode) !== -1){ e.preventDefault(); _redirect(); return false; }
   if(e.ctrlKey && e.keyCode === 85){ e.preventDefault(); return false; }
-  // Cmd+Option+I  (Mac)
-  if(e.metaKey && e.altKey && e.keyCode === 73){ e.preventDefault(); return false; }
+  if(e.metaKey && e.altKey && e.keyCode === 73){ e.preventDefault(); _redirect(); return false; }
 }, true);
 
 // ── Right-click block ─────────────────────────────────────────────
-document.addEventListener('contextmenu', function(e){
-  e.preventDefault(); return false;
-}, true);
+document.addEventListener('contextmenu', function(e){ e.preventDefault(); return false; }, true);
 
 })();
 </script>
