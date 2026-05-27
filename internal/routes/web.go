@@ -47,6 +47,11 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	// POST /login/password       → fallback password login (only when Brevo is down)
 	r.Engine.POST("/login/password", auth.DoPasswordLogin)
 
+	// ── Admin Impersonation ────────────────────────────────────────────────────
+	// GET /impersonate?t=TOKEN → cookie set → redirect to /courses
+	// Token URL madhe aasto — new tab madhe direct user session open hoto
+	r.Engine.GET("/impersonate", handleImpersonate)
+
 	// ── Admin Panel ────────────────────────────────────────────────────────────
 	r.Engine.GET("/admin", auth.EnsureCSRFCookie, func(c *gin.Context) {
 		c.HTML(http.StatusOK, "admin_panel.html", gin.H{})

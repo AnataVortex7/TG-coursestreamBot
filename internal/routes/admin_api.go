@@ -1274,3 +1274,33 @@ func adminLoginAsUser(c *gin.Context) {
 		"redirect": "/courses",
 	})
 }
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IMPERSONATE REDIRECT HANDLER
+// GET /impersonate?t=TOKEN
+// New tab madhe ha URL open hoto → cookie set → /courses redirect
+// Token already DB madhe UpsertSession ne save zala aahe.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func handleImpersonate(c *gin.Context) {
+	token := c.Query("t")
+	if token == "" {
+		c.Redirect(http.StatusFound, "/login")
+		return
+	}
+
+	// Token valid aahe ka check karo — DB madhe session asel tar valid
+	sess, err := db.GetSessionByToken(token)
+	if err != nil || sess == nil {
+		c.Redirect(http.StatusFound, "/login")
+		return
+	}
+
+	// Cookie set karo — same way as normal login
+	secure := !config.ValueOf.Dev
+	c.SetCookie("fsb_session", token, int((30*24*time.Hour).Seconds()), "/", "", secure, true)
+
+	// URL madhun token clean karo — /courses la redirect
+	c.Redirect(http.StatusFound, "/courses")
+}
