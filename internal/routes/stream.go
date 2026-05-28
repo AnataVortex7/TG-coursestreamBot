@@ -27,7 +27,7 @@ import (
 // log is declared here — routes.go च्या Load() मध्ये assign होतो.
 var log *zap.Logger
 
-func (r *Route) StreamRoutes(route *Route) {
+func (e *allRoutes) LoadStream(r *Route) {
 	r.Engine.GET("/stream/:token", handlePublicStream)
 }
 
