@@ -135,4 +135,3 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	}
 	return dispatcher.EndGroups
 }
-
