@@ -180,6 +180,9 @@
     text-decoration: underline;
   }
   .btn-link:disabled { color: var(--muted); text-decoration: none; cursor: not-allowed; }
+  .method-btn { flex:1; padding:9px 12px; border-radius:8px; font-size:13px; font-weight:600; cursor:pointer; border:1.5px solid #2a2d3a; background:transparent; color:var(--muted); transition:all .15s; }
+  .method-btn.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .method-btn:not(.active):hover { border-color:var(--accent); color:var(--accent); }
 
   /* ── Resend timer ── */
   .resend-row {
@@ -259,10 +262,11 @@
     <h2>Welcome back</h2>
     <p class="subtitle">Sign in to access your courses</p>
 
-    <!-- Service status badge -->
-    <span id="svc-badge" class="service-badge badge-checking">
-      <span class="dot"></span><span id="svc-text">Checking service…</span>
-    </span>
+    <!-- Login method toggle -->
+    <div style="display:flex;gap:8px;margin-bottom:1.2rem;">
+      <button id="btn-method-otp" class="method-btn active" onclick="setLoginMethod('otp')">📧 OTP Login</button>
+      <button id="btn-method-pwd" class="method-btn" onclick="setLoginMethod('password')">🔑 Password Login</button>
+    </div>
 
     <!-- Server-side error (from Go template, only for non-OTP legacy login) -->
     {{ if .error }}{{ if ne .tab "register" }}
@@ -308,12 +312,8 @@
       </div>
     </div>
 
-    <!-- ── STEP 3 : Password fallback (shown only when Brevo is down) ── -->
+    <!-- ── STEP 3 : Password login ── -->
     <div id="step-password" class="step">
-      <div class="alert alert-warn" style="display:flex;">
-        <svg viewBox="0 0 24 24"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
-        Email service is currently unavailable. Please sign in with your password.
-      </div>
       <div class="field">
         <label for="pass-identifier">Email / Mobile</label>
         <input id="pass-identifier" type="text" placeholder="you@email.com or 9876543210" autocomplete="username" />
@@ -322,7 +322,10 @@
         <label for="pass-password">Password</label>
         <input id="pass-password" type="password" placeholder="••••••••" autocomplete="current-password" />
       </div>
-      <button class="btn-primary" onclick="doPasswordLogin()">Sign In →</button>
+      <button class="btn-primary" id="btn-pwd-login" onclick="doPasswordLogin()">Sign In →</button>
+      <div style="text-align:center;margin-top:0.9rem;">
+        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="setLoginMethod('otp')">← Use OTP instead</button>
+      </div>
     </div>
 
     <p class="footer-note">Don't have an account? <a href="#" onclick="switchTab('register');return false;">Register here</a></p>
@@ -403,7 +406,6 @@
 // ─── State ────────────────────────────────────────────────────────────────────
 let emailAddr      = '';
 let resendInterval = null;
-let serviceIsUp    = true; // assume up until checked
 
 // ─── Tab switcher ─────────────────────────────────────────────────────────────
 function switchTab(tab) {
@@ -414,26 +416,22 @@ function switchTab(tab) {
   document.getElementById('panel-register').classList.toggle('active', tab === 'register');
 }
 
-// ─── Service health check ─────────────────────────────────────────────────────
-async function checkService() {
-  const badge   = document.getElementById('svc-badge');
-  const badgeTxt = document.getElementById('svc-text');
-  try {
-    const res  = await fetch('/login/check-service');
-    const data = await res.json();
-    serviceIsUp = data.up;
-  } catch (_) {
-    serviceIsUp = false;
-  }
+// ─── Login method toggle ──────────────────────────────────────────────────────
+let loginMethod = 'otp';
 
-  if (serviceIsUp) {
-    badge.className = 'service-badge badge-up';
-    badgeTxt.textContent = 'Email OTP login active';
-    showStep('email'); // OTP flow
+function setLoginMethod(method) {
+  loginMethod = method;
+  document.getElementById('btn-method-otp').classList.toggle('active', method === 'otp');
+  document.getElementById('btn-method-pwd').classList.toggle('active', method === 'password');
+  clearAlert();
+  if (method === 'otp') {
+    showStep('email');
   } else {
-    badge.className = 'service-badge badge-down';
-    badgeTxt.textContent = 'Email service unavailable — password mode';
-    showStep('password'); // fallback
+    showStep('password');
+    setTimeout(() => {
+      const el = document.getElementById('pass-identifier');
+      if (el) el.focus();
+    }, 80);
   }
 }
 
@@ -588,7 +586,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Run service check on load
-  checkService();
+  setLoginMethod('otp'); // default to OTP
 
   // Register form validation
   const regForm = document.querySelector('form[action="/register"]');
