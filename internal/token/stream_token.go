@@ -32,9 +32,10 @@ func init() {
 
 const (
 	StreamTokenTTL = 2 * time.Hour
-	// Worker tokens are short-lived — they carry no session data,
-	// just enough to authorize one stream on the worker.
-	WorkerTokenTTL = 80 * time.Minute
+	// Worker token TTL — video duration peksha jast asayla hava.
+	// 2-3 hour videos sathi 4 hours safe ahe.
+	// Security IP binding + Sec-Fetch ne hote, TTL ne nahi.
+	WorkerTokenTTL = 4 * time.Hour
 )
 
 // ─── Main stream token payload ───────────────────────────────────────────────
@@ -83,6 +84,11 @@ type WorkerTokenPayload struct {
 	// becomes invalid → worker detects it and kills the stream.
 	StreamKey string `json:"sk"`
 
+	// ClientIP — request cha IP token madhe embed karto.
+	// Worker validate karto: request IP == token IP.
+	// URL share kela / different machine varun download → rejected.
+	ClientIP string `json:"cip"`
+
 	// Expiry
 	ExpiresAt time.Time `json:"exp"`
 }
@@ -125,6 +131,7 @@ func NewWorkerToken(
 	fileSize int64, fileName string, mimeType string,
 	dcID int,
 	streamKey string,
+	clientIP string,
 ) (string, error) {
 	payload := WorkerTokenPayload{
 		MessageID:     messageID,
@@ -143,6 +150,7 @@ func NewWorkerToken(
 		MimeType:      mimeType,
 		DCID:          dcID,
 		StreamKey:     streamKey,
+		ClientIP:      clientIP,
 		ExpiresAt:     time.Now().Add(WorkerTokenTTL),
 	}
 	return encryptWorker(payload)
