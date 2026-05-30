@@ -401,6 +401,7 @@ func handleWatchStream(c *gin.Context) {
 			file.FileSize, file.FileName, file.MimeType,
 			file.DCID,
 			streamKey,
+			c.ClientIP(),
 		)
 		if tokErr != nil {
 			log.Error("failed to generate worker token — falling back to local stream", zap.Error(tokErr))
@@ -714,4 +715,3 @@ func normalizeWatchMime(mime, fileName string) string {
 		return mime
 	}
 }
-
