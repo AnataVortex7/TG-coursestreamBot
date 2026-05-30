@@ -666,7 +666,7 @@
     <div class="modal-msg" id="modal-msg"></div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-danger" id="modal-ok">Delete</button>
+      <button class="btn btn-danger" id="modal-ok">Confirm</button>
     </div>
   </div>
 </div>
@@ -846,11 +846,14 @@ function toast(msg, type='success') {
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
 let pendingConfirm=null;
-function openModal(title, msg, onConfirm) {
+function openModal(title, msg, onConfirm, confirmLabel, confirmClass) {
   pendingConfirm=onConfirm;
   document.getElementById('modal-title').textContent=title;
   document.getElementById('modal-msg').textContent=msg;
-  document.getElementById('modal-ok').onclick=()=>{if(pendingConfirm)pendingConfirm();closeModal();};
+  const okBtn=document.getElementById('modal-ok');
+  okBtn.textContent=confirmLabel||'Delete';
+  okBtn.className='btn '+(confirmClass||'btn-danger');
+  okBtn.onclick=()=>{if(pendingConfirm)pendingConfirm();closeModal();};
   document.getElementById('delModal').classList.add('open');
 }
 function closeModal(){document.getElementById('delModal').classList.remove('open');pendingConfirm=null;}
@@ -1025,7 +1028,7 @@ document.getElementById('changePwdModal').addEventListener('click', function(e){
 function loginAsUser(userId, fullName) {
   openModal(
     '👤 Login As: ' + fullName,
-    `Tumhi admin session sodun "${fullName}" chya account madhun browse karal.\n\nUser la kaltanar nahi ani tyacha session alive rahil.\n\nPudhe jaaychay ka?`,
+    `Tumhi "${fullName}" chya account madhun browse karal. User la kaltanar nahi ani tyacha session alive rahil. Pudhe jaaychay ka?`,
     async () => {
       try {
         const res = await api('/users/' + userId + '/impersonate', { method: 'POST' });
@@ -1037,7 +1040,9 @@ function loginAsUser(userId, fullName) {
           toast('❌ ' + (d.error || 'Error'), 'error');
         }
       } catch { toast('❌ Network error', 'error'); }
-    }
+    },
+    '👤 Pudhe Ja',   // confirmLabel
+    'btn-info'        // confirmClass — blue instead of red
   );
 }
 
