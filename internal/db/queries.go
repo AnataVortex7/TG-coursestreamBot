@@ -541,6 +541,16 @@ func GetStreamNonce(nonce string) (*StreamNonce, error) {
 	return &sn, nil
 }
 
+// ConsumeStreamNonce deletes a nonce from DB after first successful stream validation.
+// This ensures the nonce is one-time-use from DB perspective.
+// In-memory nonceStreamKeys still valid for seek/range requests within same session.
+func ConsumeStreamNonce(nonce string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColStreamNonces.DeleteOne(ctx, bson.M{"nonce": nonce})
+	return err
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // WORKERS  (external streaming worker instances)
 // ═══════════════════════════════════════════════════════════════════════════════
