@@ -312,14 +312,35 @@ func handleWatchStream(c *gin.Context) {
 		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Direct stream access is not allowed. Please use the player."})
 		return
 	}
-	streamNonce, nonceErr := db.GetStreamNonce(nonce)
-	if nonceErr != nil || streamNonce == nil {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Stream session expired or invalid. Please reload the player page."})
+
+	// 3b-i. Range header mandatory — browser player always sends Range.
+	// curl/wget without Range = full-file download attempt → block.
+	// HEAD requests (player probes metadata) are allowed without Range.
+	if r.Header.Get("Range") == "" && r.Method != http.MethodHead {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Range header required for streaming."})
 		return
 	}
-	if streamNonce.UserID != currentUserID || streamNonce.WatchToken != tokenStr {
-		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Stream nonce mismatch. Please reload the player."})
-		return
+
+	// 3b-ii. In-memory fast path for seek / buffering range requests.
+	// nonceStreamKeys is populated on the very first validated request.
+	// Subsequent seek/range requests skip DB — fast and seek-safe.
+	// If server restarted (nonceStreamKeys cleared), falls through to DB check.
+	_, alreadyActive := nonceStreamKeys.Load(nonce)
+
+	if !alreadyActive {
+		// First request — validate from DB.
+		streamNonce, nonceErr := db.GetStreamNonce(nonce)
+		if nonceErr != nil || streamNonce == nil {
+			c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Stream session expired or invalid. Please reload the player page."})
+			return
+		}
+		if streamNonce.UserID != currentUserID || streamNonce.WatchToken != tokenStr {
+			c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Stream nonce mismatch. Please reload the player."})
+			return
+		}
+		// Consume nonce from DB — one-time use.
+		// In-memory nonceStreamKeys stays valid for all seek/range requests.
+		go db.ConsumeStreamNonce(nonce)
 	}
 
 	// 3c. Referer check — फक्त आपल्या player page वरूनच stream होऊ शकेल
