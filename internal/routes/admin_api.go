@@ -345,6 +345,10 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 
 	// ── Live streams — admin panel real-time stream tracking ──────────────
 	api.GET("/stream/live", handleAdminLiveStreams)
+
+	// ── User password change & impersonate ────────────────────────────────
+	api.PUT("/users/:id/password", adminChangeUserPassword)
+	api.POST("/users/:id/impersonate", adminImpersonateUser)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1239,4 +1243,98 @@ func handleAdminLiveStreams(c *gin.Context) {
 		"recently_replaced": replacedOut,
 		"active_count":      len(activeOut),
 	})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN: CHANGE USER PASSWORD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// PUT /api/admin/users/:id/password
+// Body: { "password": "newpass123" }
+// - Password hash update करतो
+// - User ला email notification जातो (email असल्यास)
+// - User चा existing session kill होत नाही
+func adminChangeUserPassword(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Password) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password required"})
+		return
+	}
+	if len(req.Password) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at least 6 characters"})
+		return
+	}
+
+	// User fetch — email notification साठी
+	user, err := db.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	// Hash
+	hash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
+		return
+	}
+
+	// DB update
+	if err := db.UpdateUserPassword(id, hash); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "DB update failed: " + err.Error()})
+		return
+	}
+
+	// Email notification — email असल्यासच, silently fail if email down
+	if user.Email != "" {
+		go func() {
+			if err := email.SendPasswordChangedEmail(user.Email, user.FullName, req.Password); err != nil {
+				golog.Printf("[admin] password change mail failed for %s: %v", user.Email, err)
+			}
+		}()
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "email_sent": user.Email != ""})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN: IMPERSONATE USER (Login As)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// POST /api/admin/users/:id/impersonate
+// - त्या user साठी JWT issue करतो
+// - Admin च्या browser मध्ये त्या user चा session cookie set होतो
+// - User ला कळत नाही; त्याचा session alive राहतो
+func adminImpersonateUser(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	user, err := db.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+	if !user.IsActive {
+		c.JSON(http.StatusForbidden, gin.H{"error": "User is disabled"})
+		return
+	}
+
+	// Issue JWT + parallel session (user चा existing session untouched)
+	if err := auth.IssueTokenForUser(c, user.ID, user.Username); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "redirect": "/courses"})
 }
