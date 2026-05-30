@@ -95,11 +95,27 @@ func isSecureCookie() bool {
 }
 
 func setCookie(c *gin.Context, value string, maxAge int) {
-	c.SetCookie(cookieName, value, maxAge, "/", "", isSecureCookie(), true)
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     cookieName,
+		Value:    value,
+		Path:     "/",
+		MaxAge:   maxAge,
+		Secure:   isSecureCookie(),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func deleteCookie(c *gin.Context) {
-	c.SetCookie(cookieName, "", -1, "/", "", isSecureCookie(), true)
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     cookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		Secure:   isSecureCookie(),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // ─── Password helpers ────────────────────────────────────────────────────────
