@@ -732,6 +732,28 @@
   </div>
 </div>
 
+<!-- ── Change Password Modal ──────────────────────────────────────────────── -->
+<div class="modal-overlay" id="changePwdModal">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-title">🔑 Password Change Kara</div>
+    <p id="cpwd-username" style="font-size:13px;color:#888;margin:4px 0 16px;"></p>
+    <div class="form-row">
+      <label>Nava Password <span class="req">*</span></label>
+      <input type="text" id="cpwd-input" placeholder="min 6 characters" autocomplete="off" />
+    </div>
+    <div id="cpwd-email-note" style="font-size:12px;color:#6c63ff;margin-top:6px;display:none;">
+      📧 User la email notification pathayla jaail
+    </div>
+    <div id="cpwd-no-email-note" style="font-size:12px;color:#e65100;margin-top:6px;display:none;">
+      ⚠️ Ya user la email nahi — notification pathavta yenar nahi
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeChangePwdModal()">Cancel</button>
+      <button class="btn btn-primary" id="cpwd-save-btn" onclick="execChangePassword()">✅ Save Password</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let cachedCourses = [];
@@ -915,6 +937,8 @@ async function loadUsers() {
         <td style="white-space:nowrap">
           ${u.is_active?`<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Disable</button>`:'<span style="font-size:12px;color:#bbb">Disabled</span>'}
           ${u.email?`<button class="btn btn-sm" style="background:#4f46e5;color:#fff;margin-left:4px" onclick="openMsgModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email)}')">📩 Msg</button>`:''}
+          <button class="btn btn-warning btn-sm" style="margin-left:4px" onclick="openChangePwdModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email||'')}')">🔑 Password</button>
+          ${u.is_active?`<button class="btn btn-info btn-sm" style="margin-left:4px" onclick="loginAsUser('${u.id}','${esc(u.full_name||u.username)}')">👤 Login As</button>`:''}
         </td>
       </tr>`;
     });
@@ -948,6 +972,73 @@ function deleteUser(id, name) {
       else{ const d=await res.json(); toast('❌ '+(d.error||'Error'),'error'); }
     } catch{ toast('❌ Network error','error'); }
   });
+}
+
+// ─── Change Password ──────────────────────────────────────────────────────────
+let cpwdTargetID = '';
+
+function openChangePwdModal(userId, fullName, userEmail) {
+  cpwdTargetID = userId;
+  document.getElementById('cpwd-username').textContent = '👤 ' + fullName;
+  document.getElementById('cpwd-input').value = '';
+  document.getElementById('cpwd-save-btn').disabled = false;
+  // Email note show/hide
+  const hasEmail = userEmail && userEmail.trim() !== '';
+  document.getElementById('cpwd-email-note').style.display = hasEmail ? 'block' : 'none';
+  document.getElementById('cpwd-no-email-note').style.display = hasEmail ? 'none' : 'block';
+  document.getElementById('changePwdModal').classList.add('open');
+  setTimeout(()=>document.getElementById('cpwd-input').focus(), 100);
+}
+
+function closeChangePwdModal() {
+  document.getElementById('changePwdModal').classList.remove('open');
+  cpwdTargetID = '';
+}
+
+async function execChangePassword() {
+  const pwd = document.getElementById('cpwd-input').value.trim();
+  if (pwd.length < 6) { toast('❌ Password min 6 characters pahije', 'error'); return; }
+  const btn = document.getElementById('cpwd-save-btn');
+  btn.disabled = true; btn.textContent = '⏳ Saving...';
+  try {
+    const res = await api('/users/' + cpwdTargetID + '/password', {
+      method: 'PUT',
+      body: JSON.stringify({ password: pwd })
+    });
+    const d = await res.json();
+    if (res.ok) {
+      toast(d.email_sent ? '✅ Password change kela! User la email pathavla.' : '✅ Password change kela! (Email nahi pathavla — email nahi)');
+      closeChangePwdModal();
+    } else {
+      toast('❌ ' + (d.error || 'Error'), 'error');
+      btn.disabled = false; btn.textContent = '✅ Save Password';
+    }
+  } catch { toast('❌ Network error', 'error'); btn.disabled = false; btn.textContent = '✅ Save Password'; }
+}
+
+// Close on overlay click
+document.getElementById('changePwdModal').addEventListener('click', function(e){
+  if (e.target === this) closeChangePwdModal();
+});
+
+// ─── Login As User (Impersonate) ──────────────────────────────────────────────
+function loginAsUser(userId, fullName) {
+  openModal(
+    '👤 Login As: ' + fullName,
+    `Tumhi admin session sodun "${fullName}" chya account madhun browse karal.\n\nUser la kaltanar nahi ani tyacha session alive rahil.\n\nPudhe jaaychay ka?`,
+    async () => {
+      try {
+        const res = await api('/users/' + userId + '/impersonate', { method: 'POST' });
+        const d = await res.json();
+        if (res.ok && d.redirect) {
+          toast('✅ ' + fullName + ' chya account madhye jaatoy...');
+          setTimeout(() => { window.open(d.redirect, '_blank'); }, 800);
+        } else {
+          toast('❌ ' + (d.error || 'Error'), 'error');
+        }
+      } catch { toast('❌ Network error', 'error'); }
+    }
+  );
 }
 
 let msgTargetUserID = '';
