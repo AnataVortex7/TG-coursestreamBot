@@ -35,26 +35,31 @@
   .search-wrap input:focus{border-color:var(--accent)}
   .search-wrap .icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted)}
 
-  /* ── Folder section ───────────────────────────────────────────── */
-  .folder-section{max-width:1300px;margin:20px auto 0;padding:0 20px}
-  .folder-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--card);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;user-select:none;transition:border-color .2s,background .2s;margin-bottom:2px}
-  .folder-header:hover{border-color:var(--accent);background:#26263a}
-  .folder-header.open{border-bottom-left-radius:0;border-bottom-right-radius:0;border-color:var(--accent);background:#26263a}
-  .folder-header-left{display:flex;align-items:center;gap:12px}
-  .folder-icon{font-size:1.3rem;transition:transform .25s}
-  .folder-header.open .folder-icon{transform:rotate(0deg)}
-  .folder-chevron{font-size:.9rem;color:var(--muted);transition:transform .25s}
-  .folder-header.open .folder-chevron{transform:rotate(180deg)}
-  .folder-title{font-size:1rem;font-weight:700;color:var(--text)}
-  .folder-meta{font-size:.78rem;color:var(--muted);margin-top:2px}
-  .folder-range-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
-  .range-badge{font-size:.72rem;background:rgba(124,106,247,.15);color:var(--accent);border:1px solid rgba(124,106,247,.3);border-radius:20px;padding:2px 10px;font-weight:600}
-  .folder-ungrouped .folder-header{border-color:#3f3f52;background:#1e1e2a}
-  .folder-ungrouped .folder-header:hover{border-color:#fb923c}
-  .folder-ungrouped .folder-title{color:var(--muted)}
-  .folder-body{border:1px solid var(--accent);border-top:none;border-bottom-left-radius:var(--radius);border-bottom-right-radius:var(--radius);background:#1e1e2c;overflow:hidden;display:none}
+  /* ── Folder grid ───────────────────────────────────────────────── */
+  .folders-grid-wrap{max-width:1300px;margin:20px auto 0;padding:0 20px}
+  .folders-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-bottom:8px}
+  .folder-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 12px 14px;display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;transition:transform .18s,border-color .2s,background .2s;user-select:none}
+  .folder-card:hover{transform:translateY(-3px);border-color:var(--accent);background:#26263a}
+  .folder-card.active{border-color:var(--accent);background:#26263a}
+  .folder-icon-wrap{width:62px;height:58px;border-radius:14px;display:flex;align-items:center;justify-content:center;position:relative;font-size:2rem}
+  .folder-badge{position:absolute;top:-6px;right:-8px;font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;min-width:20px;text-align:center;color:#fff}
+  .folder-card-title{font-size:.82rem;font-weight:700;color:var(--text);text-align:center;line-height:1.35;word-break:break-word}
+  .folder-card-meta{font-size:.72rem;color:var(--muted)}
+  .fc-c0 .folder-icon-wrap{background:#2d2459} .fc-c0 .folder-badge{background:#7c6af7}
+  .fc-c1 .folder-icon-wrap{background:#0d3d2e} .fc-c1 .folder-badge{background:#1a9e75}
+  .fc-c2 .folder-icon-wrap{background:#3d1a0a} .fc-c2 .folder-badge{background:#d85a30}
+  .fc-c3 .folder-icon-wrap{background:#0a2a45} .fc-c3 .folder-badge{background:#378add}
+  .fc-c4 .folder-icon-wrap{background:#3d2a05} .fc-c4 .folder-badge{background:#ef9f27}
+  .fc-c5 .folder-icon-wrap{background:#3d0f20} .fc-c5 .folder-badge{background:#d4537e}
+  .fc-c6 .folder-icon-wrap{background:#1a3308} .fc-c6 .folder-badge{background:#639922}
+  .fc-c7 .folder-icon-wrap{background:#3d0a0a} .fc-c7 .folder-badge{background:#e24b4a}
+  .folder-section{max-width:1300px;margin:4px auto 0;padding:0 20px}
+  .folder-body{border:1px solid var(--accent);border-radius:var(--radius);background:#1e1e2c;overflow:hidden;display:none;margin-bottom:12px}
   .folder-body.open{display:block}
-  .folder-ungrouped .folder-body{border-color:#3f3f52}
+  .folder-body-header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border)}
+  .folder-body-title{font-size:.9rem;font-weight:700;color:var(--text)}
+  .folder-body-close{background:none;border:none;color:var(--muted);cursor:pointer;font-size:1.1rem;padding:0 4px}
+  .folder-body-close:hover{color:var(--text)}
 
   /* ── Cards grid ───────────────────────────────────────────────── */
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:18px;padding:20px 20px 20px;max-width:1300px;margin:0 auto}
@@ -149,23 +154,30 @@
 ════════════════════════════════════════════════════════════════════ -->
 {{ if .hasFolders }}
 
-{{ range $fi, $folder := .folderGroups }}
-<div class="folder-section {{ if $folder.IsUngrouped }}folder-ungrouped{{ end }}" data-folder-idx="{{ $fi }}">
-
-  <!-- Folder Header (click to expand/collapse) -->
-  <div class="folder-header" onclick="toggleFolder({{ $fi }})">
-    <div class="folder-header-left">
-      <span class="folder-icon">{{ if $folder.IsUngrouped }}📄{{ else }}📁{{ end }}</span>
-      <div>
-        <div class="folder-title">{{ $folder.Name }}</div>
-        <div class="folder-meta">{{ len $folder.Files }} files</div>
+<!-- Folder Cards Grid -->
+<div class="folders-grid-wrap">
+  <div class="folders-grid">
+    {{ range $fi, $folder := .folderGroups }}
+    <div class="folder-card" data-folder-idx="{{ $fi }}" onclick="toggleFolder({{ $fi }})">
+      <div class="folder-icon-wrap">
+        {{ if $folder.IsUngrouped }}📄{{ else }}📁{{ end }}
+        <span class="folder-badge">{{ len $folder.Files }}</span>
       </div>
+      <div class="folder-card-title">{{ $folder.Name }}</div>
+      <div class="folder-card-meta">{{ len $folder.Files }} files</div>
     </div>
-    <span class="folder-chevron">▼</span>
+    {{ end }}
   </div>
+</div>
 
+{{ range $fi, $folder := .folderGroups }}
+<div class="folder-section" data-folder-idx="{{ $fi }}">
   <!-- Folder Body -->
   <div class="folder-body" id="folder-body-{{ $fi }}">
+    <div class="folder-body-header">
+      <span class="folder-body-title">{{ if $folder.IsUngrouped }}📄{{ else }}📁{{ end }} {{ $folder.Name }}</span>
+      <button class="folder-body-close" onclick="toggleFolder({{ $fi }})">✕</button>
+    </div>
     {{ if $folder.Files }}
     <div class="grid">
       {{ range $folder.Files }}
@@ -313,23 +325,33 @@
   let currentPage   = 1;
   let filteredCards = [];
 
+  // ── Folder card color assign ─────────────────────────────────────────────
+  document.querySelectorAll('.folder-card').forEach(function(card, i) {
+    card.classList.add('fc-c' + (i % 8));
+  });
+
   // ── Folder toggle ────────────────────────────────────────────────────────
   function toggleFolder(idx) {
-    const header = document.querySelector('[data-folder-idx="' + idx + '"] .folder-header');
-    const body   = document.getElementById('folder-body-' + idx);
-    if (!header || !body) return;
+    const card = document.querySelector('.folder-card[data-folder-idx="' + idx + '"]');
+    const body = document.getElementById('folder-body-' + idx);
+    if (!body) return;
     const isOpen = body.classList.contains('open');
-    body.classList.toggle('open', !isOpen);
-    header.classList.toggle('open', !isOpen);
+    document.querySelectorAll('.folder-body.open').forEach(function(b){ b.classList.remove('open'); });
+    document.querySelectorAll('.folder-card.active').forEach(function(c){ c.classList.remove('active'); });
+    if (!isOpen) {
+      body.classList.add('open');
+      if (card) card.classList.add('active');
+      body.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }
 
   // Auto-open first folder on load
   if (HAS_FOLDERS) {
-    const first = document.querySelector('[data-folder-idx="0"] .folder-header');
+    const firstCard = document.querySelector('.folder-card[data-folder-idx="0"]');
     const firstBody = document.getElementById('folder-body-0');
-    if (first && firstBody) {
+    if (firstBody) {
       firstBody.classList.add('open');
-      first.classList.add('open');
+      if (firstCard) firstCard.classList.add('active');
     }
   }
 
