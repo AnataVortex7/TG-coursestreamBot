@@ -669,6 +669,17 @@
 
   document.addEventListener('fullscreenchange', () => {
     btnFS.textContent = document.fullscreenElement ? '✕' : '⛶';
+    if (document.fullscreenElement) {
+      // Mobile var landscape lock karo (Android Chrome)
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('landscape').catch(() => {});
+      }
+    } else {
+      // Fullscreen exit — orientation release karo
+      if (screen.orientation && screen.orientation.unlock) {
+        screen.orientation.unlock();
+      }
+    }
   });
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
@@ -802,7 +813,12 @@ function _redirect(){
   try{ window.location.replace('https://www.google.com'); }catch(e){}
 }
 
+function _isMobile(){
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth <= 768;
+}
+
 function _sizeDetect(){
+  if(_isMobile()) return false;
   return (window.outerWidth  - window.innerWidth  > 130) ||
          (window.outerHeight - window.innerHeight > 130);
 }

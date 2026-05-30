@@ -694,7 +694,12 @@ function _redirect(){
   try{ window.location.replace('https://www.google.com'); }catch(e){}
 }
 
+function _isMobile(){
+  return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth <= 768;
+}
+
 function _sizeDetect(){
+  if(_isMobile()) return false;
   return (window.outerWidth  - window.innerWidth  > 130) ||
          (window.outerHeight - window.innerHeight > 130);
 }
