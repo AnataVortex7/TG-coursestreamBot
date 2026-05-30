@@ -496,3 +496,23 @@ func redirectOrUnauthorized(c *gin.Context) {
 	c.Redirect(http.StatusFound, "/login")
 	c.Abort()
 }
+
+// ─── Admin Impersonate helper ─────────────────────────────────────────────────
+
+// IssueTokenForUser — admin panel साठी: कोणत्याही user साठी JWT + session बनवतो.
+// Admin ला त्या user म्हणून browse करण्यासाठी हे token cookie मध्ये set करायचे.
+// User ला कळत नाही; त्याचा existing session kill होत नाही.
+func IssueTokenForUser(c *gin.Context, userID primitive.ObjectID, username string) error {
+	tokenStr, expiresAt, err := issueToken(userID, username)
+	if err != nil {
+		return err
+	}
+	ip := clientIP(c)
+	ua := "admin-impersonate"
+	if err := db.CreateImpersonateSession(userID, tokenStr, ip, ua, expiresAt); err != nil {
+		return err
+	}
+	maxAge := int(sessionExpiry.Seconds())
+	setCookie(c, tokenStr, maxAge)
+	return nil
+}
