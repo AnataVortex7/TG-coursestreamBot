@@ -963,3 +963,43 @@ func GetWatchPosition(userID primitive.ObjectID, messageID int, channelID int64)
 	}
 	return h.WatchPosition, nil
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// USER PASSWORD UPDATE  (admin use only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// UpdateUserPassword — admin कडून user चा password bcrypt hash ने update करतो.
+// Plain password इथे येत नाही — caller ने आधीच hash करायला हवा.
+func UpdateUserPassword(userID primitive.ObjectID, newPasswordHash string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{"password_hash": newPasswordHash}},
+	)
+	return err
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN IMPERSONATE SESSION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// CreateImpersonateSession — UpsertSession सारखे पण user चा existing session
+// delete करत नाही. Admin ला नवीन parallel session मिळतो; user logged out होत नाही.
+func CreateImpersonateSession(userID primitive.ObjectID, token, ip, userAgent string, expiresAt time.Time) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	session := &Session{
+		ID:        primitive.NewObjectID(),
+		UserID:    userID,
+		Token:     token,
+		IP:        ip,
+		UserAgent: userAgent,
+		CreatedAt: time.Now(),
+		ExpiresAt: expiresAt,
+	}
+	_, err := ColSessions.InsertOne(ctx, session)
+	return err
+}
