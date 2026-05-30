@@ -122,7 +122,7 @@ func globalSecurityHeaders() gin.HandlerFunc {
 		// base-uri 'self': base tag injection रोखतो.
 		c.Header("Content-Security-Policy",
 			"default-src 'self'; "+
-				"script-src 'self' 'unsafe-inline' ; "+
+				"script-src 'self' 'unsafe-inline' 'unsafe-eval'; "+
 				"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "+
 				"font-src 'self' https://fonts.gstatic.com data:; "+
 				"img-src 'self' data: https: blob:; "+
@@ -165,6 +165,8 @@ func getRouter(log *zap.Logger) *gin.Engine {
 		})
 	})
 
+
+	router.StaticFile("/1713b039-f83f-40fd-936c-7225cf5ba339.txt", "web/1713b039-f83f-40fd-936c-7225cf5ba339.txt")
 
 	routes.Load(log, router)
 
