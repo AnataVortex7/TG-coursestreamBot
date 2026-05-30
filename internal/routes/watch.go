@@ -35,6 +35,12 @@ import (
 
 var activeStreamKeys sync.Map // userIDHex → streamKey (string)
 
+// nonceStreamKeys — handleWatch madhe ek vela streamKey generate hoto,
+// nonce cha key vaparun ithe store hoto.
+// handleWatchStream pratyek range request la ithe lookup karto (generate nako).
+// Lifetime: StreamTokenTTL (2 hours) — nantarcha auto-delete.
+var nonceStreamKeys sync.Map // nonce (string) → streamKey (string)
+
 // ── Admin Panel: Live Stream Tracking ────────────────────────────────────────
 // प्रत्येक user चा current active stream info admin panel साठी store करतो.
 // Main server फक्त redirect करतो त्यामुळे stream end कळत नाही —
@@ -199,6 +205,23 @@ func handleWatch(c *gin.Context) {
 		return
 	}
 
+	// ── StreamKey — EKDACH generate, nonce sathi store ────────────────────
+	// handleWatchStream pratyek range request la hya streamKey la lookup karto.
+	// Navya video sathi handleWatch call zhala ki navya streamKey ne
+	// activeStreamKeys overwrite hoto — junya video che range requests blocked.
+	watchStreamKey, skErr := genStreamKey()
+	if skErr != nil {
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Server error. Please try again."})
+		return
+	}
+	nonceStreamKeys.Store(nonce, watchStreamKey)
+	activeStreamKeys.Store(currentUserID.Hex(), watchStreamKey)
+	// TTL nantar auto-cleanup
+	go func(n string) {
+		time.Sleep(token.StreamTokenTTL + 5*time.Minute)
+		nonceStreamKeys.Delete(n)
+	}(nonce)
+
 	title := cachedFile.FileName
 	if cachedFile.Title != "" {
 		title = cachedFile.Title
@@ -308,17 +331,29 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// 3d. Generate a unique stream key for this stream session.
-	// This key is stored in-memory and included in the worker token.
-	// Worker sends it back every 5s via /api/worker/stream-check.
-	// When a new stream starts for the same user, a new key is stored —
-	// the old key becomes invalid and the worker kills its stream.
-	streamKey, skErr := genStreamKey()
-	if skErr != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Server error. Please try again."})
+	// 3d. StreamKey lookup — handleWatch madhe ek vela generate zhala,
+	// ithe faqt lookup karto. Pratyek range request la same key milto.
+	// Server restart zhala (nonceStreamKeys clear) tar user la reload sangto.
+	rawSK, skFound := nonceStreamKeys.Load(nonce)
+	if !skFound {
+		c.HTML(http.StatusForbidden, "error.html", gin.H{
+			"code":    403,
+			"message": "Stream session expired. Please reload the player page.",
+		})
 		return
 	}
-	activeStreamKeys.Store(currentUserID.Hex(), streamKey)
+	streamKey := rawSK.(string)
+
+	// 3e. Concurrent stream check — he user cha ACTIVE stream ahe ka?
+	// Navya video sathi handleWatch call zhala ki activeStreamKeys madhe
+	// navya streamKey ne overwrite hoto — ha check tyala block karto.
+	activeKey, activeExists := activeStreamKeys.Load(currentUserID.Hex())
+	if !activeExists || activeKey.(string) != streamKey {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": "Another stream is already active on your account. Please close other tabs and try again.",
+		})
+		return
+	}
 
 	// ── User info for admin live stream tracking ─────────────────────────────
 	// var ने declare करतो — goto localStream: label च्या आधी असणे आवश्यक आहे
@@ -455,6 +490,13 @@ localStream:
 		return
 	}
 	defer pipe.Close()
+
+	// Local stream — chunk serve karaypurvi ek vela streamKey validate karo.
+	// Junya video che range requests ithe block hotat.
+	if cur, ok := activeStreamKeys.Load(currentUserID.Hex()); !ok || cur.(string) != streamKey {
+		http.Error(w, "Stream replaced by a newer session.", http.StatusTooManyRequests)
+		return
+	}
 
 	if _, err := io.CopyN(w, pipe, contentLength); err != nil {
 		if !utils.IsClientDisconnectError(err) {
