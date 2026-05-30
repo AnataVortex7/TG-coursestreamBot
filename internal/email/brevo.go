@@ -671,3 +671,50 @@ func buildRegistrationEmail(identifier, fullName string, telegramID int64) strin
 </body>
 </html>`, escapeHTML(identifier), escapeHTML(fullName), telegramID, escapeHTML(settgCmd))
 }
+
+// ─── Admin-triggered Password Change Email ────────────────────────────────────
+
+// SendPasswordChangedEmail — admin ने password change केल्यावर user ला mail जातो.
+// newPassword plain text स्वरूपात इथे येतो (एकदाच mail मध्ये दाखवायला).
+func SendPasswordChangedEmail(toEmail, fullName, newPassword string) error {
+	p := primaryProvider()
+	subject := "Your Password Has Been Updated — " + p.fromName
+	htmlBody := buildPasswordChangedEmail(p.fromName, fullName, newPassword)
+	return sendMail(toEmail, subject, htmlBody)
+}
+
+func buildPasswordChangedEmail(appName, fullName, newPassword string) string {
+	displayName := fullName
+	if displayName == "" {
+		displayName = "User"
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;margin:0;padding:40px 16px;">
+  <div style="max-width:460px;margin:0 auto;background:#1a1d27;border-radius:16px;padding:40px 32px;border:1px solid #2a2d3a;">
+    <div style="text-align:center;margin-bottom:28px;">
+      <div style="width:60px;height:60px;background:#f59e0b;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:14px;">
+        <span style="font-size:28px;">🔑</span>
+      </div>
+      <h1 style="color:#e8e9f0;font-size:20px;font-weight:700;margin:0 0 6px;">Password Updated</h1>
+      <p style="color:#7a7d8e;font-size:13px;margin:0;">%s</p>
+    </div>
+    <p style="color:#b0b3c1;font-size:14px;line-height:1.7;margin:0 0 20px;">
+      Hi <strong style="color:#e8e9f0;">%s</strong>,<br><br>
+      Your account password has been updated by the admin.
+      Here is your new password:
+    </p>
+    <div style="text-align:center;margin:20px 0;">
+      <div style="display:inline-block;font-size:22px;font-weight:800;color:#f59e0b;font-family:'Courier New',monospace;background:#12141c;padding:16px 28px;border-radius:12px;border:2px solid #2a2d3a;letter-spacing:3px;">%s</div>
+    </div>
+    <div style="background:#12141c;border-radius:10px;padding:14px 18px;margin-top:16px;">
+      <p style="color:#7a7d8e;font-size:12px;margin:0;line-height:1.7;">
+        💡 You can sign in using this password or via <strong style="color:#6c63ff;">OTP on your email</strong>.<br>
+        <strong style="color:#ff5c5c;">If you did not request this change, contact your admin immediately.</strong>
+      </p>
+    </div>
+  </div>
+</body>
+</html>`, appName, escapeHTML(displayName), escapeHTML(newPassword))
+}
