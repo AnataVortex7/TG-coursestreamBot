@@ -607,20 +607,35 @@ func setPlayerSecurityHeaders(c *gin.Context) {
 // requirePlayerReferer — watch-stream वर येणारी request
 // आपल्याच /watch/ page वरून आली आहे का ते check करतो.
 // Direct URL access, curl, wget, external downloaders block होतात.
-func requirePlayerReferer(c *gin.Context) bool {
-	referer := c.Request.Header.Get("Referer")
-	if referer == "" {
-		// Nonce check आधीच झाला आहे (step 3b) — nonce valid असणे
-		// म्हणजे request player page वरूनच आली आहे हे verified आहे.
-		// Range requests, worker redirects, काही browsers referer strip करतात —
-		// nonce valid असल्यावर referer नसला तरी allow करतो.
-		return true
-	}
-	host := config.ValueOf.Host
-	// Referer असल्यास आपल्याच /watch/ page वरून असणे आवश्यक
-	return strings.HasPrefix(referer, host+"/watch/")
-}
 
+func requirePlayerReferer(c *gin.Context) bool {
+    referer := c.Request.Header.Get("Referer")
+    if referer == "" {
+        return true
+    }
+    
+    // Main host check
+    host := config.ValueOf.Host
+    if strings.HasPrefix(referer, host+"/watch/") {
+        return true
+    }
+    
+    // Worker URLs पण allow करा
+    for _, workerURL := range config.ValueOf.WorkerURLs {
+        if strings.HasPrefix(referer, workerURL+"/watch/") {
+            return true
+        }
+    }
+    
+    // PUBLIC_URL env variable check
+    if publicURL := os.Getenv("PUBLIC_URL"); publicURL != "" {
+        if strings.HasPrefix(referer, publicURL+"/watch/") {
+            return true
+        }
+    }
+    
+    return false
+}
 // ── /pdf-download/:token ──────────────────────────────────────────────────────
 // Serves a PDF as an attachment (downloadable). Only works for PDF mime type.
 // Same auth + token + access checks as watch-stream, but with attachment header.
