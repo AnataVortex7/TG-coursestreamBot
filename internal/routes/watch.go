@@ -575,34 +575,37 @@ func setAntiDownloadHeaders(c *gin.Context) {
 // setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
 // Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
 func setPlayerSecurityHeaders(c *gin.Context) {
-	host := config.ValueOf.Host
-	// Env-var worker URLs + admin-added worker URLs दोन्ही media-src मध्ये हवेत —
-	// worker redirect नंतर browser CSP block करतो otherwise.
-	mediaSrc := "'self' " + host
+    host := config.ValueOf.Host
+    mediaSrc := "'self' " + host
 
-	// 1. Env-var workers
-	for _, wu := range config.ValueOf.WorkerURLs {
-		mediaSrc += " " + wu
-	}
+    // Env-var workers
+    for _, wu := range config.ValueOf.WorkerURLs {
+        mediaSrc += " " + wu
+    }
+    // Admin-added workers
+    for _, s := range workerreg.Status() {
+        if s["added_by"] == "admin" {
+            if u, ok := s["url"].(string); ok && u != "" {
+                mediaSrc += " " + u
+            }
+        }
+    }
 
-	// 2. Admin-added workers (DB मधून registered)
-	for _, s := range workerreg.Status() {
-		if s["added_by"] == "admin" {
-			if u, ok := s["url"].(string); ok && u != "" {
-				mediaSrc += " " + u
-			}
-		}
-	}
+    // connect-src मध्ये PUBLIC_URL पण add करा
+    connectSrc := "'self'"
+    if publicURL := os.Getenv("PUBLIC_URL"); publicURL != "" {
+        connectSrc += " " + publicURL
+    }
 
-	c.Header("X-Frame-Options", "DENY")
-	c.Header("Content-Security-Policy",
-		"default-src 'self'; "+
-			"media-src "+mediaSrc+"; "+
-			"script-src 'self' 'unsafe-inline'; "+
-			"style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data:; "+
-			"connect-src 'self'; "+
-			"frame-ancestors 'none'")
+    c.Header("X-Frame-Options", "DENY")
+    c.Header("Content-Security-Policy",
+        "default-src 'self'; "+
+            "media-src "+mediaSrc+"; "+
+            "script-src 'self' 'unsafe-inline'; "+
+            "style-src 'self' 'unsafe-inline'; "+
+            "img-src 'self' data:; "+
+            "connect-src "+connectSrc+"; "+  // ← हे बदललं
+            "frame-ancestors 'none'")
 }
 
 // requirePlayerReferer — watch-stream वर येणारी request
