@@ -386,34 +386,34 @@
 
 <!-- ══════════════ GIFT CARD MODAL ══════════════ -->
 <div id="buyModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:100;align-items:center;justify-content:center;padding:16px;">
-  <div style="background:#1a1d27;border:1px solid #2a2d3a;border-radius:16px;padding:32px 28px;width:100%;max-width:440px;box-shadow:0 12px 48px rgba(0,0,0,.5);">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:32px 28px;width:100%;max-width:440px;box-shadow:0 12px 48px rgba(0,0,0,.5);">
 
     <div style="text-align:center;margin-bottom:22px;">
       <div style="font-size:36px;margin-bottom:8px;">🎁</div>
-      <h2 style="color:#e8e9f0;font-size:18px;font-weight:700;margin:0 0 4px;">Gift Card ने Course खरेदी करा</h2>
+      <h2 style="color:var(--text);font-size:18px;font-weight:700;margin:0 0 4px;">Gift Card ने Course खरेदी करा</h2>
       <p id="modal-course-name" style="color:var(--accent);font-size:14px;font-weight:600;margin:0;"></p>
-      <p id="modal-course-price" style="color:#22c55e;font-size:13px;font-weight:700;margin:4px 0 0;"></p>
+      <p id="modal-course-price" style="color:var(--green);font-size:13px;font-weight:700;margin:4px 0 0;"></p>
     </div>
 
     <div style="margin-bottom:14px;">
-      <label style="display:block;font-size:11px;font-weight:700;color:#7a7d8e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Gift Card Number <span style="color:#ff5c5c;">*</span></label>
+      <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Gift Card Number <span style="color:#ff5c5c;">*</span></label>
       <input id="gc-number" type="text" placeholder="1234 5678 9012 3456"
-        style="width:100%;padding:10px 14px;background:#12141c;border:1.5px solid #2a2d3a;border-radius:9px;color:#e8e9f0;font-size:14px;outline:none;font-family:monospace;letter-spacing:1px;"
-        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#2a2d3a'" />
+        style="width:100%;padding:10px 14px;background:var(--input-bg);border:1.5px solid var(--border);border-radius:9px;color:var(--text);font-size:14px;outline:none;font-family:monospace;letter-spacing:1px;"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" />
     </div>
 
     <div style="margin-bottom:14px;">
-      <label style="display:block;font-size:11px;font-weight:700;color:#7a7d8e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Gift Card PIN <span style="color:#ff5c5c;">*</span></label>
+      <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Gift Card PIN <span style="color:#ff5c5c;">*</span></label>
       <input id="gc-pin" type="text" placeholder="1234"
-        style="width:100%;padding:10px 14px;background:#12141c;border:1.5px solid #2a2d3a;border-radius:9px;color:#e8e9f0;font-size:14px;outline:none;font-family:monospace;letter-spacing:2px;"
-        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#2a2d3a'" />
+        style="width:100%;padding:10px 14px;background:var(--input-bg);border:1.5px solid var(--border);border-radius:9px;color:var(--text);font-size:14px;outline:none;font-family:monospace;letter-spacing:2px;"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'" />
     </div>
 
     <div style="margin-bottom:20px;">
-      <label style="display:block;font-size:11px;font-weight:700;color:#7a7d8e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Message (Optional)</label>
+      <label style="display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Message (Optional)</label>
       <textarea id="gc-msg" placeholder="Kahi message asel tar likha..." rows="3"
-        style="width:100%;padding:10px 14px;background:#12141c;border:1.5px solid #2a2d3a;border-radius:9px;color:#e8e9f0;font-size:13px;outline:none;resize:vertical;font-family:inherit;"
-        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#2a2d3a'"></textarea>
+        style="width:100%;padding:10px 14px;background:var(--input-bg);border:1.5px solid var(--border);border-radius:9px;color:var(--text);font-size:13px;outline:none;resize:vertical;font-family:inherit;"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'"></textarea>
     </div>
 
     <div id="modal-err" style="display:none;background:rgba(255,92,92,.12);border:1px solid rgba(255,92,92,.3);border-radius:8px;padding:10px 14px;font-size:13px;color:#ff8a80;margin-bottom:14px;"></div>
@@ -421,7 +421,7 @@
 
     <div style="display:flex;gap:10px;">
       <button onclick="closeBuyModal()"
-        style="flex:1;padding:11px;background:transparent;border:1.5px solid #2a2d3a;border-radius:9px;color:#7a7d8e;font-size:14px;font-weight:600;cursor:pointer;">
+        style="flex:1;padding:11px;background:transparent;border:1.5px solid var(--border);border-radius:9px;color:var(--muted);font-size:14px;font-weight:600;cursor:pointer;">
         Cancel
       </button>
       <button id="submit-btn" onclick="submitPurchase()"
@@ -430,7 +430,7 @@
       </button>
     </div>
 
-    <p style="text-align:center;font-size:11px;color:#7a7d8e;margin:14px 0 0;">Admin check karin ani access activate karil</p>
+    <p style="text-align:center;font-size:11px;color:var(--muted);margin:14px 0 0;">Admin check karin ani access activate karil</p>
   </div>
 </div>
 
@@ -520,23 +520,23 @@
 
 <!-- ══════════════ CONTACT ADMIN MODAL ══════════════ -->
 <div id="contact-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;display:none;align-items:center;justify-content:center;">
-  <div style="background:#1a1d27;border-radius:16px;padding:32px;width:100%;max-width:440px;border:1px solid #2a2d3a;margin:16px;">
-    <h3 style="color:#e8e9f0;margin:0 0 6px;font-size:18px;">📩 Contact Admin</h3>
-    <p style="color:#7a7d8e;font-size:13px;margin:0 0 20px;">Tumcha message admin cha email var pathavla jaail.</p>
+  <div style="background:var(--surface);border-radius:16px;padding:32px;width:100%;max-width:440px;border:1px solid var(--border);margin:16px;">
+    <h3 style="color:var(--text);margin:0 0 6px;font-size:18px;">📩 Contact Admin</h3>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 20px;">Tumcha message admin cha email var pathavla jaail.</p>
 
     <label style="color:#a5b4fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Subject *</label>
     <input id="ct-subject" type="text" placeholder="Subject lihaa..." maxlength="100"
-      style="width:100%;box-sizing:border-box;background:#12141c;border:1px solid #2a2d3a;border-radius:8px;padding:10px 14px;color:#e8e9f0;font-size:14px;margin-bottom:14px;outline:none;">
+      style="width:100%;box-sizing:border-box;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;margin-bottom:14px;outline:none;">
 
     <label style="color:#a5b4fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:6px;">Message *</label>
     <textarea id="ct-message" rows="5" placeholder="Tumcha message lihaa..."
-      style="width:100%;box-sizing:border-box;background:#12141c;border:1px solid #2a2d3a;border-radius:8px;padding:10px 14px;color:#e8e9f0;font-size:14px;resize:vertical;margin-bottom:14px;outline:none;font-family:inherit;"></textarea>
+      style="width:100%;box-sizing:border-box;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;color:var(--text);font-size:14px;resize:vertical;margin-bottom:14px;outline:none;font-family:inherit;"></textarea>
 
     <div id="ct-status" style="display:none;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;"></div>
 
     <div style="display:flex;gap:10px;justify-content:flex-end;">
       <button onclick="closeContactModal()"
-        style="background:transparent;border:1px solid #3a3d4a;color:#7a7d8e;padding:10px 20px;border-radius:8px;font-size:14px;cursor:pointer;">Cancel</button>
+        style="background:transparent;border:1px solid var(--border-dark);color:var(--muted);padding:10px 20px;border-radius:8px;font-size:14px;cursor:pointer;">Cancel</button>
       <button id="ct-submit-btn" onclick="submitContact()"
         style="background:var(--accent);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">📤 Send</button>
     </div>
@@ -580,7 +580,7 @@
       });
       const data = await res.json();
       if (data.ok) {
-        statusEl.style.cssText = 'display:block;background:#0d1f12;border:1px solid #22c55e;color:#4ade80;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;';
+        statusEl.style.cssText = 'display:block;background:#0d1f12;border:1px solid var(--green);color:#4ade80;padding:10px 14px;border-radius:8px;font-size:13px;margin-bottom:14px;';
         statusEl.textContent = '✅ Message admin la pathavla gela!';
         btn.textContent = '✅ Sent!';
         setTimeout(() => closeContactModal(), 2500);
@@ -601,7 +601,7 @@
 
 <!-- ─── Global Announcement Popup ─────────────────────────────────────────── -->
 <div id="announce-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;align-items:center;justify-content:center;padding:16px">
-  <div style="background:#1a1d27;border-radius:18px;border:1px solid #2a2d3a;max-width:500px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.6)">
+  <div style="background:var(--surface);border-radius:18px;border:1px solid var(--border);max-width:500px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.6)">
     <!-- Header -->
     <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:22px 24px 18px;border-radius:18px 18px 0 0;display:flex;align-items:flex-start;justify-content:space-between">
       <div>
@@ -614,7 +614,7 @@
     <!-- Body -->
     <div id="announce-body" style="padding:20px 24px;display:flex;flex-direction:column;gap:14px"></div>
     <!-- Footer -->
-    <div style="padding:16px 24px;border-top:1px solid #2a2d3a;display:flex;justify-content:flex-end">
+    <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">
       <button onclick="closeAnnouncePopup()" style="background:var(--accent);color:#fff;border:none;padding:10px 24px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">Got it ✓</button>
     </div>
   </div>
@@ -636,8 +636,8 @@
 
     const body = document.getElementById('announce-body');
     body.innerHTML = unseen.map(a => `
-      <div style="background:#12141c;border:1px solid #2a2d3a;border-radius:12px;padding:16px">
-        <div style="font-weight:700;color:#e8e9f0;font-size:15px;margin-bottom:8px">${escHtml(a.title)}</div>
+      <div style="background:var(--input-bg);border:1px solid var(--border);border-radius:12px;padding:16px">
+        <div style="font-weight:700;color:var(--text);font-size:15px;margin-bottom:8px">${escHtml(a.title)}</div>
         <div style="color:#9097a5;font-size:14px;line-height:1.6;white-space:pre-line">${escHtml(a.message)}</div>
         <div style="color:#555;font-size:11px;margin-top:8px">${new Date(a.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}</div>
       </div>`).join('');

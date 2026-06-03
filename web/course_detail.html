@@ -9,7 +9,7 @@
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:var(--bg);color:var(--text);font-family:var(--font-primary);min-height:100vh}
-  header{background:linear-gradient(135deg,#1a1030,#0f1a2e);border-bottom:1px solid var(--border);padding:28px 24px 20px;text-align:center;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:28px 24px 20px;text-align:center;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
   header h1{font-size:1.7rem;font-weight:700;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
   header p{color:var(--muted);font-size:.85rem;margin-top:4px}
   .header-meta{display:flex;align-items:center;justify-content:center;gap:16px;margin-top:8px;flex-wrap:wrap}
@@ -35,22 +35,22 @@
   .folders-grid-wrap{max-width:1300px;margin:20px auto 0;padding:0 20px}
   .folders-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-bottom:8px}
   .folder-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 12px 14px;display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;transition:transform .18s,border-color .2s,background .2s;user-select:none}
-  .folder-card:hover{transform:translateY(-3px);border-color:var(--accent);background:#26263a}
-  .folder-card.active{border-color:var(--accent);background:#26263a}
+  .folder-card:hover{transform:translateY(-3px);border-color:var(--accent);background:#f0eeeb}
+  .folder-card.active{border-color:var(--accent);background:#f0eeeb}
   .folder-icon-wrap{width:62px;height:58px;border-radius:14px;display:flex;align-items:center;justify-content:center;position:relative;font-size:2rem}
   .folder-badge{position:absolute;top:-6px;right:-8px;font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;min-width:20px;text-align:center;color:#fff}
   .folder-card-title{font-size:.82rem;font-weight:700;color:var(--text);text-align:center;line-height:1.35;word-break:break-word}
   .folder-card-meta{font-size:.72rem;color:var(--muted)}
-  .fc-c0 .folder-icon-wrap{background:#2d2459} .fc-c0 .folder-badge{background:var(--accent)}
-  .fc-c1 .folder-icon-wrap{background:#0d3d2e} .fc-c1 .folder-badge{background:#1a9e75}
-  .fc-c2 .folder-icon-wrap{background:#3d1a0a} .fc-c2 .folder-badge{background:#d85a30}
-  .fc-c3 .folder-icon-wrap{background:#0a2a45} .fc-c3 .folder-badge{background:#378add}
-  .fc-c4 .folder-icon-wrap{background:#3d2a05} .fc-c4 .folder-badge{background:#ef9f27}
-  .fc-c5 .folder-icon-wrap{background:#3d0f20} .fc-c5 .folder-badge{background:#d4537e}
-  .fc-c6 .folder-icon-wrap{background:#1a3308} .fc-c6 .folder-badge{background:#639922}
-  .fc-c7 .folder-icon-wrap{background:#3d0a0a} .fc-c7 .folder-badge{background:#e24b4a}
+  .fc-c0 .folder-icon-wrap{background:#ede9ff} .fc-c0 .folder-badge{background:var(--accent)}
+  .fc-c1 .folder-icon-wrap{background:#d4f0e6} .fc-c1 .folder-badge{background:#1a9e75}
+  .fc-c2 .folder-icon-wrap{background:#fde8d8} .fc-c2 .folder-badge{background:#d85a30}
+  .fc-c3 .folder-icon-wrap{background:#d4eaf8} .fc-c3 .folder-badge{background:#378add}
+  .fc-c4 .folder-icon-wrap{background:#fdf2cc} .fc-c4 .folder-badge{background:#ef9f27}
+  .fc-c5 .folder-icon-wrap{background:#fde0ea} .fc-c5 .folder-badge{background:#d4537e}
+  .fc-c6 .folder-icon-wrap{background:#e2f0d0} .fc-c6 .folder-badge{background:#639922}
+  .fc-c7 .folder-icon-wrap{background:#fde0d8} .fc-c7 .folder-badge{background:#e24b4a}
   .folder-section{max-width:1300px;margin:4px auto 0;padding:0 20px}
-  .folder-body{border:1px solid var(--accent);border-radius:var(--radius);background:#1e1e2c;overflow:hidden;display:none;margin-bottom:12px}
+  .folder-body{border:1px solid var(--accent);border-radius:var(--radius);background:#f5f5f3;overflow:hidden;display:none;margin-bottom:12px}
   .folder-body.open{display:block}
   .folder-body-header{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border)}
   .folder-body-title{font-size:.9rem;font-weight:700;color:var(--text)}
@@ -93,8 +93,8 @@
   .btn-photo{background:var(--photo);color:#111}
   .btn-open{background:var(--doc);color:#fff}
   .btn-offline{background:#1a9e5c;color:#fff}
-  .btn-offline:disabled{background:#2d4a3e;color:#5a8a6e;cursor:not-allowed;opacity:.7}
-  .btn-locked{background:#2d2d3a;color:#6b7280;border:1px solid #3f3f52;cursor:not-allowed;opacity:.8}
+  .btn-offline:disabled{background:#c8e6d4;color:#a0c8b0;cursor:not-allowed;opacity:.7}
+  .btn-locked{background:#e8e8e2;color:var(--muted);border:1px solid var(--border-dark);cursor:not-allowed;opacity:.8}
   .pagination{display:flex;justify-content:center;gap:12px;padding:16px 20px 40px;flex-wrap:wrap}
   .pagination button{display:inline-flex;align-items:center;gap:6px;padding:9px 22px;border-radius:10px;background:var(--surface);color:var(--text);border:1px solid var(--border);font-size:.85rem;font-weight:600;cursor:pointer;transition:all .2s}
   .pagination button:hover{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -455,12 +455,12 @@
       const wrap = document.getElementById('course-announcements');
       wrap.style.display = 'block';
       wrap.innerHTML = list.map((a, i) => `
-        <div id="ca-${i}" style="background:linear-gradient(135deg,#1e1a3a,#1a1d27);border:1px solid #4f46e540;border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:8px;position:relative">
+        <div id="ca-${i}" style="background:var(--surface);border:1px solid #4f46e540;border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:8px;position:relative">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
             <div style="flex:1">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
                 <span style="font-size:16px">📢</span>
-                <span style="font-weight:700;color:#e8e9f0;font-size:14px">${escAnn(a.title)}</span>
+                <span style="font-weight:700;color:var(--text);font-size:14px">${escAnn(a.title)}</span>
                 <span style="color:#555;font-size:11px">${new Date(a.created_at).toLocaleDateString('en-IN',{day:'numeric',month:'short'})}</span>
               </div>
               <div style="color:#9097a5;font-size:13px;line-height:1.6;white-space:pre-line">${escAnn(a.message)}</div>
@@ -525,9 +525,9 @@
     overlay.id = 'offline-modal-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
     overlay.innerHTML = `
-      <div style="background:#1c1c2e;border:1px solid #3f3f52;border-radius:16px;padding:28px 24px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+      <div style="background:var(--surface);border:1px solid var(--border-dark);border-radius:16px;padding:28px 24px;max-width:360px;width:100%;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.5)">
         <div style="font-size:2rem;margin-bottom:8px">${hasLink ? '📥' : '⛔'}</div>
-        <div style="font-size:1rem;font-weight:700;color:#e8e9f0;margin-bottom:4px">
+        <div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:4px">
           ${hasLink ? '✅ Ready! Link click करा' : '⛔ आजचे downloads संपले!'}
         </div>
         <div style="font-size:.82rem;color:#9097a5;margin-bottom:20px">
@@ -543,13 +543,13 @@
           🔒 Video forward व save blocked असेल<br>
           ⏰ Link आज रात्री 12 वाजता expire होईल
         </div>` : ''}
-        <div style="font-size:.8rem;color:#6b7280;margin-bottom:18px">
+        <div style="font-size:.8rem;color:var(--muted);margin-bottom:18px">
           📊 आजचे downloads: <strong style="color:${remaining > 0 ? '#4ade80' : '#f87171'}">${used}/${limit}</strong>
           ${remaining > 0 ? `&nbsp;(${remaining} शिल्लक)` : `&nbsp;— <span style="color:#f87171">संपले</span>`}
           <br><span style="font-size:.73rem">रात्री 12:00 IST ला reset होतात</span>
         </div>
         <button onclick="document.getElementById('offline-modal-overlay').remove()"
-          style="background:#3a3a4e;color:#e8e9f0;border:none;border-radius:8px;padding:9px 28px;font-size:.85rem;font-weight:600;cursor:pointer">
+          style="background:var(--border);color:var(--text);border:none;border-radius:8px;padding:9px 28px;font-size:.85rem;font-weight:600;cursor:pointer">
           बंद करा
         </button>
       </div>`;
