@@ -207,6 +207,50 @@ func handleCourseDetail(c *gin.Context) {
 		return
 	}
 
+	// ── Deduplicate — same Title असलेल्या files मधून best format ठेवतो ──────
+	// Priority: mp4 > mkv > avi > other (converted file prefer करतो)
+	formatPriority := func(mime, name string) int {
+		mime = strings.ToLower(mime)
+		name = strings.ToLower(name)
+		if strings.Contains(mime, "mp4") || strings.HasSuffix(name, ".mp4") { return 4 }
+		if strings.Contains(mime, "webm") || strings.HasSuffix(name, ".webm") { return 3 }
+		if strings.Contains(mime, "avi") || strings.HasSuffix(name, ".avi")   { return 2 }
+		if strings.HasSuffix(name, ".mkv")                                     { return 1 }
+		return 0
+	}
+	// Title नुसार group करा, best format ठेवा
+	type titleKey = string
+	bestFile := make(map[titleKey]db.CachedFile, len(files))
+	bestOrder := make(map[titleKey]int, len(files)) // original sort order preserve
+	for i, f := range files {
+		key := strings.TrimSpace(f.Title)
+		if key == "" {
+			key = strings.TrimSpace(f.FileName) // Title नसेल तर FileName वापरा
+		}
+		existing, seen := bestFile[key]
+		if !seen {
+			bestFile[key] = f
+			bestOrder[key] = i
+		} else {
+			if formatPriority(f.MimeType, f.FileName) > formatPriority(existing.MimeType, existing.FileName) {
+				bestFile[key] = f
+				// order जुनाच ठेवा — position बदलू नये
+			}
+		}
+	}
+	// Original order मध्ये deduplicated list बनवा
+	seen := make(map[titleKey]bool)
+	deduped := make([]db.CachedFile, 0, len(bestFile))
+	for _, f := range files {
+		key := strings.TrimSpace(f.Title)
+		if key == "" { key = strings.TrimSpace(f.FileName) }
+		if !seen[key] {
+			seen[key] = true
+			deduped = append(deduped, bestFile[key])
+		}
+	}
+	files = deduped
+
 	// Folders for this course — order नुसार sorted
 	folders, err := db.GetFoldersForCourse(courseID)
 	if err != nil {
