@@ -48,8 +48,25 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	r.Engine.POST("/login/password", auth.DoPasswordLogin)
 
 	// ── Admin Panel ────────────────────────────────────────────────────────────
+	// Admin session नसेल तर HTML page देखील serve होत नाही
+	// Browser inspect केलं तरी routes/code दिसणार नाही
 	r.Engine.GET("/admin", auth.EnsureCSRFCookie, func(c *gin.Context) {
+		if !isAdminLoggedIn(c) {
+			// Session नाही → login page वर redirect
+			c.Redirect(http.StatusFound, "/admin/login")
+			return
+		}
 		c.HTML(http.StatusOK, "admin_panel.html", gin.H{})
+	})
+
+	// Admin login page — public (कोणीही access करू शकतो, पण panel नाही)
+	r.Engine.GET("/admin/login", func(c *gin.Context) {
+		// आधीच logged in असेल तर panel वर redirect
+		if isAdminLoggedIn(c) {
+			c.Redirect(http.StatusFound, "/admin")
+			return
+		}
+		c.HTML(http.StatusOK, "admin_login.html", gin.H{})
 	})
 
 	// Root redirect

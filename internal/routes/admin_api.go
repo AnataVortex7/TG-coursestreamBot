@@ -142,6 +142,23 @@ func isIPAllowed(ip string) bool {
 	return false
 }
 
+// isAdminLoggedIn — cookie check करतो, web.go मधून पण वापरता येतो
+func isAdminLoggedIn(c *gin.Context) bool {
+	tok, err := c.Cookie(adminCookieName)
+	if err != nil || tok == "" {
+		return false
+	}
+	val, ok := adminSessions.Load(tok)
+	if !ok {
+		return false
+	}
+	if time.Now().After(val.(time.Time)) {
+		adminSessions.Delete(tok)
+		return false
+	}
+	return true
+}
+
 // adminLogin — POST /api/admin/login
 func adminLogin(c *gin.Context) {
 	ip := c.ClientIP()
