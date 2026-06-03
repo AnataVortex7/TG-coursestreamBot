@@ -207,45 +207,55 @@ func handleCourseDetail(c *gin.Context) {
 		return
 	}
 
-	// ── Deduplicate — same Title असलेल्या files मधून best format ठेवतो ──────
-	// Priority: mp4 > mkv > avi > other (converted file prefer करतो)
+	// ── Deduplicate — same video चे .mkv + .mp4 दोन्ही असल्यास एकच दाखवा ──
+	// Priority: mp4 > webm > avi > mkv
 	formatPriority := func(mime, name string) int {
 		mime = strings.ToLower(mime)
 		name = strings.ToLower(name)
-		if strings.Contains(mime, "mp4") || strings.HasSuffix(name, ".mp4") { return 4 }
+		if strings.Contains(mime, "mp4") || strings.HasSuffix(name, ".mp4")   { return 4 }
 		if strings.Contains(mime, "webm") || strings.HasSuffix(name, ".webm") { return 3 }
 		if strings.Contains(mime, "avi") || strings.HasSuffix(name, ".avi")   { return 2 }
 		if strings.HasSuffix(name, ".mkv")                                     { return 1 }
 		return 0
 	}
-	// Title नुसार group करा, best format ठेवा
+
+	// Title normalize करा — extension, resolution tags काढा
+	// "[640x360p] .mkv" / "[1280x720p]" / ".mp4" सगळं strip करा
+	normalizeTitle := func(title, filename string) string {
+		s := strings.TrimSpace(title)
+		if s == "" {
+			s = strings.TrimSpace(filename)
+		}
+		s = strings.ToLower(s)
+		// extension काढा
+		for _, ext := range []string{".mkv", ".mp4", ".avi", ".webm", ".mov", ".flv"} {
+			s = strings.ReplaceAll(s, ext, "")
+		}
+		// resolution tags काढा: [640x360p], [1280x720p], [640x360] etc
+		for _, pat := range []string{"[640x360p]", "[1280x720p]", "[640x360]", "[1280x720]", "[1920x1080p]", "[1920x1080]", "[480x360p]", "[480x360]"} {
+			s = strings.ReplaceAll(s, pat, "")
+		}
+		return strings.TrimSpace(s)
+	}
+
 	type titleKey = string
 	bestFile := make(map[titleKey]db.CachedFile, len(files))
-	bestOrder := make(map[titleKey]int, len(files)) // original sort order preserve
-	for i, f := range files {
-		key := strings.TrimSpace(f.Title)
-		if key == "" {
-			key = strings.TrimSpace(f.FileName) // Title नसेल तर FileName वापरा
-		}
+	for _, f := range files {
+		key := normalizeTitle(f.Title, f.FileName)
 		existing, seen := bestFile[key]
 		if !seen {
 			bestFile[key] = f
-			bestOrder[key] = i
-		} else {
-			if formatPriority(f.MimeType, f.FileName) > formatPriority(existing.MimeType, existing.FileName) {
-				bestFile[key] = f
-				// order जुनाच ठेवा — position बदलू नये
-			}
+		} else if formatPriority(f.MimeType, f.FileName) > formatPriority(existing.MimeType, existing.FileName) {
+			bestFile[key] = f
 		}
 	}
-	// Original order मध्ये deduplicated list बनवा
-	seen := make(map[titleKey]bool)
+	// Original order preserve करा
+	seenKeys := make(map[titleKey]bool)
 	deduped := make([]db.CachedFile, 0, len(bestFile))
 	for _, f := range files {
-		key := strings.TrimSpace(f.Title)
-		if key == "" { key = strings.TrimSpace(f.FileName) }
-		if !seen[key] {
-			seen[key] = true
+		key := normalizeTitle(f.Title, f.FileName)
+		if !seenKeys[key] {
+			seenKeys[key] = true
 			deduped = append(deduped, bestFile[key])
 		}
 	}
