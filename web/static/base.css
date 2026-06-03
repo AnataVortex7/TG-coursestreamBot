@@ -349,3 +349,12 @@ label {
 .text-sm       { font-size: 14px; }
 .font-bold     { font-weight: 700; }
 .sr-only       { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+
+/* ── Media type colors (course_detail.html) ────────────────────────── */
+:root {
+  --video:  #7c6af7;
+  --audio:  #f472b6;
+  --pdf:    #fb923c;
+  --photo:  #34d399;
+  --doc:    #60a5fa;
+}
