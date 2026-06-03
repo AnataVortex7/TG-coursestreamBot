@@ -264,7 +264,12 @@ func handleWatch(c *gin.Context) {
 	setPlayerSecurityHeaders(c)
 	c.HTML(http.StatusOK, "player.html", gin.H{
 		"title":          title,
-		"streamURL":      "/watch-stream/" + tokenStr + "?n=" + nonce,
+        "streamURL": func() string {
+            if os.Getenv("PUBLIC_URL") != "" {
+                return config.ValueOf.Host + "/watch-stream/" + tokenStr + "?n=" + nonce
+            }
+            return "/watch-stream/" + tokenStr + "?n=" + nonce
+        }(),
 		"mediaType":      mediaType,
 		"downloadURL":    downloadURL,
 		"resumePosition": resumePos,
@@ -278,6 +283,18 @@ func handleWatch(c *gin.Context) {
 func handleWatchStream(c *gin.Context) {
 	w := c.Writer
 	r := c.Request
+	// CORS for cross-origin stream (when PUBLIC_URL is set)
+    if publicURL := os.Getenv("PUBLIC_URL"); publicURL != "" {
+        c.Header("Access-Control-Allow-Origin", publicURL)
+        c.Header("Access-Control-Allow-Credentials", "true")
+        c.Header("Vary", "Origin")
+    }
+    if c.Request.Method == http.MethodOptions {
+        c.Header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        c.Header("Access-Control-Allow-Headers", "Range, Content-Type")
+        c.Status(http.StatusNoContent)
+        return
+    }
 
 	// 1. Token decrypt
 	tokenStr := c.Param("token")
