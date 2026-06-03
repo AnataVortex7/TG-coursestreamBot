@@ -339,3 +339,56 @@ func lastIndex(s, substr string) int {
 	}
 	return idx
 }
+
+// ─── File Key (offline download — hides message_id + channel_id) ─────────────
+// HTML मध्ये message_id आणि channel_id expose होऊ नये म्हणून
+// दोन्ही values encrypt करून एक opaque string बनवतो.
+// TTL नाही — page reload झाल्यावर नवीन key generate होतो.
+
+type FileKeyPayload struct {
+	MessageID int   `json:"mid"`
+	ChannelID int64 `json:"cid"`
+}
+
+// NewFileKey encrypts message_id + channel_id into a single opaque string.
+func NewFileKey(messageID int, channelID int64) (string, error) {
+	payload := FileKeyPayload{
+		MessageID: messageID,
+		ChannelID: channelID,
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return encryptBytes(raw)
+}
+
+// DecryptFileKey decrypts a file key back to message_id + channel_id.
+func DecryptFileKey(fileKey string) (messageID int, channelID int64, err error) {
+	raw, err := base64.RawURLEncoding.DecodeString(fileKey)
+	if err != nil {
+		return 0, 0, ErrTokenInvalid
+	}
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return 0, 0, ErrTokenInvalid
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return 0, 0, ErrTokenInvalid
+	}
+	nonceSize := gcm.NonceSize()
+	if len(raw) < nonceSize {
+		return 0, 0, ErrTokenInvalid
+	}
+	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return 0, 0, ErrTokenInvalid
+	}
+	var p FileKeyPayload
+	if err = json.Unmarshal(plaintext, &p); err != nil {
+		return 0, 0, ErrTokenInvalid
+	}
+	return p.MessageID, p.ChannelID, nil
+}
