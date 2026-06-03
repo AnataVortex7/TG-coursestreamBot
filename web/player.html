@@ -405,6 +405,7 @@
   {{ else }}
     <!-- Video / Audio player -->
     <video id="vid"
+      crossorigin="use-credentials"
       src="{{ .streamURL }}"
       controlsList="nodownload noremoteplayback"
       disablePictureInPicture
