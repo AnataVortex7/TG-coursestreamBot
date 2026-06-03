@@ -1,31 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="stylesheet" href="/static/base.css">
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Login · CourseStream</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  :root {
-    --bg:       #0f1117;
-    --surface:  #1a1d27;
-    --border:   #2a2d3a;
-    --accent:   #6c63ff;
-    --accent-h: #574fd6;
-    --text:     #e8e9f0;
-    --muted:    #7a7d8e;
-    --danger:   #ff5c5c;
-    --success:  #4caf82;
-    --warn:     #f0a500;
-    --radius:   12px;
-    --input-bg: #12141c;
-  }
-
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--font-primary);
     min-height: 100vh;
     display: flex;
     align-items: center;
@@ -65,7 +52,7 @@
     flex: 1;
     background: transparent;
     border: none;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     color: var(--muted);
     font-size: 0.9rem;
     font-weight: 500;

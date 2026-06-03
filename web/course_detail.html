@@ -1,18 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="stylesheet" href="/static/base.css">
+
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>📚 {{ .course.Title }}</title>
 <style>
-  :root {
-    --bg:#eff6ff;--surface:#1a1a24;--card:#22222e;--border:#2e2e40;
-    --accent:#7c6af7;--accent2:#5eead4;--text:#e8e8f0;--muted:#7070a0;
-    --video:#7c6af7;--audio:#f472b6;--pdf:#fb923c;--photo:#34d399;--doc:#60a5fa;--none:#6b7280;
-    --radius:14px;--shadow:0 4px 24px rgba(0,0,0,.4);
-  }
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;min-height:100vh}
+  body{background:var(--bg);color:var(--text);font-family:var(--font-primary);min-height:100vh}
   header{background:linear-gradient(135deg,#1a1030,#0f1a2e);border-bottom:1px solid var(--border);padding:28px 24px 20px;text-align:center;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
   header h1{font-size:1.7rem;font-weight:700;background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
   header p{color:var(--muted);font-size:.85rem;margin-top:4px}
@@ -45,7 +41,7 @@
   .folder-badge{position:absolute;top:-6px;right:-8px;font-size:10px;font-weight:700;padding:2px 6px;border-radius:999px;min-width:20px;text-align:center;color:#fff}
   .folder-card-title{font-size:.82rem;font-weight:700;color:var(--text);text-align:center;line-height:1.35;word-break:break-word}
   .folder-card-meta{font-size:.72rem;color:var(--muted)}
-  .fc-c0 .folder-icon-wrap{background:#2d2459} .fc-c0 .folder-badge{background:#7c6af7}
+  .fc-c0 .folder-icon-wrap{background:#2d2459} .fc-c0 .folder-badge{background:var(--accent)}
   .fc-c1 .folder-icon-wrap{background:#0d3d2e} .fc-c1 .folder-badge{background:#1a9e75}
   .fc-c2 .folder-icon-wrap{background:#3d1a0a} .fc-c2 .folder-badge{background:#d85a30}
   .fc-c3 .folder-icon-wrap{background:#0a2a45} .fc-c3 .folder-badge{background:#378add}
@@ -67,7 +63,7 @@
   .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;display:flex;flex-direction:column;box-shadow:var(--shadow);transition:transform .2s,box-shadow .2s}
   .card:hover{transform:translateY(-3px);box-shadow:0 8px 32px rgba(0,0,0,.6)}
   .card-stripe{height:4px;width:100%}
-  .type-video .card-stripe{background:linear-gradient(90deg,var(--video),#b48ef7)}
+  .type-video .card-stripe{background:linear-gradient(90deg,var(--video),var(--color-sienna-light))}
   .type-audio .card-stripe{background:linear-gradient(90deg,var(--audio),#f9a8d4)}
   .type-pdf .card-stripe{background:linear-gradient(90deg,var(--pdf),#fcd34d)}
   .type-photo .card-stripe{background:linear-gradient(90deg,var(--photo),#6ee7b7)}
@@ -75,7 +71,7 @@
   .card-body{padding:16px 16px 12px;flex:1;display:flex;flex-direction:column;gap:10px}
   .card-header-row{display:flex;align-items:center;justify-content:space-between}
   .type-badge{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 10px;border-radius:999px;border:1px solid}
-  .type-video .type-badge{color:var(--video);border-color:var(--video);background:#7c6af715}
+  .type-video .type-badge{color:var(--video);border-color:var(--video);background:var(--accent)15}
   .type-audio .type-badge{color:var(--audio);border-color:var(--audio);background:#f472b615}
   .type-pdf .type-badge{color:var(--pdf);border-color:var(--pdf);background:#fb923c15}
   .type-photo .type-badge{color:var(--photo);border-color:var(--photo);background:#34d39915}
@@ -220,7 +216,7 @@
             {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
             {{ if or (eq .MediaType "video") (eq .MediaType "audio") }}
             <button class="btn btn-offline"
-              onclick="getOfflineToken('{{.CourseIDHex}}', {{.ID}}, {{.ChannelID}}, this)"
+              onclick="getOfflineToken('{{.CourseIDHex}}', '{{.FileKey}}', this)"
               title="Telegram मध्ये offline download साठी token generate करा">
               📥 Offline
             </button>
@@ -286,7 +282,7 @@
       {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
       {{ if or (eq .MediaType "video") (eq .MediaType "audio") }}
       <button class="btn btn-offline"
-        onclick="getOfflineToken('{{.CourseIDHex}}', {{.ID}}, {{.ChannelID}}, this)"
+        onclick="getOfflineToken('{{.CourseIDHex}}', '{{.FileKey}}', this)"
         title="Telegram मध्ये offline download साठी token generate करा">
         📥 Offline
       </button>
@@ -459,7 +455,7 @@
       const wrap = document.getElementById('course-announcements');
       wrap.style.display = 'block';
       wrap.innerHTML = list.map((a, i) => `
-        <div id="ca-${i}" style="background:linear-gradient(135deg,#1e1a3a,#1a1d27);border:1px solid #4f46e540;border-left:4px solid #6c63ff;border-radius:12px;padding:14px 18px;margin-bottom:8px;position:relative">
+        <div id="ca-${i}" style="background:linear-gradient(135deg,#1e1a3a,#1a1d27);border:1px solid #4f46e540;border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:8px;position:relative">
           <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
             <div style="flex:1">
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
@@ -493,14 +489,14 @@
   // ── Offline Token ─────────────────────────────────────────────────────────
   const BOT_USERNAME = "{{ .botUsername }}";
 
-  async function getOfflineToken(courseId, messageId, channelId, btn) {
+  async function getOfflineToken(courseId, fileKey, btn) {
     btn.disabled = true;
     btn.textContent = '⏳ ...';
     try {
       const resp = await fetch('/api/offline-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ course_id: courseId, message_id: messageId, channel_id: channelId })
+        body: JSON.stringify({ course_id: courseId, file_key: fileKey })
       });
       const data = await resp.json();
       if (!resp.ok) {

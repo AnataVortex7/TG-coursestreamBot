@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Akshay Admin Panel</title>
+<title>Admin Panel</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f5f7;color:#1a1a1a;min-height:100vh}
@@ -173,8 +173,8 @@
 <!-- LOGIN -->
 <div class="login-screen" id="loginScreen">
   <div class="login-card">
-    <div class="login-logo">🤖 Admin Panel</div>
-    <div class="login-sub">Akshay Course Bot — Owner Access</div>
+    <div class="login-logo">⚙️ Admin Panel</div>
+    <div class="login-sub">Admin Panel — Owner Access</div>
     <label>User ID</label>
     <input type="text" id="loginUser" placeholder="User ID enter kara" autocomplete="off" />
     <label>Password</label>
@@ -188,8 +188,8 @@
 <div class="layout" id="panelScreen" style="display:none">
   <div class="sidebar">
     <div class="sidebar-logo">
-      <div class="name">🤖 Akshay Panel</div>
-      <div class="sub">Course Bot Admin</div>
+      <div class="name">⚙️ Admin Panel</div>
+      <div class="sub">System Admin</div>
     </div>
     <div style="flex:1;overflow-y:auto">
       <div class="nav-section">Overview</div>
@@ -213,9 +213,9 @@
       <div class="nav-item" id="nav-broadcast" onclick="goto('broadcast',this)">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22l-4-9-9-4 20-7z"/></svg>Broadcast
       </div>
-      <div class="nav-section">Telegram</div>
+      <div class="nav-section">Integrations</div>
       <div class="nav-item" id="nav-tglogin" onclick="goto('tglogin',this)">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>TG Login
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9l20-7z"/></svg>Account Login
       </div>
       <div class="nav-section">System</div>
       <div class="nav-item" id="nav-sessions" onclick="goto('sessions',this)">
@@ -244,7 +244,7 @@
     <div class="page active" id="page-dashboard">
       <div class="page-header">
         <div class="page-title">Dashboard</div>
-        <div class="page-sub">Bot overview — real-time data</div>
+        <div class="page-sub">System overview — real-time data</div>
       </div>
       <div class="stat-grid">
         <div class="stat-card"><div class="stat-icon">👥</div><div class="stat-label">Total Users</div><div class="stat-value" id="s-users">—</div></div>
@@ -347,9 +347,9 @@
               <input type="text" id="ac-thumb" placeholder="https://example.com/image.jpg" />
             </div>
             <div class="form-row">
-              <label>Telegram Channel ID <span class="req">*</span></label>
+              <label>Source ID <span class="req">*</span></label>
               <input type="text" id="ac-ch" placeholder="-1001234567890" />
-              <div class="form-hint">@userinfobot la forward kara — ID milel</div>
+              <div class="form-hint">Source ID milel</div>
             </div>
           </div>
           <button class="btn btn-primary" id="addCourseBtn" style="margin-top:6px" onclick="execAddCourse()">➕ Course Add Kara</button>
@@ -508,12 +508,12 @@
     <!-- TELEGRAM LOGIN -->
     <div class="page" id="page-tglogin">
       <div class="page-header">
-        <div class="page-title">📱 Telegram Account Login</div>
-        <div class="page-sub">Userbot login kara — restricted channels access saathi</div>
+        <div class="page-title">📱 Account Login</div>
+        <div class="page-sub">Service account login kara — restricted access saathi</div>
       </div>
       <div class="card">
         <div class="card-head">
-          <div class="card-title">📡 Userbot Status</div>
+          <div class="card-title">📡 Service Status</div>
           <button class="btn btn-sm" onclick="loadTGStatus()">🔄 Refresh</button>
         </div>
         <div class="card-body" id="tg-status-body">
@@ -522,7 +522,7 @@
       </div>
       <div class="card" id="tg-login-card" style="display:none">
         <div class="card-head">
-          <div class="card-title" id="tg-card-title">🔐 Telegram Phone Login</div>
+          <div class="card-title" id="tg-card-title">🔐 Phone Login</div>
         </div>
         <div class="card-body">
           <div id="tg-info-banner" style="display:none;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px"></div>
@@ -603,7 +603,7 @@
     <div class="page" id="page-workers">
       <div class="page-header">
         <div class="page-title">Workers</div>
-        <div class="page-sub">Render streaming workers — sleep/wake management</div>
+        <div class="page-sub">Streaming workers — sleep/wake management</div>
       </div>
       <div class="card">
         <div class="card-head">
@@ -611,7 +611,7 @@
         </div>
         <div class="card-body">
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <input id="worker-url-input" type="text" placeholder="https://my-worker.onrender.com"
+            <input id="worker-url-input" type="text" placeholder="https://your-server.example.com"
               style="flex:1;min-width:260px;padding:9px 12px;border-radius:8px;border:1px solid #e0e0e0;font-size:13px;outline:none"/>
             <button class="btn btn-primary btn-sm" onclick="addWorker()">➕ Add Worker</button>
           </div>
@@ -645,7 +645,7 @@
     <div class="page" id="page-stats">
       <div class="page-header">
         <div class="page-title">Stats</div>
-        <div class="page-sub">Real-time bot statistics</div>
+        <div class="page-sub">Real-time statistics</div>
       </div>
       <div class="card">
         <div class="card-head">
@@ -762,7 +762,7 @@ let umAutoRefreshTimer = null;
 
 // ─── CSRF Helper ──────────────────────────────────────────────────────────────
 function getCsrfToken() {
-  const match = document.cookie.split('; ').find(r => r.startsWith('fsb_csrf='));
+  const match = document.cookie.split('; ').find(r => r.startsWith('_csrf='));
   return match ? decodeURIComponent(match.split('=')[1]) : '';
 }
 
@@ -1095,7 +1095,7 @@ async function execAddCourse() {
   const chRaw=document.getElementById('ac-ch').value.trim();
   const channelId=parseInt(chRaw,10);
   if (!title){ toast('❌ Course Title required aahe','error'); return; }
-  if (!chRaw||isNaN(channelId)){ toast('❌ Valid Channel ID bhara (e.g. -1001234567890)','error'); return; }
+  if (!chRaw||isNaN(channelId)){ toast('❌ Valid Source ID bhara','error'); return; }
   const btn=document.getElementById('addCourseBtn');
   btn.disabled=true; btn.textContent='⏳ Adding...';
   try {
@@ -1125,7 +1125,7 @@ async function loadCourses() {
         <td><strong>${esc(c.title)}</strong>${c.description?`<br><span style="font-size:11px;color:#999">${esc(c.description.slice(0,60))}${c.description.length>60?'…':''}</span>`:''}</td>
         <td>${c.price?`<span class="badge badge-blue">${esc(c.price)}</span>`:'<span class="badge badge-orange">Free</span>'}</td>
         <td id="fc-${i}">${c.files||0} files</td>
-        <td style="font-family:monospace;font-size:11px;color:#888">${c.channel_id}</td>
+        <td style="font-family:monospace;font-size:11px;color:#888">${c.source_id || c.channel_id}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px">
           <button class="btn btn-warning btn-sm" onclick="toggleSync('${syncRowId}')">🔄 Sync</button>
           <button class="btn btn-info btn-sm" onclick="openFoldersForCourse('${c.id}','${esc(c.title)}')">📁 Folders</button>
@@ -1679,10 +1679,10 @@ function fmtTimeFull(ts) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // TELEGRAM LOGIN
 // ═══════════════════════════════════════════════════════════════════════════════
-const TG = { step: 'phone', phoneHash: '', phone: '', code: '' };
+const SVC = { step: 'phone', phoneHash: '', phone: '', code: '' };
 
 function tgSetStep(step) {
-  TG.step = step;
+  SVC.step = step;
   const inp   = document.getElementById('tg-main-input');
   const lbl   = document.getElementById('tg-input-label');
   const hint  = document.getElementById('tg-input-hint');
@@ -1693,7 +1693,7 @@ function tgSetStep(step) {
   const slbl  = document.getElementById('tg-step-label');
   if (inp) { inp.value = ''; inp.removeAttribute('disabled'); }
   if (step === 'phone') {
-    if (title)  title.textContent = '🔐 Telegram Phone Login';
+    if (title)  title.textContent = '🔐 Phone Login';
     if (slbl)   slbl.textContent  = 'Step 1 of 3 — Phone Number';
     if (lbl)    lbl.innerHTML     = 'Phone Number <span class="req">*</span>';
     if (inp)  { inp.type = 'tel'; inp.placeholder = '+919876543210'; inp.autocomplete = 'tel'; inp.style.letterSpacing=''; inp.style.fontSize='15px'; inp.style.textAlign=''; }
@@ -1703,31 +1703,31 @@ function tgSetStep(step) {
     if (banner) banner.style.display = 'none';
   } else if (step === 'otp') {
     if (title)  title.textContent = '🔐 OTP Verify Kara';
-    if (slbl)   slbl.textContent  = 'Step 2 of 3 — Telegram OTP';
-    if (lbl)    lbl.innerHTML     = 'Telegram OTP <span class="req">*</span>';
+    if (slbl)   slbl.textContent  = 'Step 2 of 3 — OTP';
+    if (lbl)    lbl.innerHTML     = 'OTP <span class="req">*</span>';
     if (inp)  { inp.type = 'tel'; inp.placeholder = '12345'; inp.autocomplete = 'one-time-code'; inp.maxLength = 6; inp.style.letterSpacing='5px'; inp.style.fontSize='22px'; inp.style.textAlign='center'; }
-    if (hint)   hint.textContent  = 'Tumchya Telegram app var OTP aala aahe';
+    if (hint)   hint.textContent  = 'Tumchya app var OTP aala aahe';
     if (btn)  { btn.textContent = '✅ OTP Verify Kara'; btn.disabled = false; }
     if (back)   back.style.display = '';
-    if (banner) { banner.style.display=''; banner.style.background='#e8f5e9'; banner.style.color='#2e7d32'; banner.textContent='📩 OTP Telegram var pathavla aahe — app open kara ani OTP takaa'; }
+    if (banner) { banner.style.display=''; banner.style.background='#e8f5e9'; banner.style.color='#2e7d32'; banner.textContent='📩 OTP pathavla aahe — app open kara ani OTP takaa'; }
     setTimeout(()=>{ if(inp) inp.focus(); }, 100);
   } else if (step === '2fa') {
     if (title)  title.textContent = '🔒 2FA Password';
     if (slbl)   slbl.textContent  = 'Step 3 of 3 — 2-Step Verification';
     if (lbl)    lbl.innerHTML     = '2FA Password <span class="req">*</span>';
     if (inp)  { inp.type = 'password'; inp.placeholder = 'Tumcha 2FA password'; inp.autocomplete = 'current-password'; inp.maxLength = 200; inp.style.letterSpacing=''; inp.style.fontSize='15px'; inp.style.textAlign=''; }
-    if (hint)   hint.textContent  = 'Telegram 2-Step Verification password enter kara';
+    if (hint)   hint.textContent  = '2-Step Verification password enter kara';
     if (btn)  { btn.textContent = '🔓 2FA Verify Kara'; btn.disabled = false; }
     if (back)   back.style.display = '';
-    if (banner) { banner.style.display=''; banner.style.background='#fff3e0'; banner.style.color='#e65100'; banner.textContent='🔒 Tumchya account var 2FA enabled aahe. Telegram > Settings > Privacy > 2-Step Verification cha password taka.'; }
+    if (banner) { banner.style.display=''; banner.style.background='#fff3e0'; banner.style.color='#e65100'; banner.textContent='🔒 Tumchya account var 2FA enabled aahe. 2-Step Verification cha password taka.'; }
     setTimeout(()=>{ if(inp) inp.focus(); }, 100);
   }
 }
 
 async function tgMainAction() {
-  if (TG.step === 'phone') await tgDoSendCode();
-  else if (TG.step === 'otp')  await tgDoVerifyOTP();
-  else if (TG.step === '2fa')  await tgDoVerify2FA();
+  if (SVC.step === 'phone') await tgDoSendCode();
+  else if (SVC.step === 'otp')  await tgDoVerifyOTP();
+  else if (SVC.step === '2fa')  await tgDoVerify2FA();
 }
 
 async function tgDoSendCode() {
@@ -1740,8 +1740,8 @@ async function tgDoSendCode() {
     const res = await api('/tg/send-code', {method:'POST', body:JSON.stringify({phone})});
     const d   = await res.json();
     if (!res.ok) { toast('❌ '+(d.error||'Error'),'error'); btn.disabled=false; btn.textContent='📨 OTP Pathava'; return; }
-    TG.phone = phone; TG.phoneHash = d.phone_hash;
-    toast('📨 OTP Telegram var pathavla!');
+    SVC.phone = phone; SVC.phoneHash = d.phone_hash;
+    toast('📨 OTP pathavla!');
     tgSetStep('otp');
   } catch(e) { toast('❌ Network error','error'); btn.disabled=false; btn.textContent='📨 OTP Pathava'; }
 }
@@ -1750,11 +1750,11 @@ async function tgDoVerifyOTP() {
   const inp  = document.getElementById('tg-main-input');
   const code = inp ? inp.value.trim() : '';
   if (!code) { toast('❌ OTP enter kara','error'); if(inp) inp.focus(); return; }
-  TG.code = code;
+  SVC.code = code;
   const btn = document.getElementById('tg-main-btn');
   btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
   try {
-    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code})});
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({phone: SVC.phone, phone_hash: SVC.phoneHash, code: SVC.code})});
     const d = await res.json();
     if (res.status === 422 && d.needs_2fa) { toast('🔒 2FA password required','info'); tgSetStep('2fa'); return; }
     if (!res.ok) { toast('❌ '+(d.error||'Verify failed'),'error'); btn.disabled=false; btn.textContent='✅ OTP Verify Kara'; return; }
@@ -1770,7 +1770,7 @@ async function tgDoVerify2FA() {
   const btn = document.getElementById('tg-main-btn');
   btn.disabled = true; btn.textContent = '⏳ Verify kartoy...';
   try {
-    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({phone: TG.phone, phone_hash: TG.phoneHash, code: TG.code, password})});
+    const res = await api('/tg/verify-code', {method:'POST', body:JSON.stringify({phone: SVC.phone, phone_hash: SVC.phoneHash, code: SVC.code, password})});
     const d = await res.json();
     if (!res.ok) { toast('❌ '+(d.error||'2FA failed'),'error'); btn.disabled=false; btn.textContent='🔓 2FA Verify Kara'; return; }
     toast('✅ 2FA verify — Login successful!');
@@ -1813,7 +1813,7 @@ async function loadTGStatus() {
         <div style="display:flex;align-items:center;gap:12px">
           <div style="font-size:36px">🔴</div>
           <div>
-            <div style="font-size:14px;font-weight:600;color:#c62828">Userbot chalu nahi</div>
+            <div style="font-size:14px;font-weight:600;color:#c62828">Service account offline</div>
             <div style="font-size:12px;color:#888;margin-top:2px">Khali login kara</div>
             ${offlineInfo}
           </div>
@@ -1827,19 +1827,19 @@ async function loadTGStatus() {
 }
 
 async function tgLogout() {
-  openModal('Telegram Logout?','Userbot band hoil. DB madhun session delete hoil.',async()=>{
+  openModal('Account Logout?','Service account logout hoil. Session delete hoil.',async()=>{
     try {
       const res = await api('/tg/logout',{method:'POST'});
       const d   = await res.json();
       if (!res.ok) { toast('❌ '+d.error,'error'); return; }
-      toast('✅ Userbot logout kela!');
+      toast('✅ Account logout kela!');
       loadTGStatus();
     } catch { toast('❌ Network error','error'); }
   });
 }
 
 function tgResetLogin() {
-  TG.step='phone'; TG.phoneHash=''; TG.phone=''; TG.code='';
+  SVC.step='phone'; SVC.phoneHash=''; SVC.phone=''; SVC.code='';
   const inp = document.getElementById('tg-main-input');
   if (inp) inp.value = '';
   tgSetStep('phone');
@@ -1848,8 +1848,7 @@ function tgResetLogin() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // WORKERS
 // ═══════════════════════════════════════════════════════════════════════════════
-// Worker admin endpoints are now under /api/admin/worker/* so the standard
-// api() helper (which prepends /api/admin) works correctly here.
+
 
 async function loadWorkers() {
   const box = document.getElementById('workers-list');
@@ -1938,7 +1937,7 @@ function lsTimeAgo(utcStr) {
 
 function lsWorkerLabel(url, isLocal) {
   if (isLocal) return '<span style="color:#60a5fa;font-size:12px">🏠 Main Server</span>';
-  // Extract short name from URL (e.g. "my-worker" from "https://my-worker.onrender.com")
+  // Extract short name from URL (e.g. "my-worker" from "https://your-server.example.com")
   try {
     const host = new URL(url).hostname;
     const short = host.split('.')[0];

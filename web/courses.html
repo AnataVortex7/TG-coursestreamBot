@@ -1,30 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="stylesheet" href="/static/base.css">
+
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Courses · 𝓐𝓚𝓢𝓗𝓐𝓨</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  :root {
-    --bg:       #eff6ff;
-    --surface:  #ffffff;
-    --surface2: #21253a;
-    --border:   #2a2d3a;
-    --accent:   #6c63ff;
-    --accent-h: #574fd6;
-    --green:    #22c55e;
-    --green-h:  #16a34a;
-    --text:     #e8e9f0;
-    --muted:    #7a7d8e;
-    --radius:   12px;
-  }
-
   body {
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-family: var(--font-primary);
     min-height: 100vh;
   }
 
@@ -55,7 +43,7 @@
   .btn-logout {
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     color: var(--muted);
     font-size: 0.8rem;
     padding: 0.35rem 0.8rem;
@@ -208,7 +196,7 @@
     background: var(--accent);
     color: #fff;
     border: none;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     font-size: 0.8rem;
     font-weight: 600;
     padding: 0.45rem 1rem;
@@ -226,7 +214,7 @@
     background: var(--green);
     color: #fff;
     border: none;
-    border-radius: 7px;
+    border-radius: var(--radius-sm);
     font-size: 0.8rem;
     font-weight: 600;
     padding: 0.45rem 1rem;
@@ -280,7 +268,7 @@
   </div>
   <div class="nav-right">
     <span class="nav-user">👤 {{ .username }}</span>
-    <button onclick="openContactModal()" style="background:#6c63ff;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px;">📩 Contact Admin</button>
+    <button onclick="openContactModal()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px;">📩 Contact Admin</button>
     <form method="POST" action="/logout" style="margin:0">
       <button type="submit" class="btn-logout">Sign out</button>
     </form>
@@ -403,7 +391,7 @@
     <div style="text-align:center;margin-bottom:22px;">
       <div style="font-size:36px;margin-bottom:8px;">🎁</div>
       <h2 style="color:#e8e9f0;font-size:18px;font-weight:700;margin:0 0 4px;">Gift Card ने Course खरेदी करा</h2>
-      <p id="modal-course-name" style="color:#6c63ff;font-size:14px;font-weight:600;margin:0;"></p>
+      <p id="modal-course-name" style="color:var(--accent);font-size:14px;font-weight:600;margin:0;"></p>
       <p id="modal-course-price" style="color:#22c55e;font-size:13px;font-weight:700;margin:4px 0 0;"></p>
     </div>
 
@@ -411,21 +399,21 @@
       <label style="display:block;font-size:11px;font-weight:700;color:#7a7d8e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Gift Card Number <span style="color:#ff5c5c;">*</span></label>
       <input id="gc-number" type="text" placeholder="1234 5678 9012 3456"
         style="width:100%;padding:10px 14px;background:#12141c;border:1.5px solid #2a2d3a;border-radius:9px;color:#e8e9f0;font-size:14px;outline:none;font-family:monospace;letter-spacing:1px;"
-        onfocus="this.style.borderColor='#6c63ff'" onblur="this.style.borderColor='#2a2d3a'" />
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#2a2d3a'" />
     </div>
 
     <div style="margin-bottom:14px;">
       <label style="display:block;font-size:11px;font-weight:700;color:#7a7d8e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Gift Card PIN <span style="color:#ff5c5c;">*</span></label>
       <input id="gc-pin" type="text" placeholder="1234"
         style="width:100%;padding:10px 14px;background:#12141c;border:1.5px solid #2a2d3a;border-radius:9px;color:#e8e9f0;font-size:14px;outline:none;font-family:monospace;letter-spacing:2px;"
-        onfocus="this.style.borderColor='#6c63ff'" onblur="this.style.borderColor='#2a2d3a'" />
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#2a2d3a'" />
     </div>
 
     <div style="margin-bottom:20px;">
       <label style="display:block;font-size:11px;font-weight:700;color:#7a7d8e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">Message (Optional)</label>
       <textarea id="gc-msg" placeholder="Kahi message asel tar likha..." rows="3"
         style="width:100%;padding:10px 14px;background:#12141c;border:1.5px solid #2a2d3a;border-radius:9px;color:#e8e9f0;font-size:13px;outline:none;resize:vertical;font-family:inherit;"
-        onfocus="this.style.borderColor='#6c63ff'" onblur="this.style.borderColor='#2a2d3a'"></textarea>
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='#2a2d3a'"></textarea>
     </div>
 
     <div id="modal-err" style="display:none;background:rgba(255,92,92,.12);border:1px solid rgba(255,92,92,.3);border-radius:8px;padding:10px 14px;font-size:13px;color:#ff8a80;margin-bottom:14px;"></div>
@@ -437,7 +425,7 @@
         Cancel
       </button>
       <button id="submit-btn" onclick="submitPurchase()"
-        style="flex:2;padding:11px;background:#6c63ff;border:none;border-radius:9px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s;">
+        style="flex:2;padding:11px;background:var(--accent);border:none;border-radius:9px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;transition:opacity .15s;">
         📤 Submit
       </button>
     </div>
@@ -550,7 +538,7 @@
       <button onclick="closeContactModal()"
         style="background:transparent;border:1px solid #3a3d4a;color:#7a7d8e;padding:10px 20px;border-radius:8px;font-size:14px;cursor:pointer;">Cancel</button>
       <button id="ct-submit-btn" onclick="submitContact()"
-        style="background:#6c63ff;color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">📤 Send</button>
+        style="background:var(--accent);color:#fff;border:none;padding:10px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">📤 Send</button>
     </div>
   </div>
 </div>
@@ -627,7 +615,7 @@
     <div id="announce-body" style="padding:20px 24px;display:flex;flex-direction:column;gap:14px"></div>
     <!-- Footer -->
     <div style="padding:16px 24px;border-top:1px solid #2a2d3a;display:flex;justify-content:flex-end">
-      <button onclick="closeAnnouncePopup()" style="background:#6c63ff;color:#fff;border:none;padding:10px 24px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">Got it ✓</button>
+      <button onclick="closeAnnouncePopup()" style="background:var(--accent);color:#fff;border:none;padding:10px 24px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer">Got it ✓</button>
     </div>
   </div>
 </div>
