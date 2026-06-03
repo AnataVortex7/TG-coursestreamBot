@@ -147,7 +147,7 @@ func handleCoursesList(c *gin.Context) {
 // VideoEntry — एक file चा template data
 type VideoEntry struct {
 	Index        int
-	ID           int
+	FileKey      string // AES-encrypted {message_id, channel_id} — HTML मध्ये safe
 	Title        string
 	Caption      string
 	FileName     string
@@ -158,7 +158,6 @@ type VideoEntry struct {
 	HasMedia     bool
 	ViewCount    int
 	LastViewedAt string
-	ChannelID    int64
 	CourseIDHex  string
 }
 
@@ -254,10 +253,11 @@ func handleCourseDetail(c *gin.Context) {
 			}
 		}
 
+		fileKey, _ := token.NewFileKey(f.MessageID, f.ChannelID)
 		vi := viewMap[f.MessageID]
 		return VideoEntry{
 			Index:        i + 1,
-			ID:           f.MessageID,
+			FileKey:      fileKey,
 			Title:        f.Title,
 			Caption:      f.Caption,
 			FileName:     f.FileName,
@@ -268,7 +268,6 @@ func handleCourseDetail(c *gin.Context) {
 			HasMedia:     hasMedia,
 			ViewCount:    vi.count,
 			LastViewedAt: vi.lastViewedAt,
-			ChannelID:    f.ChannelID,
 			CourseIDHex:  courseIDHex,
 		}
 	}

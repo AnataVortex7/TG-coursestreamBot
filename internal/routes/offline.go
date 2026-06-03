@@ -10,6 +10,7 @@ import (
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/token"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -24,22 +25,24 @@ func handleGenerateOfflineToken(c *gin.Context) {
 	userID := auth.GetUserID(c)
 
 	var req struct {
-		CourseID  string `json:"course_id"`
-		MessageID int    `json:"message_id"`
-		ChannelID int64  `json:"channel_id"`
+		CourseID string `json:"course_id"`
+		FileKey  string `json:"file_key"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
 
+	// FileKey decrypt करा → message_id + channel_id मिळवा
+	messageID, channelID, err := token.DecryptFileKey(req.FileKey)
+	if err != nil || messageID < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid file key"})
+		return
+	}
+
 	courseObjID, err := primitive.ObjectIDFromHex(strings.TrimSpace(req.CourseID))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course_id"})
-		return
-	}
-	if req.MessageID < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid message_id"})
 		return
 	}
 
@@ -76,19 +79,19 @@ func handleGenerateOfflineToken(c *gin.Context) {
 		return
 	}
 
-	token, err := db.CreateOfflineToken(userID, courseObjID, req.MessageID, req.ChannelID)
+	offlineToken, err := db.CreateOfflineToken(userID, courseObjID, messageID, channelID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Deep link: https://t.me/botname?start=dl_48271
+	// Deep link
 	botLink := fmt.Sprintf("https://t.me/%s?start=dl_%s",
-		config.ValueOf.BotUsername, token)
+		config.ValueOf.BotUsername, offlineToken)
 
 	c.JSON(http.StatusOK, gin.H{
 		"bot_link":   botLink,
-		"token":      token,
+		"token":      offlineToken,
 		"used_today": usedToday,
 		"limit":      limit,
 		"remaining":  limit - usedToday,
