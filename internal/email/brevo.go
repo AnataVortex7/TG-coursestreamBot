@@ -48,7 +48,7 @@ func init() {
 			user:      user,
 			pass:      pass,
 			fromEmail: envOr("BREVO_FROM_EMAIL"+suffix, user),
-			fromName:  envOr("BREVO_FROM_NAME"+suffix, envOr("BREVO_FROM_NAME", "CourseStream")),
+			fromName:  envOr("BREVO_FROM_NAME"+suffix, envOr("BREVO_FROM_NAME", "Akshayclasses")),
 		})
 	}
 }
@@ -179,7 +179,7 @@ func primaryProvider() smtpConfig {
 	if len(smtpProviders) > 0 {
 		return smtpProviders[0]
 	}
-	return smtpConfig{fromName: "CourseStream"}
+	return smtpConfig{fromName: "Akshayclasses"}
 }
 
 // ─── Send OTP ─────────────────────────────────────────────────────────────────
@@ -379,7 +379,7 @@ func buildPurchaseEmail(info PurchaseInfo) string {
         <code style="color:#4ade80;font-size:14px;font-weight:700;font-family:'Courier New',monospace;word-break:break-all;">%s</code>
       </div>
       <p style="color:#7a7d8e;font-size:11px;margin:16px 0 0;text-align:center;">
-        Gift card verify karin access activate kara · CourseStream Admin Panel
+        Gift card verify karin access activate kara · Akshayclasses Admin Panel
       </p>
     </div>
   </div>
@@ -664,7 +664,7 @@ func buildRegistrationEmail(identifier, fullName string, telegramID int64) strin
         %s
       </div>
       <p style="color:#4a4d5e;font-size:11px;text-align:center;margin:24px 0 0;">
-        CourseStream Admin Panel
+        Akshayclasses Admin Panel
       </p>
     </div>
   </div>
