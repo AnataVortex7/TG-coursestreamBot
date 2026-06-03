@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Admin Login</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f5f7;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1rem}
+  .card{background:#fff;border-radius:16px;padding:40px 36px;width:100%;max-width:380px;box-shadow:0 2px 24px rgba(0,0,0,.10)}
+  .logo{width:48px;height:48px;background:#6c63ff;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:20px}
+  .logo svg{width:24px;height:24px;fill:#fff}
+  h1{font-size:20px;font-weight:700;color:#1a1a1a;margin-bottom:4px}
+  p{font-size:13px;color:#888;margin-bottom:28px}
+  label{display:block;font-size:12px;font-weight:600;color:#555;margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px}
+  input{width:100%;padding:11px 13px;border:1.5px solid #e0e0e0;border-radius:8px;font-size:14px;background:#fafafa;margin-bottom:14px;outline:none;transition:border .15s}
+  input:focus{border-color:#6c63ff;background:#fff}
+  button{width:100%;padding:12px;background:#6c63ff;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .15s;margin-top:4px}
+  button:hover{opacity:.88}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .err{font-size:12px;color:#e53935;margin-top:10px;display:none;text-align:center}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+  </div>
+  <h1>Admin Panel</h1>
+  <p>Sign in to continue</p>
+
+  <label>Username</label>
+  <input type="text" id="user" autocomplete="off" />
+
+  <label>Password</label>
+  <input type="password" id="pass" onkeydown="if(event.key==='Enter')doLogin()" />
+
+  <button id="btn" onclick="doLogin()">Sign In</button>
+  <div class="err" id="err"></div>
+</div>
+
+<script>
+async function doLogin() {
+  const user = document.getElementById('user').value.trim();
+  const pass = document.getElementById('pass').value;
+  const btn  = document.getElementById('btn');
+  const err  = document.getElementById('err');
+
+  if (!user || !pass) { showErr('Username ani password bhara'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+  err.style.display = 'none';
+
+  try {
+    const fd = new FormData();
+    fd.append('user', user);
+    fd.append('pass', pass);
+
+    const res = await fetch('/api/admin/login', { method: 'POST', body: fd });
+    const d   = await res.json();
+
+    if (res.ok && d.ok) {
+      window.location.href = '/admin';
+    } else {
+      showErr(d.error || 'Login failed');
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  } catch(e) {
+    showErr('Network error — please try again');
+    btn.disabled = false;
+    btn.textContent = 'Sign In';
+  }
+}
+
+function showErr(msg) {
+  const e = document.getElementById('err');
+  e.textContent = msg;
+  e.style.display = 'block';
+}
+</script>
+</body>
+</html>

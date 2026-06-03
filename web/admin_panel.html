@@ -347,9 +347,9 @@
               <input type="text" id="ac-thumb" placeholder="https://example.com/image.jpg" />
             </div>
             <div class="form-row">
-              <label>Source ID <span class="req">*</span></label>
+              <label>Content ID <span class="req">*</span></label>
               <input type="text" id="ac-ch" placeholder="-1001234567890" />
-              <div class="form-hint">Source ID milel</div>
+              <div class="form-hint">Content ID ghala</div>
             </div>
           </div>
           <button class="btn btn-primary" id="addCourseBtn" style="margin-top:6px" onclick="execAddCourse()">➕ Course Add Kara</button>
@@ -508,8 +508,8 @@
     <!-- TELEGRAM LOGIN -->
     <div class="page" id="page-tglogin">
       <div class="page-header">
-        <div class="page-title">📱 Account Login</div>
-        <div class="page-sub">Service account login kara — restricted access saathi</div>
+        <div class="page-title">🔐 Service Login</div>
+        <div class="page-sub">Service account manage kara</div>
       </div>
       <div class="card">
         <div class="card-head">
@@ -529,10 +529,10 @@
           <div id="tg-step-label" style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.6px;margin-bottom:10px"></div>
           <div class="form-row">
             <label id="tg-input-label">Phone Number <span class="req">*</span></label>
-            <input id="tg-main-input" type="tel" placeholder="+919876543210" autocomplete="off"
+            <input id="tg-main-input" type="tel" placeholder="Enter number" autocomplete="off"
                    style="max-width:300px;font-size:15px"
                    onkeydown="if(event.key==='Enter') tgMainAction()" />
-            <div class="form-hint" id="tg-input-hint">Country code sah enter kara — India saathi +91</div>
+            <div class="form-hint" id="tg-input-hint">Service credentials enter kara</div>
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:4px">
             <button class="btn btn-primary" id="tg-main-btn" onclick="tgMainAction()">📨 OTP Pathava</button>
@@ -1095,7 +1095,7 @@ async function execAddCourse() {
   const chRaw=document.getElementById('ac-ch').value.trim();
   const channelId=parseInt(chRaw,10);
   if (!title){ toast('❌ Course Title required aahe','error'); return; }
-  if (!chRaw||isNaN(channelId)){ toast('❌ Valid Source ID bhara','error'); return; }
+  if (!chRaw||isNaN(channelId)){ toast('❌ Valid Content ID bhara','error'); return; }
   const btn=document.getElementById('addCourseBtn');
   btn.disabled=true; btn.textContent='⏳ Adding...';
   try {
@@ -1118,7 +1118,7 @@ async function loadCourses() {
     populateCourseDropdowns();
     if (!wrap) return;
     if (!cachedCourses.length){ wrap.innerHTML='<div class="empty"><div class="empty-icon">📚</div>Koni course nahi yet</div>'; return; }
-    let h='<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Channel ID</th><th style="width:220px">Actions</th></tr></thead><tbody>';
+    let h='<div class="table-wrap"><table><thead><tr><th>Title</th><th>Price</th><th>Files</th><th>Content ID</th><th style="width:220px">Actions</th></tr></thead><tbody>';
     cachedCourses.forEach((c,i)=>{
       const syncRowId='sync-row-'+i;
       h+=`<tr>
@@ -1697,7 +1697,7 @@ function tgSetStep(step) {
     if (slbl)   slbl.textContent  = 'Step 1 of 3 — Phone Number';
     if (lbl)    lbl.innerHTML     = 'Phone Number <span class="req">*</span>';
     if (inp)  { inp.type = 'tel'; inp.placeholder = '+919876543210'; inp.autocomplete = 'tel'; inp.style.letterSpacing=''; inp.style.fontSize='15px'; inp.style.textAlign=''; }
-    if (hint)   hint.textContent  = 'Country code sah enter kara — India saathi +91';
+    if (hint)   hint.textContent  = 'Service credentials enter kara';
     if (btn)  { btn.textContent = '📨 OTP Pathava'; btn.disabled = false; }
     if (back)   back.style.display = 'none';
     if (banner) banner.style.display = 'none';
