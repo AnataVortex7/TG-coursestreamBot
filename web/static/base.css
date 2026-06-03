@@ -34,6 +34,12 @@
   --success:  #2d7a4f;
   --warn:     #b7790f;
   --input-bg: #f9f9f7;
+  /* Media type colors */
+  --video:  #5b4fcf;
+  --audio:  #db2777;
+  --pdf:    #ea6c0a;
+  --photo:  #0e9c6a;
+  --doc:    #1d6fb5;
 
   /* Typography */
   --font-primary: 'DM Sans', 'HelveticaNowDisplay', ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -349,12 +355,3 @@ label {
 .text-sm       { font-size: 14px; }
 .font-bold     { font-weight: 700; }
 .sr-only       { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
-
-/* ── Media type colors (course_detail.html) ────────────────────────── */
-:root {
-  --video:  #5b4fcf;
-  --audio:  #db2777;
-  --pdf:    #ea6c0a;
-  --photo:  #0e9c6a;
-  --doc:    #1d6fb5;
-}
