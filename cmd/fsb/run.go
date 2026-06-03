@@ -156,6 +156,7 @@ func getRouter(log *zap.Logger) *gin.Engine {
 	router.Use(globalSecurityHeaders())
 
 	router.LoadHTMLGlob("web/*")
+	router.Static("/static", "web/static")
 
 	router.GET("/ping", func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, types.RootResponse{
