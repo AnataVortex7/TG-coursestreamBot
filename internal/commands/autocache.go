@@ -4,6 +4,7 @@ import (
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
 	"strings"
+	"time"
 
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
@@ -14,8 +15,6 @@ import (
 
 // LoadAutoCache — channel मध्ये नवीन message आल्यावर automatically
 // DB च्या channel_cache मध्ये save करतो.
-// Bot ज्या channel चा admin आहे आणि ज्या channel ला course linked आहे
-// त्याच channel चे messages cache होतात.
 func (m *command) LoadAutoCache(d dispatcher.Dispatcher) {
 	log := m.log.Named("autocache")
 	defer log.Sugar().Info("Loaded auto-cache handler")
@@ -57,7 +56,8 @@ func handleNewChannelMessage(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	caption := strings.TrimSpace(msg.Message)
+	// Caption = message text (EffectiveMessage.Text हे string आहे)
+	caption := strings.TrimSpace(msg.Text)
 	title := caption
 	if title == "" {
 		title = stripExt(file.FileName)
@@ -73,6 +73,7 @@ func handleNewChannelMessage(ctx *ext.Context, u *ext.Update) error {
 		MimeType:  file.MimeType,
 		FileSize:  file.FileSize,
 		SortOrder: msg.ID,
+		CreatedAt: time.Now(),
 	}
 
 	if err := db.UpsertCachedFile(cached); err != nil {
@@ -90,4 +91,3 @@ func handleNewChannelMessage(ctx *ext.Context, u *ext.Update) error {
 
 	return dispatcher.EndGroups
 }
-
