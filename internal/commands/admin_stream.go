@@ -652,6 +652,7 @@ func processSingleMessage(
 	}
 
 	// ── Step 5: Build media + attributes ─────────────────────────────────
+	// ── Step 5: Build media + attributes ─────────────────────────────────
 	attributes := []tg.DocumentAttributeClass{
 		&tg.DocumentAttributeFilename{FileName: file.FileName},
 	}
@@ -854,4 +855,226 @@ func downloadAndReupload(
 	}
 
 	return uploadedFile, nil
+}
+
+// ── progressWriter ────────────────────────────────────────────────────────────
+// io.Writer wrapper — Write होताना progress callback call करतो
+
+type progressWriter struct {
+	w          io.Writer
+	total      int64
+	written    int64
+	lastPct    int64
+	onProgress func(written, total int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.written += int64(n)
+	if p.total > 0 {
+		pct := p.written * 100 / p.total
+		if pct >= p.lastPct+5 || p.written >= p.total {
+			p.lastPct = pct
+			if p.onProgress != nil {
+				p.onProgress(p.written, p.total)
+			}
+		}
+	}
+	return n, err
+}
+
+// progressWriter io.Reader interface सुद्धा implement करतो (upload साठी)
+func (p *progressWriter) Read(b []byte) (int, error) {
+	r, ok := p.w.(io.Reader)
+	if !ok {
+		return 0, fmt.Errorf("underlying writer does not implement Reader")
+	}
+	n, err := r.Read(b)
+	p.written += int64(n)
+	if p.total > 0 {
+		pct := p.written * 100 / p.total
+		if pct >= p.lastPct+5 || p.written >= p.total {
+			p.lastPct = pct
+			if p.onProgress != nil {
+				p.onProgress(p.written, p.total)
+			}
+		}
+	}
+	return n, err
+}
+
+// ── progressBar ──────────────────────────────────────────────────────────────
+
+func progressBar(pct int) string {
+	filled := pct / 10
+	bar := ""
+	for i := 0; i < 10; i++ {
+		if i < filled {
+			bar += "▓"
+		} else {
+			bar += "░"
+		}
+	}
+	return bar
+}
+
+// ── copyToLogChannel (re-uploaded version) ────────────────────────────────────
+
+var (
+	copiedOnce   = make(map[string]struct{})
+	copiedOnceMu sync.Mutex
+)
+
+func markCopied(chatID int64, messageID int) bool {
+	key := fmt.Sprintf("%d:%d", chatID, messageID)
+	copiedOnceMu.Lock()
+	defer copiedOnceMu.Unlock()
+	if _, already := copiedOnce[key]; already {
+		return false
+	}
+	copiedOnce[key] = struct{}{}
+	return true
+}
+
+func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass) {
+	botClient := MainBotClient
+	if botClient == nil {
+		return
+	}
+
+	bgCtx := context.Background()
+
+	logCh, err := utils.GetLogChannelPeer(bgCtx, botClient.API(), botClient.PeerStorage)
+	if err != nil {
+		utils.Logger.Error("copyToLogChannel: GetLogChannelPeer failed", zap.Error(err))
+		return
+	}
+
+	toPeer := &tg.InputPeerChannel{
+		ChannelID:  logCh.ChannelID,
+		AccessHash: logCh.AccessHash,
+	}
+
+	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, &tg.MessagesSendMediaRequest{
+		Peer:     toPeer,
+		Media:    inputMedia,
+		Message:  msg.GetMessage(),
+		RandomID: rand.Int63(),
+		Silent:   true,
+	})
+	if sendErr != nil {
+		utils.Logger.Error("copyToLogChannel: send failed", zap.Error(sendErr))
+	} else {
+		utils.Logger.Info("copyToLogChannel: copied to log channel")
+	}
+}
+
+// ── copyToLogChannel (old — non-restricted channels साठी) ────────────────────
+
+func copyToLogChannel(msg *tg.Message, file *types.File) {
+	botClient := MainBotClient
+	if botClient == nil {
+		return
+	}
+
+	bgCtx := context.Background()
+
+	logCh, err := utils.GetLogChannelPeer(bgCtx, botClient.API(), botClient.PeerStorage)
+	if err != nil {
+		utils.Logger.Error("copyToLogChannel: GetLogChannelPeer failed", zap.Error(err))
+		return
+	}
+
+	toPeer := &tg.InputPeerChannel{
+		ChannelID:  logCh.ChannelID,
+		AccessHash: logCh.AccessHash,
+	}
+
+	media := buildInputMediaFromFile(file)
+
+	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, &tg.MessagesSendMediaRequest{
+		Peer:     toPeer,
+		Media:    media,
+		Message:  msg.GetMessage(),
+		RandomID: rand.Int63(),
+		Silent:   true,
+	})
+	if sendErr != nil {
+		utils.Logger.Error("copyToLogChannel: MessagesSendMedia failed",
+			zap.Error(sendErr),
+			zap.Int64("logChannel", config.ValueOf.LogChannelID),
+		)
+	} else {
+		utils.Logger.Info("copyToLogChannel: file copied to log channel",
+			zap.String("fileName", file.FileName),
+			zap.Int64("fileSize", file.FileSize),
+		)
+	}
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+func buildInputMedia(msg *tg.Message) (tg.InputMediaClass, error) {
+	switch m := msg.Media.(type) {
+	case *tg.MessageMediaDocument:
+		doc, ok := m.Document.(*tg.Document)
+		if !ok {
+			return nil, fmt.Errorf("invalid document")
+		}
+		return &tg.InputMediaDocument{
+			ID: &tg.InputDocument{
+				ID:            doc.ID,
+				AccessHash:    doc.AccessHash,
+				FileReference: doc.FileReference,
+			},
+		}, nil
+
+	case *tg.MessageMediaPhoto:
+		photo, ok := m.Photo.(*tg.Photo)
+		if !ok {
+			return nil, fmt.Errorf("invalid photo")
+		}
+		return &tg.InputMediaPhoto{
+			ID: &tg.InputPhoto{
+				ID:            photo.ID,
+				AccessHash:    photo.AccessHash,
+				FileReference: photo.FileReference,
+			},
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported media type %T", msg.Media)
+	}
+}
+
+func buildInputMediaFromFile(file *types.File) tg.InputMediaClass {
+	if file.FileType == "photo" {
+		return &tg.InputMediaPhoto{
+			ID: &tg.InputPhoto{
+				ID:            file.ID,
+				AccessHash:    file.AccessHash,
+				FileReference: file.FileReference,
+			},
+		}
+	}
+	return &tg.InputMediaDocument{
+		ID: &tg.InputDocument{
+			ID:            file.ID,
+			AccessHash:    file.AccessHash,
+			FileReference: file.FileReference,
+		},
+	}
+}
+
+func formatSize(bytes int64) string {
+	switch {
+	case bytes >= 1 << 30:
+		return fmt.Sprintf("%.2f GB", float64(bytes)/float64(1<<30))
+	case bytes >= 1 << 20:
+		return fmt.Sprintf("%.2f MB", float64(bytes)/float64(1<<20))
+	case bytes >= 1 << 10:
+		return fmt.Sprintf("%.2f KB", float64(bytes)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
 }
