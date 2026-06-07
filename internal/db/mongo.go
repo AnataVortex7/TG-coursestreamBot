@@ -162,6 +162,7 @@ type CourseFolder struct {
 	CourseID  primitive.ObjectID `bson:"course_id"     json:"course_id"`
 	Name      string             `bson:"name"          json:"name"`
 	Ranges    []FolderRange      `bson:"ranges"        json:"ranges"`
+	Messages  []int              `bson:"messages"      json:"messages"`   // individual sort_order numbers (outside ranges)
 	Order     int                `bson:"order"         json:"order"`      // display order (1, 2, 3...)
 	CreatedAt time.Time          `bson:"created_at"    json:"created_at"`
 }

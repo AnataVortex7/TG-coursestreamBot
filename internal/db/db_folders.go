@@ -15,7 +15,7 @@ import (
 
 // CreateFolder — नवीन folder तयार करतो.
 // Order automatically शेवटी assign होतो (max+1).
-func CreateFolder(courseID primitive.ObjectID, name string, ranges []FolderRange) (*CourseFolder, error) {
+func CreateFolder(courseID primitive.ObjectID, name string, ranges []FolderRange, messages []int) (*CourseFolder, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -28,11 +28,15 @@ func CreateFolder(courseID primitive.ObjectID, name string, ranges []FolderRange
 		maxOrder = last.Order
 	}
 
+	if messages == nil {
+		messages = []int{}
+	}
 	folder := CourseFolder{
 		ID:        primitive.NewObjectID(),
 		CourseID:  courseID,
 		Name:      name,
 		Ranges:    ranges,
+		Messages:  messages,
 		Order:     maxOrder + 1,
 		CreatedAt: time.Now(),
 	}
@@ -86,15 +90,19 @@ func GetFolderByID(folderID primitive.ObjectID) (*CourseFolder, error) {
 // ─── Update ───────────────────────────────────────────────────────────────────
 
 // UpdateFolder — folder चे name आणि ranges update करतो.
-func UpdateFolder(folderID primitive.ObjectID, name string, ranges []FolderRange) error {
+func UpdateFolder(folderID primitive.ObjectID, name string, ranges []FolderRange, messages []int) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 
+	if messages == nil {
+		messages = []int{}
+	}
 	_, err := ColFolders.UpdateOne(ctx,
 		bson.M{"_id": folderID},
 		bson.M{"$set": bson.M{
-			"name":   name,
-			"ranges": ranges,
+			"name":     name,
+			"ranges":   ranges,
+			"messages": messages,
 		}},
 	)
 	return err
@@ -151,6 +159,11 @@ func FolderForSortOrder(folders []CourseFolder, sortOrder int) *CourseFolder {
 	for i := range folders {
 		for _, r := range folders[i].Ranges {
 			if sortOrder >= r.Start && sortOrder <= r.End {
+				return &folders[i]
+			}
+		}
+		for _, m := range folders[i].Messages {
+			if m == sortOrder {
 				return &folders[i]
 			}
 		}
