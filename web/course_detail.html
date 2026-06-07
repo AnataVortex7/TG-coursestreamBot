@@ -194,8 +194,6 @@
             <span class="msg-id">#{{ .Index }}</span>
           </div>
           {{ if .Title }}<div class="file-name">{{ .Title }}</div>{{ end }}
-          {{ if .Caption }}<div class="caption-text">💬 {{ .Caption }}</div>{{ end }}
-          {{ if .FileName }}<div class="file-name" style="color:var(--muted);font-size:.82rem">{{ .FileName }}</div>{{ end }}
           <div class="meta">
             {{ if .FileSize }}<span>💾 {{ .FileSize }}</span>{{ end }}
             {{ if .MimeType }}<span>🏷️ {{ .MimeType }}</span>{{ end }}
@@ -260,8 +258,6 @@
       <span class="msg-id">#{{ .Index }}</span>
     </div>
     {{ if .Title }}<div class="file-name">{{ .Title }}</div>{{ end }}
-    {{ if .Caption }}<div class="caption-text">💬 {{ .Caption }}</div>{{ end }}
-    {{ if .FileName }}<div class="file-name" style="color:var(--muted);font-size:.82rem">{{ .FileName }}</div>{{ end }}
     <div class="meta">
       {{ if .FileSize }}<span>💾 {{ .FileSize }}</span>{{ end }}
       {{ if .MimeType }}<span>🏷️ {{ .MimeType }}</span>{{ end }}
