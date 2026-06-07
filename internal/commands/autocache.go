@@ -23,11 +23,12 @@ func (m *command) LoadAutoCache(d dispatcher.Dispatcher) {
 }
 
 func handleNewChannelMessage(ctx *ext.Context, u *ext.Update) error {
-	// फक्त channel messages — private/group ignore
 	chatID := u.EffectiveChat().GetID()
 	peer := ctx.PeerStorage.GetPeerById(chatID)
+
+	// Channel नसेल तर nil return — पुढचे handlers (sendLink etc.) चालू राहतात
 	if peer.Type != int(storage.TypeChannel) {
-		return dispatcher.EndGroups
+		return nil
 	}
 
 	msg := u.EffectiveMessage
@@ -46,7 +47,6 @@ func handleNewChannelMessage(ctx *ext.Context, u *ext.Update) error {
 	// या channel_id ला कोणता course linked आहे ते DB मधून शोधा
 	course, err := db.GetCourseByChannelID(chatID)
 	if err != nil || course == nil {
-		// हा channel कोणत्याही course शी linked नाही — ignore
 		return dispatcher.EndGroups
 	}
 
@@ -56,7 +56,6 @@ func handleNewChannelMessage(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Caption = message text (EffectiveMessage.Text हे string आहे)
 	caption := strings.TrimSpace(msg.Text)
 	title := caption
 	if title == "" {
@@ -91,3 +90,4 @@ func handleNewChannelMessage(ctx *ext.Context, u *ext.Update) error {
 
 	return dispatcher.EndGroups
 }
+
