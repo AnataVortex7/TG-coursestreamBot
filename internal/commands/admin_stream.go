@@ -282,9 +282,10 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		defer upCancel()
 
 		uploadedFile, err := downloadAndReupload(
-			stallCtx, // download context — stall झाल्यास cancel होतो
-			upCtx,    // upload context  — पूर्णपणे independent
-			userbotClient,
+			stallCtx,      // download context — stall झाल्यास cancel होतो
+			upCtx,         // upload context  — पूर्णपणे independent
+			userbotClient, // download साठी — source channel access
+			botClient,     // upload साठी   — stable bot connection
 			file,
 			onDownloadProgress,
 			onUploadProgress,
@@ -366,7 +367,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 func downloadAndReupload(
 	dlCtx context.Context,
 	upCtx context.Context,
-	client *gotgproto.Client,
+	dlClient *gotgproto.Client, // download साठी — userbotClient
+	upClient *gotgproto.Client, // upload साठी   — botClient (stable)
 	file *types.File,
 	onDownloadProgress func(written, total int64),
 	onUploadProgress func(written, total int64),
@@ -391,7 +393,7 @@ func downloadAndReupload(
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(client.API(), file.Location).Stream(dlCtx, dlWriter)
+	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
 		return nil, fmt.Errorf("download failed: %w", err)
@@ -421,7 +423,7 @@ func downloadAndReupload(
 		}
 	}
 
-	u := uploader.NewUploader(client.API()).WithPartSize(256 * 1024)
+	u := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
 	uploadedFile, err := u.FromReader(upCtx, file.FileName, upReader)
 	if err != nil {
 		return nil, fmt.Errorf("upload failed: %w", err)
