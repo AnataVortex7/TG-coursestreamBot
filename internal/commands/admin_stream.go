@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -246,9 +247,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			file.FileName, formatSize(file.FileSize),
 		))
 
-		// ── Step 3: Download + Re-upload ─────────────────────────────────────
+		// ── Step 3: Download (temp fileला) → मग Upload ───────────────────────
+		// Sequential: Download 100% झाल्यावरच Upload सुरू होतो
 		// Stall detection: 5 मिनिटांत progress नाही → cancel
-		// Koyeb free tier वर slow network असते, म्हणून 5min दिला
 		stallCtx, stallCancel := context.WithCancel(bgCtx)
 		defer stallCancel()
 		stallTimer := time.AfterFunc(5*time.Minute, stallCancel)
@@ -261,12 +262,20 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				}
 				pct := written * 100 / total
 				bar := progressBar(int(pct))
-				editMsg(fmt.Sprintf(
-					"📥 Downloading...\n📄 `%s`\n💾 %s / %s\n%s %d%%",
-					file.FileName,
-					formatSize(written), formatSize(total),
-					bar, pct,
-				))
+				if written >= total {
+					// Download 100% — upload stage सुरू होतो
+					editMsg(fmt.Sprintf(
+						"📤 Uploading to Telegram...\n📄 `%s`\n💾 %s\n%s ✅ Download done",
+						file.FileName, formatSize(total), bar,
+					))
+				} else {
+					editMsg(fmt.Sprintf(
+						"📥 Downloading...\n📄 `%s`\n💾 %s / %s\n%s %d%%",
+						file.FileName,
+						formatSize(written), formatSize(total),
+						bar, pct,
+					))
+				}
 			},
 		)
 		stallTimer.Stop()
@@ -337,6 +346,10 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ── downloadAndReupload ───────────────────────────────────────────────────────
+// Sequential approach: आधी पूर्ण download → temp file → मग upload
+// io.Pipe() parallel approach Koyeb free tier वर stall होतो कारण
+// slow download → upload pipe block → stall timeout fire होतो.
+// Temp file approach: download 100% झाल्यावरच upload सुरू होतो → reliable.
 
 func downloadAndReupload(
 	ctx context.Context,
@@ -344,36 +357,45 @@ func downloadAndReupload(
 	file *types.File,
 	onProgress func(written, total int64),
 ) (tg.InputFileClass, error) {
-	pr, pw := io.Pipe()
 
-	dlErrCh := make(chan error, 1)
-	go func() {
-		defer pw.Close()
-		d := downloader.NewDownloader()
-		var w io.Writer = pw
-		if onProgress != nil {
-			w = &progressWriter{
-				w:          pw,
-				total:      file.FileSize,
-				onProgress: onProgress,
-			}
-		}
-		_, err := d.Download(client.API(), file.Location).
-			Stream(ctx, w)
-		dlErrCh <- err
-	}()
-
-	// WithPartSize(256KB) — Koyeb free tier वर RAM pressure कमी करतो
-	// Default 512KB असते; छोटे chunks → कमी memory at a time
-	u := uploader.NewUploader(client.API()).WithPartSize(256 * 1024)
-	uploadedFile, upErr := u.FromReader(ctx, file.FileName, pr)
-
-	dlErr := <-dlErrCh
-	if dlErr != nil {
-		return nil, fmt.Errorf("download failed: %w", dlErr)
+	// ── Step A: Temp file create ──────────────────────────────────────────────
+	tmpFile, err := os.CreateTemp("", "userbotdl-*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("temp file create failed: %w", err)
 	}
-	if upErr != nil {
-		return nil, fmt.Errorf("upload failed: %w", upErr)
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // upload झाल्यावर cleanup
+
+	// ── Step B: Download → temp file ─────────────────────────────────────────
+	var w io.Writer = tmpFile
+	if onProgress != nil {
+		w = &progressWriter{
+			w:          tmpFile,
+			total:      file.FileSize,
+			onProgress: onProgress,
+		}
+	}
+
+	d := downloader.NewDownloader()
+	_, err = d.Download(client.API(), file.Location).Stream(ctx, w)
+	tmpFile.Close() // download झाल्यावर close — upload साठी reopen करतो
+	if err != nil {
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+
+	// ── Step C: Temp file reopen for upload ───────────────────────────────────
+	readFile, err := os.Open(tmpPath)
+	if err != nil {
+		return nil, fmt.Errorf("temp file reopen failed: %w", err)
+	}
+	defer readFile.Close()
+
+	// ── Step D: Upload ────────────────────────────────────────────────────────
+	// WithPartSize(256KB) — Koyeb free tier वर RAM pressure कमी करतो
+	u := uploader.NewUploader(client.API()).WithPartSize(256 * 1024)
+	uploadedFile, err := u.FromReader(ctx, file.FileName, readFile)
+	if err != nil {
+		return nil, fmt.Errorf("upload failed: %w", err)
 	}
 
 	return uploadedFile, nil
@@ -579,3 +601,4 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 }
+
