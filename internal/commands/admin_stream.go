@@ -180,7 +180,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 	adminChatID := u.EffectiveChat().GetID()
 	botPeer := botClient.PeerStorage.GetInputPeerById(adminChatID)
-	userbotPeer := userbotClient.PeerStorage.GetInputPeerById(adminChatID)
 
 	go func() {
 		// bgCtx — overall 45 min timeout, upload साठी वापरतो
