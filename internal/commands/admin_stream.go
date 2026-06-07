@@ -227,7 +227,34 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			return
 		}
 
-		// ── Step 2: File metadata ─────────────────────────────────────────────
+		// ── Step 2: Media type check ────────────────────────────────────────────
+		// Text message → direct forward, no download needed
+		// Photo/Document/Video/PDF → download → reupload flow
+		if tgMsg.Media == nil {
+			// Plain text message — direct copy करतो
+			editMsg(fmt.Sprintf("📨 Text message copy करत आहे...\n📄 Chat: %d | Msg: %d", chatIDRaw, msgID))
+			sendCtx, sendCancel := context.WithTimeout(context.Background(), 1*time.Minute)
+			defer sendCancel()
+			_, err = botClient.API().MessagesSendMessage(sendCtx, &tg.MessagesSendMessageRequest{
+				Peer:     botPeer,
+				Message:  fmt.Sprintf("📥 Userbot DL\n📌 Chat: %d | Msg: %d\n\n%s", chatIDRaw, msgID, tgMsg.Message),
+				RandomID: rand.Int63(),
+			})
+			if err != nil {
+				failMsg(fmt.Sprintf("❌ Send error:\n`%s`", err.Error()))
+				return
+			}
+			if sentMsgID != 0 {
+				delCtx, delCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer delCancel()
+				_, _ = botClient.API().MessagesDeleteMessages(delCtx, &tg.MessagesDeleteMessagesRequest{
+					Revoke: true,
+					ID:     []int{sentMsgID},
+				})
+			}
+			return
+		}
+
 		file, err := utils.FileFromMessageInChannel(bgCtx, userbotClient, msgID, chatID)
 		if err != nil {
 			failMsg(fmt.Sprintf("❌ File metadata error:\n`%s`", err.Error()))
@@ -240,8 +267,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		))
 
 		// ── Step 3: Download → temp file ─────────────────────────────────────
-		// stallCtx फक्त download साठी — 5min progress नाही तर cancel
-		// Upload साठी bgCtx वापरतो — stallCtx cancel झाला तरी upload चालतो
 		stallCtx, stallCancel := context.WithCancel(bgCtx)
 		defer stallCancel()
 		stallTimer := time.AfterFunc(5*time.Minute, stallCancel)
@@ -275,16 +300,14 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			))
 		}
 
-		// upCtx — कोणत्याही parent शी connected नाही
-		// bgCtx/stallCtx cancel झाले तरी upload independently चालतो
 		upCtx, upCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer upCancel()
 
 		uploadedFile, err := downloadAndReupload(
-			stallCtx,      // download context — stall झाल्यास cancel होतो
-			upCtx,         // upload context  — पूर्णपणे independent
-			userbotClient, // download साठी — source channel access
-			botClient,     // upload साठी   — stable bot connection
+			stallCtx,
+			upCtx,
+			userbotClient,
+			botClient,
 			file,
 			onDownloadProgress,
 			onUploadProgress,
@@ -293,7 +316,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 		if err != nil {
 			if stallCtx.Err() != nil && bgCtx.Err() == nil {
-				// stallCtx cancel — download stalled
 				failMsg(fmt.Sprintf(
 					"❌ Download stalled (5min no progress)\n📄 `%s`\n💡 Retry: `/userbotdl %d %d`",
 					file.FileName, chatIDRaw, msgID,
@@ -310,15 +332,32 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			file.FileName, formatSize(file.FileSize),
 		))
 
-		inputMedia := &tg.InputMediaUploadedDocument{
-			File:     uploadedFile,
-			MimeType: file.MimeType,
-			Attributes: []tg.DocumentAttributeClass{
-				&tg.DocumentAttributeFilename{FileName: file.FileName},
-			},
+		// Original message मधून सगळे attributes copy करतो
+		// Video → DocumentAttributeVideo (duration, w, h)
+		// Audio → DocumentAttributeAudio
+		// PDF/others → फक्त filename attribute
+		attributes := []tg.DocumentAttributeClass{
+			&tg.DocumentAttributeFilename{FileName: file.FileName},
+		}
+		if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
+			if d, ok := doc.Document.(*tg.Document); ok {
+				for _, attr := range d.Attributes {
+					switch attr.(type) {
+					case *tg.DocumentAttributeVideo,
+						*tg.DocumentAttributeAudio,
+						*tg.DocumentAttributeAnimated:
+						attributes = append(attributes, attr)
+					}
+				}
+			}
 		}
 
-		// LOG_CHANNEL copy (background)
+		inputMedia := &tg.InputMediaUploadedDocument{
+			File:       uploadedFile,
+			MimeType:   file.MimeType,
+			Attributes: attributes,
+		}
+
 		if markCopied(chatID, msgID) {
 			go copyToLogChannelUploaded(tgMsg, inputMedia)
 		}
@@ -330,8 +369,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			formatSize(file.FileSize),
 		)
 
-		// Upload botClient ने केला → Send पण botClient नेच करायला हवं
-		// Different session ने send केल्यास FILE_PART_LENGTH_INVALID येतो
 		sendCtx, sendCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer sendCancel()
 		_, err = botClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
@@ -654,3 +691,4 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 }
+
