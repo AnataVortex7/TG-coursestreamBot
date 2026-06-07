@@ -14,7 +14,6 @@ import (
 	"EverythingSuckz/fsb/internal/db"
 
 	"github.com/celestix/gotgproto"
-	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 )
 
@@ -28,7 +27,7 @@ func StartJanitor(ctx context.Context, client *gotgproto.Client, log *zap.Logger
 	defer ticker.Stop()
 
 	// Startup ला लगेच एकदा run करा
-	runDeleteJanitor(ctx, client, log)
+	runDeleteJanitor(client, log)
 
 	for {
 		select {
@@ -36,12 +35,12 @@ func StartJanitor(ctx context.Context, client *gotgproto.Client, log *zap.Logger
 			log.Info("Janitor stopped")
 			return
 		case <-ticker.C:
-			runDeleteJanitor(ctx, client, log)
+			runDeleteJanitor(client, log)
 		}
 	}
 }
 
-func runDeleteJanitor(ctx context.Context, client *gotgproto.Client, log *zap.Logger) {
+func runDeleteJanitor(client *gotgproto.Client, log *zap.Logger) {
 	dues, err := db.DueDeletes()
 	if err != nil {
 		log.Error("DueDeletes fetch failed", zap.Error(err))
@@ -53,12 +52,12 @@ func runDeleteJanitor(ctx context.Context, client *gotgproto.Client, log *zap.Lo
 
 	log.Sugar().Infof("Janitor: %d messages to delete", len(dues))
 
+	// gotgproto context — chatID सहित DeleteMessages साठी
+	gctx := client.CreateContext()
+
 	for _, d := range dues {
-		// User च्या chat मधून message delete करतो
-		_, err := client.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
-			ID:     []int{d.MessageID},
-			Revoke: true, // both sides delete
-		})
+		// ctx.DeleteMessages(chatID, msgIDs) — user च्या chat मधून correctly delete करतो
+		err := gctx.DeleteMessages(d.ChatID, []int{d.MessageID})
 		if err != nil {
 			log.Warn("Failed to delete message",
 				zap.Int64("chat_id", d.ChatID),
