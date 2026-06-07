@@ -331,10 +331,12 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			formatSize(file.FileSize),
 		)
 
+		// Upload botClient ने केला → Send पण botClient नेच करायला हवं
+		// Different session ने send केल्यास FILE_PART_LENGTH_INVALID येतो
 		sendCtx, sendCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer sendCancel()
-		_, err = userbotClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
-			Peer:       userbotPeer,
+		_, err = botClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
+			Peer:       botPeer,
 			Media:      inputMedia,
 			Message:    caption,
 			Noforwards: true,
@@ -653,4 +655,3 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 }
-
