@@ -276,9 +276,14 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			))
 		}
 
+		// upCtx — कोणत्याही parent शी connected नाही
+		// bgCtx/stallCtx cancel झाले तरी upload independently चालतो
+		upCtx, upCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer upCancel()
+
 		uploadedFile, err := downloadAndReupload(
-			stallCtx, // download context — stall होता cancel होतो
-			bgCtx,    // upload context  — stallCtx cancel झाला तरी चालतो
+			stallCtx, // download context — stall झाल्यास cancel होतो
+			upCtx,    // upload context  — पूर्णपणे independent
 			userbotClient,
 			file,
 			onDownloadProgress,
@@ -646,3 +651,4 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 }
+
