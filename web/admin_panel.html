@@ -166,6 +166,13 @@
   .range-row .range-inp input{width:100%;padding:8px 10px;border:1.5px solid #e5e5e5;border-radius:7px;font-size:13px;outline:none;transition:border .15s}
   .range-row .range-inp input:focus{border-color:#6c63ff}
   .range-row .remove-range{background:#ffebee;color:#c62828;border:1.5px solid #ffcdd2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:13px;white-space:nowrap}
+  /* ── Folder message row ── */
+  .msg-row{display:flex;align-items:flex-end;gap:8px;margin-bottom:8px}
+  .msg-row .msg-inp{flex:1}
+  .msg-row .msg-inp label{font-size:11px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.4px;display:block;margin-bottom:4px}
+  .msg-row .msg-inp input{width:100%;padding:8px 10px;border:1.5px solid #e5e5e5;border-radius:7px;font-size:13px;outline:none;transition:border .15s}
+  .msg-row .msg-inp input:focus{border-color:#6c63ff}
+  .msg-row .remove-msg{background:#ffebee;color:#c62828;border:1.5px solid #ffcdd2;border-radius:7px;padding:7px 10px;cursor:pointer;font-size:13px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -717,13 +724,22 @@
       <input type="text" id="fm-name" placeholder="e.g. Unit 1 - Basics" maxlength="80" />
     </div>
     <div style="font-size:12px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">
-      File Ranges <span class="req">*</span>
+      File Ranges
     </div>
     <div id="fm-ranges-wrap"></div>
     <button class="btn btn-sm" style="margin-top:4px;margin-bottom:12px" onclick="addFolderRange()">➕ Range Add Kara</button>
     <div style="font-size:11px;color:#999;margin-bottom:16px;line-height:1.6">
       Range म्हणजे files चा sequential number (sort_order).<br>
       e.g. <strong>1–26</strong> म्हणजे 1 ते 26 वी file. Multiple ranges असू शकतात.
+    </div>
+    <div style="font-size:12px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;margin-top:4px">
+      Individual Messages (Sort Order)
+    </div>
+    <div id="fm-messages-wrap"></div>
+    <button class="btn btn-sm" style="margin-top:4px;margin-bottom:12px" onclick="addFolderMessage()">➕ Message Add Kara</button>
+    <div style="font-size:11px;color:#999;margin-bottom:16px;line-height:1.6">
+      Individual file चा sort_order number — range बाहेरच्या specific files साठी.<br>
+      e.g. <strong>23</strong>, <strong>67</strong>, <strong>89</strong> — प्रत्येक एक वेगळी file.
     </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeFolderModal()">Cancel</button>
@@ -1263,6 +1279,11 @@ function openFolderModal(folder) {
   const ranges = folder ? (folder.ranges || []) : [{ start: '', end: '' }];
   ranges.forEach(r => appendRangeRow(r.start, r.end));
 
+  const mwrap = document.getElementById('fm-messages-wrap');
+  mwrap.innerHTML = '';
+  const messages = folder ? (folder.messages || []) : [];
+  messages.forEach(m => appendMessageRow(m));
+
   document.getElementById('folderModal').classList.add('open');
   setTimeout(() => document.getElementById('fm-name').focus(), 100);
 }
@@ -1294,6 +1315,24 @@ function addFolderRange() {
   appendRangeRow('', '');
 }
 
+function appendMessageRow(val) {
+  const mwrap = document.getElementById('fm-messages-wrap');
+  const row   = document.createElement('div');
+  row.className = 'msg-row';
+  row.innerHTML = `
+    <div class="msg-inp">
+      <label>Sort Order #</label>
+      <input type="number" min="1" class="fm-msg-val" value="${val||''}" placeholder="e.g. 23" />
+    </div>
+    <button class="remove-msg" onclick="this.parentElement.remove()" title="Kadhun taka">✕</button>
+  `;
+  mwrap.appendChild(row);
+}
+
+function addFolderMessage() {
+  appendMessageRow('');
+}
+
 async function saveFolder() {
   const name = document.getElementById('fm-name').value.trim();
   if (!name) { toast('❌ Folder name bhara', 'error'); return; }
@@ -1312,8 +1351,28 @@ async function saveFolder() {
     ranges.push({ start, end });
   });
 
-  if (!valid || !ranges.length) {
+  if (!valid) {
     toast('❌ Valid ranges bhara — start >= 1, start <= end', 'error');
+    return;
+  }
+
+  const msgEls   = document.querySelectorAll('#fm-messages-wrap .fm-msg-val');
+  const messages = [];
+  let msgValid   = true;
+  msgEls.forEach(el => {
+    const v = parseInt(el.value);
+    if (el.value.trim() === '') return; // empty rows skip
+    if (!v || v < 1) { msgValid = false; return; }
+    messages.push(v);
+  });
+
+  if (!msgValid) {
+    toast('❌ Valid message sort_order bhara — >= 1', 'error');
+    return;
+  }
+
+  if (!ranges.length && !messages.length) {
+    toast('❌ Ek tari range kiva message bhara', 'error');
     return;
   }
 
@@ -1322,7 +1381,7 @@ async function saveFolder() {
   try {
     const url    = '/folders/' + folderCurrentCourseID + (folderEditID ? '/' + folderEditID : '');
     const method = folderEditID ? 'PUT' : 'POST';
-    const res    = await api(url, { method, body: JSON.stringify({ name, ranges }) });
+    const res    = await api(url, { method, body: JSON.stringify({ name, ranges, messages }) });
     const data   = await res.json();
     if (!res.ok) { toast('❌ ' + (data.error || 'Error'), 'error'); return; }
     toast('✅ Folder ' + (folderEditID ? 'updated' : 'created') + '!');
