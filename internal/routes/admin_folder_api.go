@@ -52,8 +52,9 @@ func adminCreateFolder(c *gin.Context) {
 	}
 
 	var body struct {
-		Name   string           `json:"name"`
-		Ranges []db.FolderRange `json:"ranges"`
+		Name     string           `json:"name"`
+		Ranges   []db.FolderRange `json:"ranges"`
+		Messages []int            `json:"messages"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
@@ -65,8 +66,8 @@ func adminCreateFolder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Folder name required"})
 		return
 	}
-	if len(body.Ranges) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one range required"})
+	if len(body.Ranges) == 0 && len(body.Messages) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one range or message required"})
 		return
 	}
 	for _, r := range body.Ranges {
@@ -75,8 +76,14 @@ func adminCreateFolder(c *gin.Context) {
 			return
 		}
 	}
+	for _, m := range body.Messages {
+		if m <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message: sort_order must be >= 1"})
+			return
+		}
+	}
 
-	folder, err := db.CreateFolder(courseID, body.Name, body.Ranges)
+	folder, err := db.CreateFolder(courseID, body.Name, body.Ranges, body.Messages)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -109,8 +116,9 @@ func adminUpdateFolder(c *gin.Context) {
 	}
 
 	var body struct {
-		Name   string           `json:"name"`
-		Ranges []db.FolderRange `json:"ranges"`
+		Name     string           `json:"name"`
+		Ranges   []db.FolderRange `json:"ranges"`
+		Messages []int            `json:"messages"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
@@ -122,8 +130,8 @@ func adminUpdateFolder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Folder name required"})
 		return
 	}
-	if len(body.Ranges) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one range required"})
+	if len(body.Ranges) == 0 && len(body.Messages) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "At least one range or message required"})
 		return
 	}
 	for _, r := range body.Ranges {
@@ -132,8 +140,14 @@ func adminUpdateFolder(c *gin.Context) {
 			return
 		}
 	}
+	for _, m := range body.Messages {
+		if m <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid message: sort_order must be >= 1"})
+			return
+		}
+	}
 
-	if err := db.UpdateFolder(folderID, body.Name, body.Ranges); err != nil {
+	if err := db.UpdateFolder(folderID, body.Name, body.Ranges, body.Messages); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
