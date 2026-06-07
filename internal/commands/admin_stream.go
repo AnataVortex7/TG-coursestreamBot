@@ -187,8 +187,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 	// ── Goroutine — handler ताबडतोब return, site affect नाही ─────────────────
 	go func() {
-		// 15 minute timeout — file कितीही मोठी असली तरी पुरेल
-		bgCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		// 45 minute timeout — Koyeb free tier वर large files साठी पुरेल
+		bgCtx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 		defer cancel()
 
 		var lastEdit time.Time
@@ -247,14 +247,15 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		))
 
 		// ── Step 3: Download + Re-upload ─────────────────────────────────────
-		// Stall detection: 90s मध्ये progress नाही → cancel → error message
+		// Stall detection: 5 मिनिटांत progress नाही → cancel
+		// Koyeb free tier वर slow network असते, म्हणून 5min दिला
 		stallCtx, stallCancel := context.WithCancel(bgCtx)
 		defer stallCancel()
-		stallTimer := time.AfterFunc(90*time.Second, stallCancel)
+		stallTimer := time.AfterFunc(5*time.Minute, stallCancel)
 
 		uploadedFile, err := downloadAndReupload(stallCtx, userbotClient, file,
 			func(written, total int64) {
-				stallTimer.Reset(90 * time.Second)
+				stallTimer.Reset(5 * time.Minute)
 				if total <= 0 {
 					return
 				}
@@ -272,7 +273,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		if err != nil {
 			if stallCtx.Err() != nil {
 				failMsg(fmt.Sprintf(
-					"❌ Download stalled (90s no progress)\n📄 `%s`\n💡 Retry: `/userbotdl %d %d`",
+					"❌ Download stalled (5min no progress)\n📄 `%s`\n💡 Retry: `/userbotdl %d %d`",
 					file.FileName, chatIDRaw, msgID,
 				))
 			} else {
@@ -362,7 +363,9 @@ func downloadAndReupload(
 		dlErrCh <- err
 	}()
 
-	u := uploader.NewUploader(client.API())
+	// WithPartSize(256KB) — Koyeb free tier वर RAM pressure कमी करतो
+	// Default 512KB असते; छोटे chunks → कमी memory at a time
+	u := uploader.NewUploader(client.API()).WithPartSize(256 * 1024)
 	uploadedFile, upErr := u.FromReader(ctx, file.FileName, pr)
 
 	dlErr := <-dlErrCh
