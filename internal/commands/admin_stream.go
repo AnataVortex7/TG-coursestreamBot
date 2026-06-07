@@ -168,9 +168,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// ── Progress message — BOT ने send करतो ───────────────────────────────────
-	// IMPORTANT: bot ने send केला म्हणून edit/delete सुद्धा botClient नेच होईल.
-	// userbotClient ने edit केल्यास gotd retry loop → CPU 100%
+	// BOT ने progress message send केला — edit/delete सुद्धा botClient नेच
 	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(
 		fmt.Sprintf("⏳ Channel `%d` | Msg `%d`\n📡 Starting...", chatIDRaw, msgID),
 	), nil)
@@ -181,20 +179,16 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	adminChatID := u.EffectiveChat().GetID()
-	// bot च्या peer storage मधून peer — edit/delete साठी
 	botPeer := botClient.PeerStorage.GetInputPeerById(adminChatID)
-	// userbot च्या peer storage मधून peer — final send साठी
 	userbotPeer := userbotClient.PeerStorage.GetInputPeerById(adminChatID)
 
-	// ── Goroutine — handler ताबडतोब return, site affect नाही ─────────────────
 	go func() {
-		// 45 minute timeout — Koyeb free tier वर large files साठी पुरेल
-		bgCtx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
-		defer cancel()
+		// bgCtx — overall 45 min timeout, upload साठी वापरतो
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), 45*time.Minute)
+		defer bgCancel()
 
 		var lastEdit time.Time
 
-		// editMsg: BOT client वापरतो (bot ने message send केला होता)
 		editMsg := func(text string) {
 			if sentMsgID == 0 {
 				return
@@ -212,7 +206,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			})
 		}
 
-		// failMsg: throttle नाही — error ताबडतोब दाखवतो
 		failMsg := func(text string) {
 			if sentMsgID == 0 {
 				return
@@ -247,51 +240,66 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			file.FileName, formatSize(file.FileSize),
 		))
 
-		// ── Step 3: Download (temp fileला) → मग Upload ───────────────────────
-		// Sequential: Download 100% झाल्यावरच Upload सुरू होतो
-		// Stall detection: 5 मिनिटांत progress नाही → cancel
+		// ── Step 3: Download → temp file ─────────────────────────────────────
+		// stallCtx फक्त download साठी — 5min progress नाही तर cancel
+		// Upload साठी bgCtx वापरतो — stallCtx cancel झाला तरी upload चालतो
 		stallCtx, stallCancel := context.WithCancel(bgCtx)
 		defer stallCancel()
 		stallTimer := time.AfterFunc(5*time.Minute, stallCancel)
 
-		uploadedFile, err := downloadAndReupload(stallCtx, userbotClient, file,
-			func(written, total int64) {
-				stallTimer.Reset(5 * time.Minute)
-				if total <= 0 {
-					return
-				}
-				pct := written * 100 / total
-				bar := progressBar(int(pct))
-				if written >= total {
-					// Download 100% — upload stage सुरू होतो
-					editMsg(fmt.Sprintf(
-						"📤 Uploading to Telegram...\n📄 `%s`\n💾 %s\n%s ✅ Download done",
-						file.FileName, formatSize(total), bar,
-					))
-				} else {
-					editMsg(fmt.Sprintf(
-						"📥 Downloading...\n📄 `%s`\n💾 %s / %s\n%s %d%%",
-						file.FileName,
-						formatSize(written), formatSize(total),
-						bar, pct,
-					))
-				}
-			},
+		onDownloadProgress := func(written, total int64) {
+			stallTimer.Reset(5 * time.Minute)
+			if total <= 0 {
+				return
+			}
+			pct := written * 100 / total
+			bar := progressBar(int(pct))
+			editMsg(fmt.Sprintf(
+				"📥 Downloading...\n📄 `%s`\n💾 %s / %s\n%s %d%%",
+				file.FileName,
+				formatSize(written), formatSize(total),
+				bar, pct,
+			))
+		}
+
+		onUploadProgress := func(written, total int64) {
+			if total <= 0 {
+				return
+			}
+			pct := written * 100 / total
+			bar := progressBar(int(pct))
+			editMsg(fmt.Sprintf(
+				"📤 Uploading...\n📄 `%s`\n💾 %s / %s\n%s %d%%",
+				file.FileName,
+				formatSize(written), formatSize(total),
+				bar, pct,
+			))
+		}
+
+		uploadedFile, err := downloadAndReupload(
+			stallCtx, // download context — stall होता cancel होतो
+			bgCtx,    // upload context  — stallCtx cancel झाला तरी चालतो
+			userbotClient,
+			file,
+			onDownloadProgress,
+			onUploadProgress,
 		)
 		stallTimer.Stop()
+
 		if err != nil {
-			if stallCtx.Err() != nil {
+			if stallCtx.Err() != nil && bgCtx.Err() == nil {
+				// stallCtx cancel — download stalled
 				failMsg(fmt.Sprintf(
 					"❌ Download stalled (5min no progress)\n📄 `%s`\n💡 Retry: `/userbotdl %d %d`",
 					file.FileName, chatIDRaw, msgID,
 				))
 			} else {
-				failMsg(fmt.Sprintf("❌ Download/Re-upload error:\n`%s`", err.Error()))
+				failMsg(fmt.Sprintf("❌ Error:\n`%s`", err.Error()))
 			}
 			return
 		}
 
-		// ── Step 4: Send ──────────────────────────────────────────────────────
+		// ── Step 4: Send to admin ─────────────────────────────────────────────
 		editMsg(fmt.Sprintf(
 			"📤 Sending...\n📄 `%s`\n💾 %s",
 			file.FileName, formatSize(file.FileSize),
@@ -317,7 +325,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			formatSize(file.FileSize),
 		)
 
-		sendCtx, sendCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		sendCtx, sendCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer sendCancel()
 		_, err = userbotClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
 			Peer:       userbotPeer,
@@ -346,16 +354,17 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ── downloadAndReupload ───────────────────────────────────────────────────────
-// Sequential approach: आधी पूर्ण download → temp file → मग upload
-// io.Pipe() parallel approach Koyeb free tier वर stall होतो कारण
-// slow download → upload pipe block → stall timeout fire होतो.
-// Temp file approach: download 100% झाल्यावरच upload सुरू होतो → reliable.
+// Sequential: आधी पूर्ण download temp file ला → मग upload
+// dlCtx — फक्त download साठी (stallCtx) — stall होता cancel होतो
+// upCtx — फक्त upload साठी (bgCtx)    — stallCtx cancel झाला तरी upload चालतो
 
 func downloadAndReupload(
-	ctx context.Context,
+	dlCtx context.Context,
+	upCtx context.Context,
 	client *gotgproto.Client,
 	file *types.File,
-	onProgress func(written, total int64),
+	onDownloadProgress func(written, total int64),
+	onUploadProgress func(written, total int64),
 ) (tg.InputFileClass, error) {
 
 	// ── Step A: Temp file create ──────────────────────────────────────────────
@@ -364,36 +373,51 @@ func downloadAndReupload(
 		return nil, fmt.Errorf("temp file create failed: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath) // upload झाल्यावर cleanup
+	defer os.Remove(tmpPath)
 
-	// ── Step B: Download → temp file ─────────────────────────────────────────
-	var w io.Writer = tmpFile
-	if onProgress != nil {
-		w = &progressWriter{
+	// ── Step B: Download → temp file (dlCtx) ─────────────────────────────────
+	var dlWriter io.Writer = tmpFile
+	if onDownloadProgress != nil {
+		dlWriter = &progressWriter{
 			w:          tmpFile,
 			total:      file.FileSize,
-			onProgress: onProgress,
+			onProgress: onDownloadProgress,
 		}
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(client.API(), file.Location).Stream(ctx, w)
-	tmpFile.Close() // download झाल्यावर close — upload साठी reopen करतो
+	_, err = d.Download(client.API(), file.Location).Stream(dlCtx, dlWriter)
+	tmpFile.Close()
 	if err != nil {
 		return nil, fmt.Errorf("download failed: %w", err)
 	}
 
-	// ── Step C: Temp file reopen for upload ───────────────────────────────────
+	// ── Step C: Temp file size (upload progress साठी) ─────────────────────────
+	info, err := os.Stat(tmpPath)
+	if err != nil {
+		return nil, fmt.Errorf("temp file stat failed: %w", err)
+	}
+	totalSize := info.Size()
+
+	// ── Step D: Reopen for upload ─────────────────────────────────────────────
 	readFile, err := os.Open(tmpPath)
 	if err != nil {
 		return nil, fmt.Errorf("temp file reopen failed: %w", err)
 	}
 	defer readFile.Close()
 
-	// ── Step D: Upload ────────────────────────────────────────────────────────
-	// WithPartSize(256KB) — Koyeb free tier वर RAM pressure कमी करतो
+	// ── Step E: Upload (upCtx — bgCtx, stallCtx पासून independent) ───────────
+	var upReader io.Reader = readFile
+	if onUploadProgress != nil {
+		upReader = &progressWriter{
+			w:          readFile,
+			total:      totalSize,
+			onProgress: onUploadProgress,
+		}
+	}
+
 	u := uploader.NewUploader(client.API()).WithPartSize(256 * 1024)
-	uploadedFile, err := u.FromReader(ctx, file.FileName, readFile)
+	uploadedFile, err := u.FromReader(upCtx, file.FileName, upReader)
 	if err != nil {
 		return nil, fmt.Errorf("upload failed: %w", err)
 	}
@@ -402,6 +426,7 @@ func downloadAndReupload(
 }
 
 // ── progressWriter ────────────────────────────────────────────────────────────
+// io.Writer wrapper — Write होताना progress callback call करतो
 
 type progressWriter struct {
 	w          io.Writer
@@ -413,6 +438,26 @@ type progressWriter struct {
 
 func (p *progressWriter) Write(b []byte) (int, error) {
 	n, err := p.w.Write(b)
+	p.written += int64(n)
+	if p.total > 0 {
+		pct := p.written * 100 / p.total
+		if pct >= p.lastPct+5 || p.written >= p.total {
+			p.lastPct = pct
+			if p.onProgress != nil {
+				p.onProgress(p.written, p.total)
+			}
+		}
+	}
+	return n, err
+}
+
+// progressWriter io.Reader interface सुद्धा implement करतो (upload साठी)
+func (p *progressWriter) Read(b []byte) (int, error) {
+	r, ok := p.w.(io.Reader)
+	if !ok {
+		return 0, fmt.Errorf("underlying writer does not implement Reader")
+	}
+	n, err := r.Read(b)
 	p.written += int64(n)
 	if p.total > 0 {
 		pct := p.written * 100 / p.total
@@ -601,4 +646,3 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 }
-
