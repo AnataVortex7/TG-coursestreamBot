@@ -237,6 +237,24 @@ func CreateCourse(title, description, thumbnail, price, buyLink string, channelI
 	return course, nil
 }
 
+
+// GetCourseByChannelID — channel_id वरून active course शोधतो.
+// Auto-cache handler वापरतो — नवीन channel message आल्यावर course identify करायला.
+func GetCourseByChannelID(channelID int64) (*Course, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var course Course
+	err := ColCourses.FindOne(ctx, bson.M{"channel_id": channelID, "is_active": true}).Decode(&course)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &course, nil
+}
+
 func GetCourseByID(id primitive.ObjectID) (*Course, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
