@@ -273,8 +273,8 @@ func cmdClearSendChannel(ctx *ext.Context, u *ext.Update) error {
 // Usage: photo ला reply करून /setthumbnail पाठवा
 
 func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
-	tgMsg, ok := u.EffectiveMessage.(*tg.Message)
-	if !ok || tgMsg == nil {
+	tgMsg := u.EffectiveMessage.Message
+	if tgMsg == nil {
 		reply(ctx, u, "❌ Message मिळाला नाही.")
 		return dispatcher.EndGroups
 	}
@@ -748,17 +748,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			})
 		}
 
-		sendTextMsg := func(text string) {
-			sendCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-			defer cancel()
-			req := &tg.MessagesSendMessageRequest{
-				Peer:     botPeer,
-				Message:  text,
-				RandomID: rand.Int63(),
-			}
-			_, _ = botClient.API().MessagesSendMessage(sendCtx, req)
-		}
-
 		// ── Process each message in range ─────────────────────────────────
 		successCount := 0
 		skipCount    := 0
@@ -803,11 +792,10 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				sCtx, sCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer sCancel()
 				sentSummary, err := botClient.API().MessagesSendMessage(sCtx, &tg.MessagesSendMessageRequest{
-					Peer:        botPeer,
-					Message:     text,
-					RandomID:    rand.Int63(),
-					ParseMode:   "Markdown",
-					NoWebpage:   true,
+					Peer:      botPeer,
+					Message:   text,
+					RandomID:  rand.Int63(),
+					NoWebpage: true,
 				})
 				if err == nil {
 					if upd, ok := sentSummary.(*tg.Updates); ok {
@@ -827,7 +815,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					Peer:      botPeer,
 					ID:        summaryMsgID,
 					Message:   text,
-					ParseMode: "Markdown",
 					NoWebpage: true,
 				})
 			}
