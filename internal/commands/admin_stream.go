@@ -46,6 +46,20 @@ func getSendChannelID() (int64, bool) {
 	return v.(int64), true
 }
 
+// ── Thumbnail Store ───────────────────────────────────────────────────────────
+// /setthumbnail ने set केलेला photo — video upload साठी thumbnail
+// Server restart वर reset होतो (in-memory only)
+
+var thumbnailStore sync.Map // key: "thumb", value: tg.InputFileClass
+
+func getStoredThumbnail() (tg.InputFileClass, bool) {
+	v, ok := thumbnailStore.Load("thumb")
+	if !ok {
+		return nil, false
+	}
+	return v.(tg.InputFileClass), true
+}
+
 // ── Register ──────────────────────────────────────────────────────────────────
 
 func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
@@ -61,6 +75,9 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("setsendchannel", adminOnly(cmdSetSendChannel)))
 	d.AddHandler(handlers.NewCommand("showsendchannel", adminOnly(cmdShowSendChannel)))
 	d.AddHandler(handlers.NewCommand("clearsendchannel", adminOnly(cmdClearSendChannel)))
+	d.AddHandler(handlers.NewCommand("setthumbnail", adminOnly(cmdSetThumbnail)))
+	d.AddHandler(handlers.NewCommand("clearthumbnail", adminOnly(cmdClearThumbnail)))
+	d.AddHandler(handlers.NewCommand("showthumbnail", adminOnly(cmdShowThumbnail)))
 }
 
 // ── /setreplace <old=new> [old2=new2] ... ─────────────────────────────────────
@@ -248,6 +265,130 @@ func cmdClearSendChannel(ctx *ext.Context, u *ext.Update) error {
 	}
 	sendChannelStore.Delete("id")
 	reply(ctx, u, "✅ Send channel clear केला. आता फक्त admin chat मध्ये send होईल.")
+	return dispatcher.EndGroups
+}
+
+// ── /setthumbnail ────────────────────────────────────────────────────────────
+// Photo reply करा command ला → तो photo सगळ्या video uploads चा thumbnail होतो
+// Usage: photo ला reply करून /setthumbnail पाठवा
+
+func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
+	msg := u.EffectiveMessage
+	if msg == nil {
+		reply(ctx, u, "❌ Message मिळाला नाही.")
+		return dispatcher.EndGroups
+	}
+
+	// Reply असणे आवश्यक आहे आणि ती photo असणे आवश्यक आहे
+	if msg.ReplyToMessage == nil {
+		reply(ctx, u, "📸 *Usage:* एखाद्या photo ला reply करून `/setthumbnail` पाठवा.\n\nतो photo सगळ्या `/userbotdl` video uploads चा thumbnail होईल.")
+		return dispatcher.EndGroups
+	}
+
+	replyMsg := msg.ReplyToMessage
+	photo, ok := replyMsg.Media.(*tg.MessageMediaPhoto)
+	if !ok {
+		reply(ctx, u, "❌ Reply केलेला message photo नाही.\nफक्त photo support आहे.")
+		return dispatcher.EndGroups
+	}
+
+	photoObj, ok := photo.Photo.(*tg.Photo)
+	if !ok {
+		reply(ctx, u, "❌ Photo object invalid आहे.")
+		return dispatcher.EndGroups
+	}
+
+	botClient := MainBotClient
+	if botClient == nil {
+		reply(ctx, u, "❌ Bot client चालू नाही.")
+		return dispatcher.EndGroups
+	}
+
+	// Photo download करून bot ला upload करतो (InputFile मिळवायला)
+	upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer upCancel()
+
+	// Biggest size निवडा
+	var biggestSize *tg.PhotoSize
+	for _, sz := range photoObj.Sizes {
+		if ps, ok := sz.(*tg.PhotoSize); ok {
+			if biggestSize == nil || ps.W > biggestSize.W {
+				biggestSize = ps
+			}
+		}
+	}
+
+	if biggestSize == nil {
+		reply(ctx, u, "❌ Photo size मिळाला नाही.")
+		return dispatcher.EndGroups
+	}
+
+	loc := &tg.InputPhotoFileLocation{
+		ID:            photoObj.ID,
+		AccessHash:    photoObj.AccessHash,
+		FileReference: photoObj.FileReference,
+		ThumbSize:     biggestSize.Type,
+	}
+
+	// Download to temp file
+	tmpFile, err := os.CreateTemp("", "thumb-*.jpg")
+	if err != nil {
+		reply(ctx, u, fmt.Sprintf("❌ Temp file create failed: `%s`", err.Error()))
+		return dispatcher.EndGroups
+	}
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath)
+
+	d := downloader.NewDownloader()
+	_, err = d.Download(botClient.API(), loc).Stream(upCtx, tmpFile)
+	tmpFile.Close()
+	if err != nil {
+		reply(ctx, u, fmt.Sprintf("❌ Photo download failed: `%s`", err.Error()))
+		return dispatcher.EndGroups
+	}
+
+	// Re-open and upload
+	readFile, err := os.Open(tmpPath)
+	if err != nil {
+		reply(ctx, u, fmt.Sprintf("❌ File open failed: `%s`", err.Error()))
+		return dispatcher.EndGroups
+	}
+	defer readFile.Close()
+
+	up := uploader.NewUploader(botClient.API())
+	uploadedThumb, err := up.FromReader(upCtx, "thumbnail.jpg", readFile)
+	if err != nil {
+		reply(ctx, u, fmt.Sprintf("❌ Thumbnail upload failed: `%s`", err.Error()))
+		return dispatcher.EndGroups
+	}
+
+	thumbnailStore.Store("thumb", uploadedThumb)
+	reply(ctx, u, "✅ Thumbnail set!\n\nआता सगळ्या `/userbotdl` video uploads ला हा photo thumbnail म्हणून लागेल.\nकाढायला: /clearthumbnail\nबघायला: /showthumbnail")
+	return dispatcher.EndGroups
+}
+
+// ── /clearthumbnail ───────────────────────────────────────────────────────────
+
+func cmdClearThumbnail(ctx *ext.Context, u *ext.Update) error {
+	_, ok := getStoredThumbnail()
+	if !ok {
+		reply(ctx, u, "📸 कोणताही thumbnail set नाही.")
+		return dispatcher.EndGroups
+	}
+	thumbnailStore.Delete("thumb")
+	reply(ctx, u, "✅ Thumbnail clear केला. Video uploads आता thumbnail शिवाय जातील.")
+	return dispatcher.EndGroups
+}
+
+// ── /showthumbnail ────────────────────────────────────────────────────────────
+
+func cmdShowThumbnail(ctx *ext.Context, u *ext.Update) error {
+	_, ok := getStoredThumbnail()
+	if !ok {
+		reply(ctx, u, "📸 कोणताही thumbnail set नाही.\nSet करायला: photo ला reply करून `/setthumbnail` पाठवा.")
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u, "✅ Thumbnail set आहे.\n\nसगळ्या `/userbotdl` video uploads ला हा thumbnail लागतो.\nकाढायला: /clearthumbnail")
 	return dispatcher.EndGroups
 }
 
@@ -482,6 +623,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	sourcePeerForSend := getChannelPeerIfBotAdmin(ctx, botClient, chatID)
 
 	// Send channel peer — /setsendchannel ने set केलेला
+	// Send channel peer — /setsendchannel ने set केलेला
 	var sendChannelPeer *tg.InputPeerChannel
 	if scID, ok := getSendChannelID(); ok {
 		if peer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, scID); err == nil {
@@ -656,7 +798,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			return
 		}
 
-		// Range साठी — summary send करा
 		// Range साठी — summary send करा
 		sendTextMsg(fmt.Sprintf(
 			"✅ *Completed!*\n\n"+
@@ -841,6 +982,7 @@ func processSingleMessage(
 	attributes := []tg.DocumentAttributeClass{
 		&tg.DocumentAttributeFilename{FileName: file.FileName},
 	}
+	isVideo := false
 	if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
 		if d, ok := doc.Document.(*tg.Document); ok {
 			for _, attr := range d.Attributes {
@@ -850,7 +992,18 @@ func processSingleMessage(
 					*tg.DocumentAttributeAnimated:
 					attributes = append(attributes, attr)
 				}
+				if _, ok := attr.(*tg.DocumentAttributeVideo); ok {
+					isVideo = true
+				}
 			}
+		}
+	}
+
+	// Thumbnail — फक्त video ला, error आला तरी process थांबवायची नाही
+	var thumbInput tg.InputFileClass
+	if isVideo {
+		if stored, ok := getStoredThumbnail(); ok {
+			thumbInput = stored
 		}
 	}
 
@@ -858,6 +1011,9 @@ func processSingleMessage(
 		File:       uploadedFile,
 		MimeType:   file.MimeType,
 		Attributes: attributes,
+	}
+	if thumbInput != nil {
+		inputMedia.Thumb = thumbInput
 	}
 
 	// ── Step 6 + 7 + 8: Send targets decide करा ────────────────────────
@@ -1180,6 +1336,7 @@ func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass) {
 	}
 }
 
+// ── copyToLogChannel (old — non-restricted channels साठी) ────────────────────
 // ── copyToLogChannel (old — non-restricted channels साठी) ────────────────────
 
 func copyToLogChannel(msg *tg.Message, file *types.File) {
