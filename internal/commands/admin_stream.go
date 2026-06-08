@@ -273,30 +273,20 @@ func cmdClearSendChannel(ctx *ext.Context, u *ext.Update) error {
 // Usage: photo ला reply करून /setthumbnail पाठवा
 
 func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
-	msg := u.EffectiveMessage
-	if msg == nil {
+	tgMsg, ok := u.EffectiveMessage.(*tg.Message)
+	if !ok || tgMsg == nil {
 		reply(ctx, u, "❌ Message मिळाला नाही.")
 		return dispatcher.EndGroups
 	}
 
-	// Reply असणे आवश्यक आहे आणि ती photo असणे आवश्यक आहे
-	if msg.ReplyToMessage == nil {
+	// ReplyTo header मिळवा
+	replyHeader, ok := tgMsg.ReplyTo.(*tg.MessageReplyHeader)
+	if !ok || replyHeader == nil {
 		reply(ctx, u, "📸 *Usage:* एखाद्या photo ला reply करून `/setthumbnail` पाठवा.\n\nतो photo सगळ्या `/userbotdl` video uploads चा thumbnail होईल.")
 		return dispatcher.EndGroups
 	}
 
-	replyMsg := msg.ReplyToMessage
-	photo, ok := replyMsg.Media.(*tg.MessageMediaPhoto)
-	if !ok {
-		reply(ctx, u, "❌ Reply केलेला message photo नाही.\nफक्त photo support आहे.")
-		return dispatcher.EndGroups
-	}
-
-	photoObj, ok := photo.Photo.(*tg.Photo)
-	if !ok {
-		reply(ctx, u, "❌ Photo object invalid आहे.")
-		return dispatcher.EndGroups
-	}
+	replyMsgID := replyHeader.ReplyToMsgID
 
 	botClient := MainBotClient
 	if botClient == nil {
@@ -304,9 +294,69 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Photo download करून bot ला upload करतो (InputFile मिळवायला)
-	upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer upCancel()
+	// Reply message fetch करा — same chat मधून
+	chatID := u.EffectiveChat().GetID()
+	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer fetchCancel()
+
+	inputPeer := botClient.PeerStorage.GetInputPeerById(chatID)
+	var replyMsg *tg.Message
+
+	// Chat type नुसार fetch
+	switch peer := inputPeer.(type) {
+	case *tg.InputPeerChannel:
+		res, err := botClient.API().ChannelsGetMessages(fetchCtx, &tg.ChannelsGetMessagesRequest{
+			Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: replyMsgID}},
+		})
+		if err != nil {
+			reply(ctx, u, fmt.Sprintf("❌ Reply message fetch failed: `%s`", err.Error()))
+			return dispatcher.EndGroups
+		}
+		msgs := res.(*tg.MessagesChannelMessages)
+		if len(msgs.Messages) == 0 {
+			reply(ctx, u, "❌ Reply message सापडला नाही.")
+			return dispatcher.EndGroups
+		}
+		m, ok := msgs.Messages[0].(*tg.Message)
+		if !ok {
+			reply(ctx, u, "❌ Reply message invalid आहे.")
+			return dispatcher.EndGroups
+		}
+		replyMsg = m
+	default:
+		// Private chat / group
+		res, err := botClient.API().MessagesGetMessages(fetchCtx, []tg.InputMessageClass{
+			&tg.InputMessageID{ID: replyMsgID},
+		})
+		if err != nil {
+			reply(ctx, u, fmt.Sprintf("❌ Reply message fetch failed: `%s`", err.Error()))
+			return dispatcher.EndGroups
+		}
+		msgSlice, ok := res.(*tg.MessagesMessages)
+		if !ok || len(msgSlice.Messages) == 0 {
+			reply(ctx, u, "❌ Reply message सापडला नाही.")
+			return dispatcher.EndGroups
+		}
+		m, ok := msgSlice.Messages[0].(*tg.Message)
+		if !ok {
+			reply(ctx, u, "❌ Reply message invalid आहे.")
+			return dispatcher.EndGroups
+		}
+		replyMsg = m
+	}
+
+	// Photo check
+	photo, ok := replyMsg.Media.(*tg.MessageMediaPhoto)
+	if !ok {
+		reply(ctx, u, "❌ Reply केलेला message photo नाही.\nफक्त photo support आहे.")
+		return dispatcher.EndGroups
+	}
+	photoObj, ok := photo.Photo.(*tg.Photo)
+	if !ok {
+		reply(ctx, u, "❌ Photo object invalid आहे.")
+		return dispatcher.EndGroups
+	}
 
 	// Biggest size निवडा
 	var biggestSize *tg.PhotoSize
@@ -317,7 +367,6 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 			}
 		}
 	}
-
 	if biggestSize == nil {
 		reply(ctx, u, "❌ Photo size मिळाला नाही.")
 		return dispatcher.EndGroups
@@ -330,7 +379,10 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 		ThumbSize:     biggestSize.Type,
 	}
 
-	// Download to temp file
+	// Download → temp file → upload
+	upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer upCancel()
+
 	tmpFile, err := os.CreateTemp("", "thumb-*.jpg")
 	if err != nil {
 		reply(ctx, u, fmt.Sprintf("❌ Temp file create failed: `%s`", err.Error()))
@@ -347,7 +399,6 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Re-open and upload
 	readFile, err := os.Open(tmpPath)
 	if err != nil {
 		reply(ctx, u, fmt.Sprintf("❌ File open failed: `%s`", err.Error()))
@@ -363,7 +414,7 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	thumbnailStore.Store("thumb", uploadedThumb)
-	reply(ctx, u, "✅ Thumbnail set!\n\nआता सगळ्या `/userbotdl` video uploads ला हा photo thumbnail म्हणून लागेल.\nकाढायला: /clearthumbnail\nबघायला: /showthumbnail")
+	reply(ctx, u, "✅ Thumbnail set!\n\nआता सगळ्या `/userbotdl` video uploads ला हा photo thumbnail म्हणून लागेल.\nकाढायला: /clearthumbnail")
 	return dispatcher.EndGroups
 }
 
@@ -623,7 +674,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	sourcePeerForSend := getChannelPeerIfBotAdmin(ctx, botClient, chatID)
 
 	// Send channel peer — /setsendchannel ने set केलेला
-	// Send channel peer — /setsendchannel ने set केलेला
 	var sendChannelPeer *tg.InputPeerChannel
 	if scID, ok := getSendChannelID(); ok {
 		if peer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, scID); err == nil {
@@ -711,14 +761,84 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 		// ── Process each message in range ─────────────────────────────────
 		successCount := 0
-		skipCount := 0
-		errorCount := 0
+		skipCount    := 0
+		errorCount   := 0
+
+		// Summary message — एकच message, edit होत राहील
+		summaryMsgID := 0
+		// errorLines: map[errorText] -> []msgID (same error group करायला)
+		errorLines := make(map[string][]int)
+		errorOrder := []string{} // insertion order
+
+		buildSummaryText := func() string {
+			s := fmt.Sprintf(
+				"📊 *Summary*\n📡 `%d` | Range: `%d`→`%d`\n\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d",
+				chatIDRaw, startMsg, endMsg,
+				successCount, skipCount, errorCount,
+			)
+			if len(errorLines) > 0 {
+				s += "\n\n*Errors:*"
+				for _, errText := range errorOrder {
+					ids := errorLines[errText]
+					if len(ids) == 1 {
+						s += fmt.Sprintf("\n• Msg `%d` — `%s`", ids[0], errText)
+					} else {
+						// Multiple same errors — group करा
+						idStrs := make([]string, len(ids))
+						for i, id := range ids {
+							idStrs[i] = fmt.Sprintf("`%d`", id)
+						}
+						s += fmt.Sprintf("\n• Msgs %s — `%s`",
+							strings.Join(idStrs, ", "), errText)
+					}
+				}
+			}
+			return s
+		}
+
+		updateSummary := func() {
+			text := buildSummaryText()
+			if summaryMsgID == 0 {
+				// पहिल्यांदा send करा
+				sCtx, sCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer sCancel()
+				sentSummary, err := botClient.API().MessagesSendMessage(sCtx, &tg.MessagesSendMessageRequest{
+					Peer:        botPeer,
+					Message:     text,
+					RandomID:    rand.Int63(),
+					ParseMode:   "Markdown",
+					NoWebpage:   true,
+				})
+				if err == nil {
+					if upd, ok := sentSummary.(*tg.Updates); ok {
+						for _, u := range upd.Updates {
+							if mu, ok := u.(*tg.UpdateMessageID); ok {
+								summaryMsgID = mu.ID
+								break
+							}
+						}
+					}
+				}
+			} else {
+				// Edit करा
+				eCtx, eCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer eCancel()
+				_, _ = botClient.API().MessagesEditMessage(eCtx, &tg.MessagesEditMessageRequest{
+					Peer:      botPeer,
+					ID:        summaryMsgID,
+					Message:   text,
+					ParseMode: "Markdown",
+					NoWebpage: true,
+				})
+			}
+		}
 
 		for msgID := startMsg; msgID <= endMsg; msgID++ {
 
 			// Context cancel (manual stop) तर exit
 			if bgCtx.Err() != nil {
-				sendTextMsg(fmt.Sprintf("🛑 Stopped.\n✅ Done: %d | ⏭ Skipped: %d | ❌ Errors: %d", successCount, skipCount, errorCount))
+				deleteProgress()
+				updateSummary()
 				return
 			}
 
@@ -771,11 +891,13 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 			if err != nil {
 				errorCount++
-				// सगळे retries संपले — skip करा, admin ला सांगा
-				sendTextMsg(fmt.Sprintf(
-					"❌ Msg `%d` failed (retried %d times):\n`%s`",
-					msgID, maxRetries, err.Error(),
-				))
+				// Error summary मध्ये add करा — same error group करा
+				errKey := err.Error()
+				if _, exists := errorLines[errKey]; !exists {
+					errorOrder = append(errorOrder, errKey)
+				}
+				errorLines[errKey] = append(errorLines[errKey], msgID)
+				updateSummary()
 				if totalMsgs > 1 {
 					time.Sleep(2 * time.Second)
 				}
@@ -783,6 +905,10 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			}
 
 			successCount++
+			// प्रत्येक 5 success नंतर summary update करा
+			if successCount%5 == 0 {
+				updateSummary()
+			}
 
 			// Range मध्ये messages मध्ये थोडा gap द्या Telegram throttle टाळायला
 			if totalMsgs > 1 && msgID < endMsg {
@@ -792,23 +918,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 		// ── Final summary ──────────────────────────────────────────────────
 		deleteProgress()
-
-		if totalMsgs == 1 {
-			// Single message — progress message आधीच delete केला, काही नाही
-			return
-		}
-
-		// Range साठी — summary send करा
-		sendTextMsg(fmt.Sprintf(
-			"✅ *Completed!*\n\n"+
-				"📡 Channel: `%d`\n"+
-				"📋 Range: `%d` → `%d` (%d msgs)\n\n"+
-				"✅ Success: %d\n"+
-				"⏭ Skipped (no media/text): %d\n"+
-				"❌ Errors: %d",
-			chatIDRaw, startMsg, endMsg, totalMsgs,
-			successCount, skipCount, errorCount,
-		))
+		updateSummary()
 	}()
 
 	return dispatcher.EndGroups
@@ -1336,7 +1446,6 @@ func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass) {
 	}
 }
 
-// ── copyToLogChannel (old — non-restricted channels साठी) ────────────────────
 // ── copyToLogChannel (old — non-restricted channels साठी) ────────────────────
 
 func copyToLogChannel(msg *tg.Message, file *types.File) {
