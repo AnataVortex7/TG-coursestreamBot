@@ -32,11 +32,25 @@ import (
 
 var captionReplaceStore sync.Map // map[string]string
 
+// ── Send Channel Store ────────────────────────────────────────────────────────
+// /userbotdl चे files + text msgs या channel ला पण send होतात
+// Server restart वर reset होतो (in-memory only)
+
+var sendChannelStore sync.Map // key: "id", value: int64
+
+func getSendChannelID() (int64, bool) {
+	v, ok := sendChannelStore.Load("id")
+	if !ok {
+		return 0, false
+	}
+	return v.(int64), true
+}
+
 // ── Register ──────────────────────────────────────────────────────────────────
 
 func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 	log := m.log.Named("admin_stream")
-	defer log.Sugar().Info("Loaded /adminstream /userbotdl /setreplace /listreplace /delreplace /clearreplace commands")
+	defer log.Sugar().Info("Loaded /adminstream /userbotdl /setreplace /listreplace /delreplace /clearreplace /setsendchannel /showsendchannel /clearsendchannel commands")
 
 	d.AddHandler(handlers.NewCommand("adminstream", adminOnly(cmdAdminStream)))
 	d.AddHandler(handlers.NewCommand("userbotdl", adminOnly(cmdUserbotDL)))
@@ -44,6 +58,9 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("listreplace", adminOnly(cmdListReplace)))
 	d.AddHandler(handlers.NewCommand("delreplace", adminOnly(cmdDelReplace)))
 	d.AddHandler(handlers.NewCommand("clearreplace", adminOnly(cmdClearReplace)))
+	d.AddHandler(handlers.NewCommand("setsendchannel", adminOnly(cmdSetSendChannel)))
+	d.AddHandler(handlers.NewCommand("showsendchannel", adminOnly(cmdShowSendChannel)))
+	d.AddHandler(handlers.NewCommand("clearsendchannel", adminOnly(cmdClearSendChannel)))
 }
 
 // ── /setreplace <old=new> [old2=new2] ... ─────────────────────────────────────
@@ -138,6 +155,99 @@ func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
 		return true
 	})
 	reply(ctx, u, fmt.Sprintf("✅ सगळे replace rules clear केले (%d rules काढले).", count))
+	return dispatcher.EndGroups
+}
+
+// ── /setsendchannel <channelID> ──────────────────────────────────────────────
+// /userbotdl चे सगळे files + text msgs या channel ला पण send होतात
+// Channel ID: t.me/c/ वरील positive number (उदा. 2479194095)
+// Bot त्या channel चा owner/admin असणे आवश्यक आहे
+
+func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	if len(a) < 1 {
+		curID, ok := getSendChannelID()
+		if ok {
+			// internal format → user-facing positive ID
+			displayID := -(curID + 1000000000000)
+			reply(ctx, u, fmt.Sprintf(
+				"📢 *Send Channel*\n\nSध्या set: `%d`\n\nबदलायला: `/setsendchannel <channelID>`\nकाढायला: /clearsendchannel",
+				displayID,
+			))
+		} else {
+			reply(ctx, u,
+				"📢 *Usage:* `/setsendchannel <channelID>`\n\n"+
+					"t.me/c/ वरील positive channel ID टाका.\n"+
+					"Example: `/setsendchannel 2479194095`\n\n"+
+					"⚠️ Bot त्या channel चा owner किंवा admin असणे आवश्यक आहे.\n"+
+					"/userbotdl चे सगळे files + text msgs तिथे पण send होतील.")
+		}
+		return dispatcher.EndGroups
+	}
+
+	rawID, err := strconv.ParseInt(strings.TrimSpace(a[0]), 10, 64)
+	if err != nil || rawID <= 0 {
+		reply(ctx, u, "❌ Invalid channel ID. Positive number टाका.\nExample: `2479194095`")
+		return dispatcher.EndGroups
+	}
+
+	// Convert to internal TG format
+	internalID := -1000000000000 - rawID
+
+	// Bot access check
+	botClient := MainBotClient
+	if botClient == nil {
+		reply(ctx, u, "❌ Bot client चालू नाही.")
+		return dispatcher.EndGroups
+	}
+
+	peer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, internalID)
+	if err != nil {
+		reply(ctx, u, fmt.Sprintf(
+			"❌ Channel access नाही (ID: `%d`).\n\nCheck करा:\n• Bot त्या channel मध्ये admin/owner आहे का?\n• Channel ID बरोबर आहे का?\n\nError: `%s`",
+			rawID, err.Error(),
+		))
+		return dispatcher.EndGroups
+	}
+	_ = peer
+
+	sendChannelStore.Store("id", internalID)
+
+	reply(ctx, u, fmt.Sprintf(
+		"✅ Send channel set!\n\n📢 Channel ID: `%d`\n\n"+
+			"/userbotdl चे सगळे files + text msgs आता या channel ला पण send होतील.\n"+
+			"काढायला: /clearsendchannel",
+		rawID,
+	))
+	return dispatcher.EndGroups
+}
+
+// ── /showsendchannel ──────────────────────────────────────────────────────────
+
+func cmdShowSendChannel(ctx *ext.Context, u *ext.Update) error {
+	curID, ok := getSendChannelID()
+	if !ok {
+		reply(ctx, u, "📢 कोणताही send channel set नाही.\nSet करायला: `/setsendchannel <channelID>`")
+		return dispatcher.EndGroups
+	}
+	displayID := -(curID + 1000000000000)
+	reply(ctx, u, fmt.Sprintf(
+		"📢 *Send Channel*\n\nChannel ID: `%d`\n\nकाढायला: /clearsendchannel",
+		displayID,
+	))
+	return dispatcher.EndGroups
+}
+
+// ── /clearsendchannel ─────────────────────────────────────────────────────────
+
+func cmdClearSendChannel(ctx *ext.Context, u *ext.Update) error {
+	_, ok := getSendChannelID()
+	if !ok {
+		reply(ctx, u, "📢 आधीच कोणताही send channel set नाही.")
+		return dispatcher.EndGroups
+	}
+	sendChannelStore.Delete("id")
+	reply(ctx, u, "✅ Send channel clear केला. आता फक्त admin chat मध्ये send होईल.")
 	return dispatcher.EndGroups
 }
 
@@ -371,6 +481,17 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	// Source channel मध्ये bot admin आहे का check करा
 	sourcePeerForSend := getChannelPeerIfBotAdmin(ctx, botClient, chatID)
 
+	// Send channel peer — /setsendchannel ने set केलेला
+	var sendChannelPeer *tg.InputPeerChannel
+	if scID, ok := getSendChannelID(); ok {
+		if peer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, scID); err == nil {
+			sendChannelPeer = &tg.InputPeerChannel{
+				ChannelID:  peer.ChannelID,
+				AccessHash: peer.AccessHash,
+			}
+		}
+	}
+
 	// ── Summary message ───────────────────────────────────────────────────────
 	totalMsgs := endMsg - startMsg + 1
 	rangeStr := ""
@@ -400,7 +521,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 	// ── Goroutine: process all messages ──────────────────────────────────────
 	go func() {
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), 120*time.Minute)
+		// No overall timeout — range complete होईपर्यंत चालू राहील
+		bgCtx, bgCancel := context.WithCancel(context.Background())
 		defer bgCancel()
 
 		var lastEdit time.Time
@@ -452,8 +574,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 		for msgID := startMsg; msgID <= endMsg; msgID++ {
 
+			// Context cancel (manual stop) तर exit
 			if bgCtx.Err() != nil {
-				sendTextMsg(fmt.Sprintf("⏰ Overall timeout (120min).\n✅ Done: %d | ⏭ Skipped: %d | ❌ Errors: %d", successCount, skipCount, errorCount))
+				sendTextMsg(fmt.Sprintf("🛑 Stopped.\n✅ Done: %d | ⏭ Skipped: %d | ❌ Errors: %d", successCount, skipCount, errorCount))
 				return
 			}
 
@@ -464,27 +587,53 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				successCount, skipCount, errorCount,
 			))
 
-			err := processSingleMessage(
-				bgCtx,
-				userbotClient,
-				botClient,
-				chatID,
-				chatIDRaw,
-				msgID,
-				topicID,
-				botPeer,
-				sourcePeerForSend,
-				editProgress,
-			)
+			// ── Retry logic: 2 attempts, मग skip ────────────────────────────
+			const maxRetries = 2
+			var err error
+			for attempt := 1; attempt <= maxRetries; attempt++ {
+				if bgCtx.Err() != nil {
+					break
+				}
+
+				if attempt > 1 {
+					editProgress(fmt.Sprintf(
+						"🔄 Retry %d/%d\n📌 Msg: `%d`",
+						attempt, maxRetries, msgID,
+					))
+					time.Sleep(5 * time.Second)
+				}
+
+				err = processSingleMessage(
+					bgCtx,
+					userbotClient,
+					botClient,
+					chatID,
+					chatIDRaw,
+					msgID,
+					topicID,
+					botPeer,
+					sourcePeerForSend,
+					sendChannelPeer,
+					editProgress,
+				)
+
+				if err == nil {
+					break // success — retry loop बाहेर
+				}
+
+				// Overall context cancel झाला असेल तर retry नको
+				if bgCtx.Err() != nil {
+					break
+				}
+			}
 
 			if err != nil {
 				errorCount++
-				// Error message admin ला पाठव, पण range continue करा
+				// सगळे retries संपले — skip करा, admin ला सांगा
 				sendTextMsg(fmt.Sprintf(
-					"❌ Msg `%d` failed:\n`%s`",
-					msgID, err.Error(),
+					"❌ Msg `%d` failed (retried %d times):\n`%s`",
+					msgID, maxRetries, err.Error(),
 				))
-				// Range मध्ये थोडा wait करा throttle साठी
 				if totalMsgs > 1 {
 					time.Sleep(2 * time.Second)
 				}
@@ -507,6 +656,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			return
 		}
 
+		// Range साठी — summary send करा
 		// Range साठी — summary send करा
 		sendTextMsg(fmt.Sprintf(
 			"✅ *Completed!*\n\n"+
@@ -531,12 +681,13 @@ func processSingleMessage(
 	bgCtx context.Context,
 	userbotClient *gotgproto.Client,
 	botClient *gotgproto.Client,
-	chatID int64,      // internal TG ID (negative)
-	chatIDRaw int64,   // user-facing positive ID (for display)
+	chatID int64,        // internal TG ID (negative)
+	chatIDRaw int64,     // user-facing positive ID (for display)
 	msgID int,
 	topicID int,
-	botPeer tg.InputPeerClass,          // admin chat peer
-	sourcePeer *tg.InputPeerChannel,    // source channel peer (nil if bot not admin)
+	botPeer tg.InputPeerClass,           // admin chat peer
+	sourcePeer *tg.InputPeerChannel,     // source channel peer (nil if bot not admin)
+	sendChannelPeer *tg.InputPeerChannel, // /setsendchannel peer (nil if not set)
 	editProgress func(string),
 ) error {
 
@@ -552,35 +703,70 @@ func processSingleMessage(
 
 	// ── Step 3: No media → text message copy ─────────────────────────────
 	if tgMsg.Media == nil {
-		textContent := fmt.Sprintf(
-			"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n\n%s",
-			chatIDRaw, msgID, finalCaption,
-		)
-		sendCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-		defer cancel()
+		// sendChannel set आहे का?
+		if sendChannelPeer != nil {
+			// sendChannel set → फक्त sendChannel + log channel ला send करा
+			// Admin ला फक्त progress/error दिसेल, msg नाही
 
-		_, err = botClient.API().MessagesSendMessage(sendCtx, &tg.MessagesSendMessageRequest{
-			Peer:     botPeer,
-			Message:  textContent,
-			RandomID: rand.Int63(),
-		})
-		if err != nil {
-			return fmt.Errorf("text send failed: %w", err)
-		}
-
-		// Source channel मध्ये पण send करा (text)
-		if sourcePeer != nil {
-			sendCtx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Minute)
-			defer cancel2()
-			sendReq := &tg.MessagesSendMessageRequest{
-				Peer:     sourcePeer,
+			// sendChannel ला send
+			scCtx, scCancel := context.WithTimeout(context.Background(), 1*time.Minute)
+			defer scCancel()
+			scReq := &tg.MessagesSendMessageRequest{
+				Peer:     sendChannelPeer,
 				Message:  finalCaption,
 				RandomID: rand.Int63(),
 			}
 			if topicID > 0 {
-				sendReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
+				scReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
 			}
-			_, _ = botClient.API().MessagesSendMessage(sendCtx2, sendReq)
+			_, _ = botClient.API().MessagesSendMessage(scCtx, scReq)
+
+			// Log channel ला send (text)
+			go func() {
+				lCtx, lCancel := context.WithTimeout(context.Background(), 1*time.Minute)
+				defer lCancel()
+				logCh, lerr := utils.GetLogChannelPeer(lCtx, botClient.API(), botClient.PeerStorage)
+				if lerr != nil {
+					return
+				}
+				_, _ = botClient.API().MessagesSendMessage(lCtx, &tg.MessagesSendMessageRequest{
+					Peer:     &tg.InputPeerChannel{ChannelID: logCh.ChannelID, AccessHash: logCh.AccessHash},
+					Message:  finalCaption,
+					RandomID: rand.Int63(),
+					Silent:   true,
+				})
+			}()
+		} else {
+			// sendChannel नाही → normal: admin ला send
+			textContent := fmt.Sprintf(
+				"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n\n%s",
+				chatIDRaw, msgID, finalCaption,
+			)
+			sendCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+			defer cancel()
+			_, err = botClient.API().MessagesSendMessage(sendCtx, &tg.MessagesSendMessageRequest{
+				Peer:     botPeer,
+				Message:  textContent,
+				RandomID: rand.Int63(),
+			})
+			if err != nil {
+				return fmt.Errorf("text send failed: %w", err)
+			}
+
+			// Source channel असेल तर तिथे पण
+			if sourcePeer != nil {
+				sendCtx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Minute)
+				defer cancel2()
+				sendReq := &tg.MessagesSendMessageRequest{
+					Peer:     sourcePeer,
+					Message:  finalCaption,
+					RandomID: rand.Int63(),
+				}
+				if topicID > 0 {
+					sendReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
+				}
+				_, _ = botClient.API().MessagesSendMessage(sendCtx2, sendReq)
+			}
 		}
 		return nil
 	}
@@ -652,7 +838,6 @@ func processSingleMessage(
 	}
 
 	// ── Step 5: Build media + attributes ─────────────────────────────────
-	// ── Step 5: Build media + attributes ─────────────────────────────────
 	attributes := []tg.DocumentAttributeClass{
 		&tg.DocumentAttributeFilename{FileName: file.FileName},
 	}
@@ -675,55 +860,81 @@ func processSingleMessage(
 		Attributes: attributes,
 	}
 
-	// Log channel copy (once per chatID+msgID)
-	if markCopied(chatID, msgID) {
-		go copyToLogChannelUploaded(tgMsg, inputMedia)
-	}
+	// ── Step 6 + 7 + 8: Send targets decide करा ────────────────────────
+	// sendChannel set आहे का?
+	if sendChannelPeer != nil {
+		// sendChannel set → फक्त sendChannel + log channel
+		// Admin ला फक्त progress/error, file नाही
 
-	// ── Step 6: Admin ला send ─────────────────────────────────────────────
-	adminCaption := fmt.Sprintf(
-		"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n📄 `%s`\n💾 %s\n🔒 Forward protected",
-		chatIDRaw, msgID, file.FileName, formatSize(file.FileSize),
-	)
-	// Caption replace admin message मध्ये पण apply करा
-	adminCaption = applyReplaces(adminCaption)
-
-	sendCtx, sendCancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer sendCancel()
-
-	_, err = botClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
-		Peer:       botPeer,
-		Media:      inputMedia,
-		Message:    adminCaption,
-		Noforwards: true,
-		RandomID:   rand.Int63(),
-	})
-	if err != nil {
-		return fmt.Errorf("send to admin failed: %w", err)
-	}
-
-	// ── Step 7: Source channel मध्ये send (bot admin असेल तर) ────────────
-	if sourcePeer != nil {
-		// Source channel साठी caption = original caption with replaces (no metadata)
-		channelCaption := finalCaption
-		if channelCaption == "" {
-			channelCaption = file.FileName
+		fileCaption := finalCaption
+		if fileCaption == "" {
+			fileCaption = file.FileName
 		}
 
-		sendCtx2, sendCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
-		defer sendCancel2()
-
-		chReq := &tg.MessagesSendMediaRequest{
-			Peer:     sourcePeer,
+		// sendChannel ला send
+		scCtx, scCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer scCancel()
+		scReq := &tg.MessagesSendMediaRequest{
+			Peer:     sendChannelPeer,
 			Media:    inputMedia,
-			Message:  channelCaption,
+			Message:  fileCaption,
 			RandomID: rand.Int63(),
 		}
-		// Topic असेल तर reply_to set करा
 		if topicID > 0 {
-			chReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
+			scReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
 		}
-		_, _ = botClient.API().MessagesSendMedia(sendCtx2, chReq)
+		_, _ = botClient.API().MessagesSendMedia(scCtx, scReq)
+
+		// Log channel ला send (copyToLogChannelUploaded)
+		if markCopied(chatID, msgID) {
+			go copyToLogChannelUploaded(tgMsg, inputMedia)
+		}
+	} else {
+		// sendChannel नाही → normal flow
+		// Log channel copy
+		if markCopied(chatID, msgID) {
+			go copyToLogChannelUploaded(tgMsg, inputMedia)
+		}
+
+		// Admin ला send (with metadata + noforwards)
+		adminCaption := fmt.Sprintf(
+			"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n📄 `%s`\n💾 %s\n🔒 Forward protected",
+			chatIDRaw, msgID, file.FileName, formatSize(file.FileSize),
+		)
+		adminCaption = applyReplaces(adminCaption)
+
+		sendCtx, sendCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer sendCancel()
+		_, err = botClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
+			Peer:       botPeer,
+			Media:      inputMedia,
+			Message:    adminCaption,
+			Noforwards: true,
+			RandomID:   rand.Int63(),
+		})
+		if err != nil {
+			return fmt.Errorf("send to admin failed: %w", err)
+		}
+
+		// Source channel असेल तर तिथे पण
+		if sourcePeer != nil {
+			channelCaption := finalCaption
+			if channelCaption == "" {
+				channelCaption = file.FileName
+			}
+			sendCtx2, sendCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer sendCancel2()
+			chReq := &tg.MessagesSendMediaRequest{
+				Peer:     sourcePeer,
+				Media:    inputMedia,
+				Message:  channelCaption,
+				RandomID: rand.Int63(),
+			}
+			if topicID > 0 {
+				chReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
+			}
+			_, _ = botClient.API().MessagesSendMedia(sendCtx2, chReq)
+		}
 	}
 
 	return nil
