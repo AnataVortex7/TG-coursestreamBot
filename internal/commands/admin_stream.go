@@ -2,6 +2,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -49,16 +50,24 @@ func getSendChannelID() (int64, bool) {
 
 // ── Thumbnail Store ───────────────────────────────────────────────────────────
 // /setthumbnail ने set केलेला photo — video upload साठी thumbnail
+// bytes म्हणून store — प्रत्येक upload ला fresh InputFile तयार करतो
+// (InputFile single-session reference असतो, reuse करता येत नाही)
 // Server restart वर reset होतो (in-memory only)
 
-var thumbnailStore sync.Map // key: "thumb", value: tg.InputFileClass
+var thumbnailStore sync.Map // key: "thumb", value: []byte
 
-func getStoredThumbnail() (tg.InputFileClass, bool) {
+func getStoredThumbnailBytes() ([]byte, bool) {
 	v, ok := thumbnailStore.Load("thumb")
 	if !ok {
 		return nil, false
 	}
-	return v.(tg.InputFileClass), true
+	return v.([]byte), true
+}
+
+// Thumbnail set आहे का check (bytes length > 0)
+func hasThumbnailStored() bool {
+	_, ok := thumbnailStore.Load("thumb")
+	return ok
 }
 
 // ── Register ──────────────────────────────────────────────────────────────────
@@ -407,14 +416,18 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 	}
 	defer readFile.Close()
 
-	up := uploader.NewUploader(botClient.API())
-	uploadedThumb, err := up.FromReader(upCtx, "thumbnail.jpg", readFile)
+	// Thumbnail bytes म्हणून store करा — प्रत्येक video upload ला fresh re-upload होईल
+	thumbBytes, err := io.ReadAll(readFile)
 	if err != nil {
-		reply(ctx, u, fmt.Sprintf("❌ Thumbnail upload failed: `%s`", err.Error()))
+		reply(ctx, u, fmt.Sprintf("❌ Thumbnail read failed: `%s`", err.Error()))
+		return dispatcher.EndGroups
+	}
+	if len(thumbBytes) == 0 {
+		reply(ctx, u, "❌ Thumbnail file empty आहे.")
 		return dispatcher.EndGroups
 	}
 
-	thumbnailStore.Store("thumb", uploadedThumb)
+	thumbnailStore.Store("thumb", thumbBytes)
 	reply(ctx, u, "✅ Thumbnail set!\n\nआता सगळ्या `/userbotdl` video uploads ला हा photo thumbnail म्हणून लागेल.\nकाढायला: /clearthumbnail")
 	return dispatcher.EndGroups
 }
@@ -422,8 +435,7 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 // ── /clearthumbnail ───────────────────────────────────────────────────────────
 
 func cmdClearThumbnail(ctx *ext.Context, u *ext.Update) error {
-	_, ok := getStoredThumbnail()
-	if !ok {
+	if !hasThumbnailStored() {
 		reply(ctx, u, "📸 कोणताही thumbnail set नाही.")
 		return dispatcher.EndGroups
 	}
@@ -435,8 +447,7 @@ func cmdClearThumbnail(ctx *ext.Context, u *ext.Update) error {
 // ── /showthumbnail ────────────────────────────────────────────────────────────
 
 func cmdShowThumbnail(ctx *ext.Context, u *ext.Update) error {
-	_, ok := getStoredThumbnail()
-	if !ok {
+	if !hasThumbnailStored() {
 		reply(ctx, u, "📸 कोणताही thumbnail set नाही.\nSet करायला: photo ला reply करून `/setthumbnail` पाठवा.")
 		return dispatcher.EndGroups
 	}
@@ -799,13 +810,25 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					NoWebpage: true,
 				})
 				if err == nil {
-					if upd, ok := sentSummary.(*tg.Updates); ok {
+					// MTProto response type multiple असू शकतो —
+					// सगळे handle करा नाहीतर summaryMsgID कधीच set होत नाही
+					switch upd := sentSummary.(type) {
+					case *tg.Updates:
 						for _, u := range upd.Updates {
 							if mu, ok := u.(*tg.UpdateMessageID); ok {
 								summaryMsgID = mu.ID
 								break
 							}
+							if mu, ok := u.(*tg.UpdateNewMessage); ok {
+								if m, ok := mu.Message.(*tg.Message); ok {
+									summaryMsgID = m.ID
+								}
+								break
+							}
 						}
+					case *tg.UpdateShortSentMessage:
+						// Bot chat मध्ये हा type येतो — direct ID असतो
+						summaryMsgID = upd.ID
 					}
 				}
 			} else {
@@ -1106,21 +1129,23 @@ func processSingleMessage(
 		}
 	}
 
-	// Thumbnail — फक्त video ला, error आला तरी process थांबवायची नाही
-	var thumbInput tg.InputFileClass
-	if isVideo {
-		if stored, ok := getStoredThumbnail(); ok {
-			thumbInput = stored
-		}
-	}
-
+	// Thumbnail — फक्त video ला, प्रत्येक upload साठी fresh re-upload
+	// (InputFile reference single-use असतो — bytes store करून re-upload safe)
 	inputMedia := &tg.InputMediaUploadedDocument{
 		File:       uploadedFile,
 		MimeType:   file.MimeType,
 		Attributes: attributes,
 	}
-	if thumbInput != nil {
-		inputMedia.SetThumb(thumbInput)
+	if isVideo {
+		if thumbBytes, ok := getStoredThumbnailBytes(); ok && len(thumbBytes) > 0 {
+			thumbUpCtx, thumbUpCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer thumbUpCancel()
+			thumbUp := uploader.NewUploader(botClient.API())
+			freshThumb, thumbErr := thumbUp.FromReader(thumbUpCtx, "thumbnail.jpg", bytes.NewReader(thumbBytes))
+			if thumbErr == nil {
+				inputMedia.SetThumb(freshThumb)
+			}
+		}
 	}
 
 	// ── Step 6 + 7 + 8: Send targets decide करा ────────────────────────
@@ -1266,6 +1291,7 @@ func getChannelPeerIfBotAdmin(
 	return nil
 }
 
+// ── downloadAndReupload ───────────────────────────────────────────────────────
 // ── downloadAndReupload ───────────────────────────────────────────────────────
 
 func downloadAndReupload(
