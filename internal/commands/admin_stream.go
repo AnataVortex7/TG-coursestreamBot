@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -892,10 +893,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			}
 
 			successCount++
-			// प्रत्येक 5 success नंतर summary update करा
-			if successCount%5 == 0 {
-				updateSummary()
-			}
+			updateSummary()
 
 			// Range मध्ये messages मध्ये थोडा gap द्या Telegram throttle टाळायला
 			if totalMsgs > 1 && msgID < endMsg {
@@ -1095,6 +1093,18 @@ func processSingleMessage(
 			}
 		}
 	}
+	// Fallback: attribute नसला तरी MIME / extension वरून detect करा
+	if !isVideo {
+		mime := strings.ToLower(file.MimeType)
+		if strings.HasPrefix(mime, "video/") {
+			isVideo = true
+		} else {
+			switch strings.ToLower(filepath.Ext(file.FileName)) {
+			case ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v", ".ts", ".3gp":
+				isVideo = true
+			}
+		}
+	}
 
 	// Thumbnail — फक्त video ला, error आला तरी process थांबवायची नाही
 	var thumbInput tg.InputFileClass
@@ -1110,7 +1120,7 @@ func processSingleMessage(
 		Attributes: attributes,
 	}
 	if thumbInput != nil {
-		inputMedia.Thumb = thumbInput
+		inputMedia.SetThumb(thumbInput)
 	}
 
 	// ── Step 6 + 7 + 8: Send targets decide करा ────────────────────────
