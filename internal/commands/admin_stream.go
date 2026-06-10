@@ -933,6 +933,49 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ── processSingleMessage ──────────────────────────────────────────────────────
+// inputMediaDocFromUpdates — पहिल्या MessagesSendMedia च्या result मधून
+// InputMediaDocument काढतो. InputFile single-use असल्याने log/source channel
+// ला second send साठी हे वापरायला हवे.
+func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
+	if result == nil {
+		return nil
+	}
+	var updates []tg.UpdateClass
+	switch u := result.(type) {
+	case *tg.Updates:
+		updates = u.Updates
+	case *tg.UpdatesCombined:
+		updates = u.Updates
+	}
+	for _, upd := range updates {
+		var m *tg.Message
+		switch u := upd.(type) {
+		case *tg.UpdateNewMessage:
+			if msg, ok := u.Message.(*tg.Message); ok {
+				m = msg
+			}
+		case *tg.UpdateNewChannelMessage:
+			if msg, ok := u.Message.(*tg.Message); ok {
+				m = msg
+			}
+		}
+		if m != nil {
+			if mmd, ok := m.Media.(*tg.MessageMediaDocument); ok {
+				if d, ok := mmd.Document.(*tg.Document); ok {
+					return &tg.InputMediaDocument{
+						ID: &tg.InputDocument{
+							ID:            d.ID,
+							AccessHash:    d.AccessHash,
+							FileReference: d.FileReference,
+						},
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // एका message साठी: fetch → (download+reupload if media) → send to targets
 // error return केल्यास caller error count वाढवतो आणि continue करतो
 
@@ -1207,20 +1250,18 @@ func processSingleMessage(
 		if topicID > 0 {
 			scReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
 		}
-		_, _ = botClient.API().MessagesSendMedia(scCtx, scReq)
+		scResult, _ := botClient.API().MessagesSendMedia(scCtx, scReq)
 
-		// Log channel ला send (copyToLogChannelUploaded)
+		// Log channel: InputFile consumed झाल्याने doc reference वापरतो
 		if markCopied(chatID, msgID) {
-			go copyToLogChannelUploaded(tgMsg, inputMedia)
+			logMedia := tg.InputMediaClass(inputMedia)
+			if dm := inputMediaDocFromUpdates(scResult); dm != nil {
+				logMedia = dm
+			}
+			go copyToLogChannelUploaded(tgMsg, logMedia)
 		}
 	} else {
-		// sendChannel नाही → normal flow
-		// Log channel copy
-		if markCopied(chatID, msgID) {
-			go copyToLogChannelUploaded(tgMsg, inputMedia)
-		}
-
-		// Admin ला send (with metadata + noforwards)
+		// sendChannel नाही → admin ला send करा, नंतर log channel
 		adminCaption := fmt.Sprintf(
 			"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n📄 `%s`\n💾 %s\n🔒 Forward protected",
 			chatIDRaw, msgID, file.FileName, formatSize(file.FileSize),
@@ -1229,7 +1270,7 @@ func processSingleMessage(
 
 		sendCtx, sendCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer sendCancel()
-		_, err = botClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
+		adminResult, err := botClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
 			Peer:       botPeer,
 			Media:      inputMedia,
 			Message:    adminCaption,
@@ -1238,6 +1279,16 @@ func processSingleMessage(
 		})
 		if err != nil {
 			return fmt.Errorf("send to admin failed: %w", err)
+		}
+
+		// Log + source channel: admin send नंतर doc reference वापरतो
+		logMedia := tg.InputMediaClass(inputMedia)
+		if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
+			logMedia = dm
+		}
+
+		if markCopied(chatID, msgID) {
+			go copyToLogChannelUploaded(tgMsg, logMedia)
 		}
 
 		// Source channel असेल तर तिथे पण
@@ -1250,7 +1301,7 @@ func processSingleMessage(
 			defer sendCancel2()
 			chReq := &tg.MessagesSendMediaRequest{
 				Peer:     sourcePeer,
-				Media:    inputMedia,
+				Media:    logMedia,
 				Message:  channelCaption,
 				RandomID: rand.Int63(),
 			}
