@@ -1129,22 +1129,58 @@ func processSingleMessage(
 		}
 	}
 
-	// Thumbnail — फक्त video ला, प्रत्येक upload साठी fresh re-upload
-	// (InputFile reference single-use असतो — bytes store करून re-upload safe)
+	// ── Thumbnail ──────────────────────────────────────────────────────────
+	// Priority 1: User's /setthumbnail bytes
+	// Priority 2: Original document's own thumbnail (extracted via userbot)
+	var thumbSrc []byte
+	if b, ok := getStoredThumbnailBytes(); ok && len(b) > 0 {
+		thumbSrc = b
+	} else if isVideo {
+		// Source doc thumbnail extract करा
+		if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
+			if d, ok := doc.Document.(*tg.Document); ok {
+				var bestType string
+				var bestW int
+				for _, sz := range d.Thumbs {
+					if ps, ok := sz.(*tg.PhotoSize); ok && ps.W > bestW {
+						bestW = ps.W
+						bestType = ps.Type
+					}
+				}
+				if bestType != "" {
+					loc := &tg.InputDocumentFileLocation{
+						ID:            d.ID,
+						AccessHash:    d.AccessHash,
+						FileReference: d.FileReference,
+						ThumbSize:     bestType,
+					}
+					dlCtx, dlCancel := context.WithTimeout(bgCtx, 30*time.Second)
+					defer dlCancel()
+					var buf bytes.Buffer
+					if _, dlErr := downloader.NewDownloader().Download(userbotClient.API(), loc).Stream(dlCtx, &buf); dlErr == nil {
+						thumbSrc = buf.Bytes()
+					}
+				}
+			}
+		}
+	}
+
 	inputMedia := &tg.InputMediaUploadedDocument{
 		File:       uploadedFile,
 		MimeType:   file.MimeType,
 		Attributes: attributes,
 	}
-	if isVideo {
-		if thumbBytes, ok := getStoredThumbnailBytes(); ok && len(thumbBytes) > 0 {
-			thumbUpCtx, thumbUpCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer thumbUpCancel()
-			thumbUp := uploader.NewUploader(botClient.API())
-			freshThumb, thumbErr := thumbUp.FromReader(thumbUpCtx, "thumbnail.jpg", bytes.NewReader(thumbBytes))
-			if thumbErr == nil {
-				inputMedia.SetThumb(freshThumb)
-			}
+	if isVideo && len(thumbSrc) > 0 {
+		thumbUpCtx, thumbUpCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer thumbUpCancel()
+		freshThumb, thumbErr := uploader.NewUploader(botClient.API()).FromReader(
+			thumbUpCtx, "thumb.jpg", bytes.NewReader(thumbSrc),
+		)
+		if thumbErr == nil {
+			inputMedia.SetThumb(freshThumb)
+		} else {
+			// Error visible करा जेणेकरून debug होईल
+			editProgress(fmt.Sprintf("⚠️ Thumb upload failed: %v", thumbErr))
 		}
 	}
 
@@ -1291,7 +1327,6 @@ func getChannelPeerIfBotAdmin(
 	return nil
 }
 
-// ── downloadAndReupload ───────────────────────────────────────────────────────
 // ── downloadAndReupload ───────────────────────────────────────────────────────
 
 func downloadAndReupload(
