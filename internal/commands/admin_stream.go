@@ -1606,7 +1606,7 @@ func downloadWatermarkAndReupload(
 		outputPath,
 	}
 
-	ffmpegCtx, ffmpegCancel := context.WithTimeout(upCtx, 25*time.Minute)
+	ffmpegCtx, ffmpegCancel := context.WithTimeout(upCtx, 4*time.Hour)
 	defer ffmpegCancel()
 
 	cmd := exec.CommandContext(ffmpegCtx, "ffmpeg", args...)
