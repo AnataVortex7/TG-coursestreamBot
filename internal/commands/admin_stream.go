@@ -1584,11 +1584,11 @@ func downloadWatermarkAndReupload(
 	// - copy codec (no re-encode) — fast processing
 	// Note: fontconfig available असेल तर font=sans पण चालेल
 	drawtextFilter := fmt.Sprintf(
-		"drawtext=text='%s':"+
-			"fontcolor=white:"+
-			"fontsize=36:"+
-			"box=1:boxcolor=black@0.4:boxborderw=8:"+
-			"x=w-tw-20:y=h-th-20",
+        "drawtext=text='%s':"+
+            "fontcolor=white:"+
+            "fontsize=36:"+
+            "shadowcolor=black:shadowx=2:shadowy=2:"+
+            "x=w-tw-20:y=h-th-20",
 		strings.ReplaceAll(wmText, "'", "\\'"), // single quote escape
 	)
 
@@ -1600,7 +1600,7 @@ func downloadWatermarkAndReupload(
 		"-c:a", "copy",     // audio copy
 		"-c:v", "libx264",  // video re-encode (drawtext साठी आवश्यक)
 		"-preset", "ultrafast", // fastest encoding
-		"-crf", "23",       // quality — 23 = good balance
+		"-crf", "28",       // quality — 28 = good balance
 		"-movflags", "+faststart",
 		"-y", // overwrite
 		outputPath,
