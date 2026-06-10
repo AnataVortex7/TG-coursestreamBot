@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"os/exec"
 	"strconv"
 	"path/filepath"
 	"strings"
@@ -28,16 +29,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// ── Caption Replace Store (server memory only) ────────────────────────────────
-// Key: original word, Value: replacement word
-// sync.Map — concurrent safe, no DB needed
-
+// ── Caption Replace Store ─────────────────────────────────────────────────────
 var captionReplaceStore sync.Map // map[string]string
 
 // ── Send Channel Store ────────────────────────────────────────────────────────
-// /userbotdl चे files + text msgs या channel ला पण send होतात
-// Server restart वर reset होतो (in-memory only)
-
 var sendChannelStore sync.Map // key: "id", value: int64
 
 func getSendChannelID() (int64, bool) {
@@ -49,11 +44,6 @@ func getSendChannelID() (int64, bool) {
 }
 
 // ── Thumbnail Store ───────────────────────────────────────────────────────────
-// /setthumbnail ने set केलेला photo — video upload साठी thumbnail
-// bytes म्हणून store — प्रत्येक upload ला fresh InputFile तयार करतो
-// (InputFile single-session reference असतो, reuse करता येत नाही)
-// Server restart वर reset होतो (in-memory only)
-
 var thumbnailStore sync.Map // key: "thumb", value: []byte
 
 func getStoredThumbnailBytes() ([]byte, bool) {
@@ -64,9 +54,57 @@ func getStoredThumbnailBytes() ([]byte, bool) {
 	return v.([]byte), true
 }
 
-// Thumbnail set आहे का check (bytes length > 0)
 func hasThumbnailStored() bool {
 	_, ok := thumbnailStore.Load("thumb")
+	return ok
+}
+
+// ── Watermark Store ───────────────────────────────────────────────────────────
+// /setwatermark ने set केलेला text — video वर bottom-right corner मध्ये overlay
+// Server restart वर reset होतो (in-memory only)
+
+var watermarkStore sync.Map // key: "text", value: string
+
+func getWatermarkText() (string, bool) {
+	v, ok := watermarkStore.Load("text")
+	if !ok {
+		return "", false
+	}
+	return v.(string), true
+}
+
+func hasWatermark() bool {
+	_, ok := watermarkStore.Load("text")
+	return ok
+}
+
+// ── Stop Store ────────────────────────────────────────────────────────────────
+// चालू असलेल्या /userbotdl process ला cancel करायला
+// key: "cancel", value: context.CancelFunc
+
+var activeProcessStore sync.Map // key: "cancel", value: context.CancelFunc
+
+func setActiveCancel(cancel context.CancelFunc) {
+	activeProcessStore.Store("cancel", cancel)
+}
+
+func clearActiveCancel() {
+	activeProcessStore.Delete("cancel")
+}
+
+func stopActiveProcess() bool {
+	v, ok := activeProcessStore.Load("cancel")
+	if !ok {
+		return false
+	}
+	cancel := v.(context.CancelFunc)
+	cancel()
+	activeProcessStore.Delete("cancel")
+	return true
+}
+
+func hasActiveProcess() bool {
+	_, ok := activeProcessStore.Load("cancel")
 	return ok
 }
 
@@ -74,10 +112,11 @@ func hasThumbnailStored() bool {
 
 func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 	log := m.log.Named("admin_stream")
-	defer log.Sugar().Info("Loaded /adminstream /userbotdl /setreplace /listreplace /delreplace /clearreplace /setsendchannel /showsendchannel /clearsendchannel commands")
+	defer log.Sugar().Info("Loaded /adminstream /userbotdl /stopuserbotdl /setreplace /listreplace /delreplace /clearreplace /setsendchannel /showsendchannel /clearsendchannel /setthumbnail /clearthumbnail /showthumbnail /setwatermark /clearwatermark /showwatermark commands")
 
 	d.AddHandler(handlers.NewCommand("adminstream", adminOnly(cmdAdminStream)))
 	d.AddHandler(handlers.NewCommand("userbotdl", adminOnly(cmdUserbotDL)))
+	d.AddHandler(handlers.NewCommand("stopuserbotdl", adminOnly(cmdStopUserbotDL)))
 	d.AddHandler(handlers.NewCommand("setreplace", adminOnly(cmdSetReplace)))
 	d.AddHandler(handlers.NewCommand("listreplace", adminOnly(cmdListReplace)))
 	d.AddHandler(handlers.NewCommand("delreplace", adminOnly(cmdDelReplace)))
@@ -88,12 +127,89 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("setthumbnail", adminOnly(cmdSetThumbnail)))
 	d.AddHandler(handlers.NewCommand("clearthumbnail", adminOnly(cmdClearThumbnail)))
 	d.AddHandler(handlers.NewCommand("showthumbnail", adminOnly(cmdShowThumbnail)))
+	d.AddHandler(handlers.NewCommand("setwatermark", adminOnly(cmdSetWatermark)))
+	d.AddHandler(handlers.NewCommand("clearwatermark", adminOnly(cmdClearWatermark)))
+	d.AddHandler(handlers.NewCommand("showwatermark", adminOnly(cmdShowWatermark)))
+}
+
+// ── /stopuserbotdl ────────────────────────────────────────────────────────────
+// सध्या चालू असलेला /userbotdl process cancel करतो.
+// फक्त current running process थांबवतो — complete झालेले messages undo होत नाहीत.
+
+func cmdStopUserbotDL(ctx *ext.Context, u *ext.Update) error {
+	if !hasActiveProcess() {
+		reply(ctx, u, "⚠️ सध्या कोणताही `/userbotdl` process चालू नाही.")
+		return dispatcher.EndGroups
+	}
+	stopped := stopActiveProcess()
+	if stopped {
+		reply(ctx, u, "🛑 `/userbotdl` process stop केला!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.")
+	} else {
+		reply(ctx, u, "⚠️ Process आधीच थांबला होता.")
+	}
+	return dispatcher.EndGroups
+}
+
+// ── /setwatermark <text> ──────────────────────────────────────────────────────
+// Video uploads वर bottom-right corner मध्ये text watermark overlay करतो.
+// Usage: /setwatermark @yourchannel
+
+func cmdSetWatermark(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	if len(a) < 1 {
+		cur, ok := getWatermarkText()
+		if ok {
+			reply(ctx, u, fmt.Sprintf(
+				"💧 *Watermark*\n\nसध्या set: `%s`\n\nबदलायला: `/setwatermark <text>`\nकाढायला: /clearwatermark",
+				cur,
+			))
+		} else {
+			reply(ctx, u,
+				"💧 *Usage:* `/setwatermark <text>`\n\n"+
+					"Example: `/setwatermark @yourchannel`\n\n"+
+					"Video uploads वर bottom-right corner मध्ये हा text दिसेल.\n"+
+					"⚠️ FFmpeg लागतो — processing time जास्त असू शकतो.")
+		}
+		return dispatcher.EndGroups
+	}
+
+	text := strings.Join(a, " ")
+	watermarkStore.Store("text", text)
+	reply(ctx, u, fmt.Sprintf(
+		"✅ Watermark set!\n\n💧 Text: `%s`\n\nआता सगळ्या `/userbotdl` video uploads वर हा watermark लागेल.\nकाढायला: /clearwatermark",
+		text,
+	))
+	return dispatcher.EndGroups
+}
+
+// ── /clearwatermark ───────────────────────────────────────────────────────────
+
+func cmdClearWatermark(ctx *ext.Context, u *ext.Update) error {
+	if !hasWatermark() {
+		reply(ctx, u, "💧 कोणताही watermark set नाही.")
+		return dispatcher.EndGroups
+	}
+	watermarkStore.Delete("text")
+	reply(ctx, u, "✅ Watermark clear केला. Video uploads आता watermark शिवाय जातील.")
+	return dispatcher.EndGroups
+}
+
+// ── /showwatermark ────────────────────────────────────────────────────────────
+
+func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
+	text, ok := getWatermarkText()
+	if !ok {
+		reply(ctx, u, "💧 कोणताही watermark set नाही.\nSet करायला: `/setwatermark <text>`")
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u, fmt.Sprintf(
+		"💧 *Watermark*\n\nText: `%s`\nPosition: Bottom-right corner\n\nकाढायला: /clearwatermark",
+		text,
+	))
+	return dispatcher.EndGroups
 }
 
 // ── /setreplace <old=new> [old2=new2] ... ─────────────────────────────────────
-// Caption मधील words replace करायचे rules set करतो.
-// Usage: /setreplace hello=नमस्ते bot=बॉट
-// Multiple pairs एकाच command मध्ये देता येतात.
 
 func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
@@ -186,16 +302,12 @@ func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ── /setsendchannel <channelID> ──────────────────────────────────────────────
-// /userbotdl चे सगळे files + text msgs या channel ला पण send होतात
-// Channel ID: t.me/c/ वरील positive number (उदा. 2479194095)
-// Bot त्या channel चा owner/admin असणे आवश्यक आहे
 
 func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 1 {
 		curID, ok := getSendChannelID()
 		if ok {
-			// internal format → user-facing positive ID
 			displayID := -(curID + 1000000000000)
 			reply(ctx, u, fmt.Sprintf(
 				"📢 *Send Channel*\n\nSध्या set: `%d`\n\nबदलायला: `/setsendchannel <channelID>`\nकाढायला: /clearsendchannel",
@@ -218,10 +330,8 @@ func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Convert to internal TG format
 	internalID := -1000000000000 - rawID
 
-	// Bot access check
 	botClient := MainBotClient
 	if botClient == nil {
 		reply(ctx, u, "❌ Bot client चालू नाही.")
@@ -279,8 +389,7 @@ func cmdClearSendChannel(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ── /setthumbnail ────────────────────────────────────────────────────────────
-// Photo reply करा command ला → तो photo सगळ्या video uploads चा thumbnail होतो
-// Usage: photo ला reply करून /setthumbnail पाठवा
+// [FIX] Channel peer fetch robust केला — type switch improve केला
 
 func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 	tgMsg := u.EffectiveMessage.Message
@@ -289,7 +398,6 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// ReplyTo header मिळवा
 	replyHeader, ok := tgMsg.ReplyTo.(*tg.MessageReplyHeader)
 	if !ok || replyHeader == nil {
 		reply(ctx, u, "📸 *Usage:* एखाद्या photo ला reply करून `/setthumbnail` पाठवा.\n\nतो photo सगळ्या `/userbotdl` video uploads चा thumbnail होईल.")
@@ -304,17 +412,18 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// Reply message fetch करा — same chat मधून
 	chatID := u.EffectiveChat().GetID()
 	fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer fetchCancel()
 
-	inputPeer := botClient.PeerStorage.GetInputPeerById(chatID)
+	// [FIX] Chat type detect करून correct API call वापरा
+	// GetInputPeerById चा result check करा — channel असेल तर ChannelsGetMessages
 	var replyMsg *tg.Message
 
-	// Chat type नुसार fetch
+	inputPeer := botClient.PeerStorage.GetInputPeerById(chatID)
 	switch peer := inputPeer.(type) {
 	case *tg.InputPeerChannel:
+		// Channel / supergroup — ChannelsGetMessages वापरा
 		res, err := botClient.API().ChannelsGetMessages(fetchCtx, &tg.ChannelsGetMessagesRequest{
 			Channel: &tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
 			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: replyMsgID}},
@@ -323,8 +432,8 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 			reply(ctx, u, fmt.Sprintf("❌ Reply message fetch failed: `%s`", err.Error()))
 			return dispatcher.EndGroups
 		}
-		msgs := res.(*tg.MessagesChannelMessages)
-		if len(msgs.Messages) == 0 {
+		msgs, ok := res.(*tg.MessagesChannelMessages)
+		if !ok || len(msgs.Messages) == 0 {
 			reply(ctx, u, "❌ Reply message सापडला नाही.")
 			return dispatcher.EndGroups
 		}
@@ -334,8 +443,9 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 			return dispatcher.EndGroups
 		}
 		replyMsg = m
-	default:
-		// Private chat / group
+
+	case *tg.InputPeerChat:
+		// Group chat — MessagesGetMessages वापरा
 		res, err := botClient.API().MessagesGetMessages(fetchCtx, []tg.InputMessageClass{
 			&tg.InputMessageID{ID: replyMsgID},
 		})
@@ -354,6 +464,42 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 			return dispatcher.EndGroups
 		}
 		replyMsg = m
+
+	case *tg.InputPeerUser:
+		// Private chat (DM)
+		res, err := botClient.API().MessagesGetMessages(fetchCtx, []tg.InputMessageClass{
+			&tg.InputMessageID{ID: replyMsgID},
+		})
+		if err != nil {
+			reply(ctx, u, fmt.Sprintf("❌ Reply message fetch failed: `%s`", err.Error()))
+			return dispatcher.EndGroups
+		}
+		// Private chat मध्ये MessagesMessages किंवा MessagesSlice येतो
+		var msgs []tg.MessageClass
+		switch r := res.(type) {
+		case *tg.MessagesMessages:
+			msgs = r.Messages
+		case *tg.MessagesMessagesSlice:
+			msgs = r.Messages
+		default:
+			reply(ctx, u, "❌ Reply message response type unknown.")
+			return dispatcher.EndGroups
+		}
+		if len(msgs) == 0 {
+			reply(ctx, u, "❌ Reply message सापडला नाही.")
+			return dispatcher.EndGroups
+		}
+		m, ok := msgs[0].(*tg.Message)
+		if !ok {
+			reply(ctx, u, "❌ Reply message invalid आहे.")
+			return dispatcher.EndGroups
+		}
+		replyMsg = m
+
+	default:
+		// Fallback — unknown peer type
+		reply(ctx, u, fmt.Sprintf("❌ Chat peer type unknown: `%T`\nBot ला या chat मध्ये access नाही का?", inputPeer))
+		return dispatcher.EndGroups
 	}
 
 	// Photo check
@@ -389,7 +535,6 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 		ThumbSize:     biggestSize.Type,
 	}
 
-	// Download → temp file → upload
 	upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer upCancel()
 
@@ -416,7 +561,6 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 	}
 	defer readFile.Close()
 
-	// Thumbnail bytes म्हणून store करा — प्रत्येक video upload ला fresh re-upload होईल
 	thumbBytes, err := io.ReadAll(readFile)
 	if err != nil {
 		reply(ctx, u, fmt.Sprintf("❌ Thumbnail read failed: `%s`", err.Error()))
@@ -456,8 +600,6 @@ func cmdShowThumbnail(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ── applyReplaces ─────────────────────────────────────────────────────────────
-// Caption मधील सर्व registered words replace करतो.
-// Case-sensitive, exact substring replace.
 
 func applyReplaces(caption string) string {
 	captionReplaceStore.Range(func(k, v interface{}) bool {
@@ -467,6 +609,7 @@ func applyReplaces(caption string) string {
 	return caption
 }
 
+// ── /adminstream <messageID> ──────────────────────────────────────────────────
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
 
 func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
@@ -558,27 +701,10 @@ func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // /userbotdl — Main Command
-//
-// Formats:
-//   /userbotdl <chatID> <msgID>              → single message
-//   /userbotdl <chatID> <start> <end>        → range, no topic
-//   /userbotdl <chatID> <topicID> <start> <end> → topic + range
-//
-// Features:
-//   - Single / Range support
-//   - Caption replace (captionReplaceStore मधील rules apply होतात)
-//   - Bot admin असलेल्या channel/group मध्ये पण send
-//   - Full error handling per message
 // ══════════════════════════════════════════════════════════════════════════════
 
 func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
-
-	// ── Argument Parsing ──────────────────────────────────────────────────────
-	//
-	// Format 1: /userbotdl <chatID> <msgID>           → len(a)==2
-	// Format 2: /userbotdl <chatID> <start> <end>     → len(a)==3
-	// Format 3: /userbotdl <chatID> <topic> <start> <end> → len(a)==4
 
 	if len(a) < 2 {
 		reply(ctx, u,
@@ -594,7 +720,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				"`/userbotdl 2479194095 100 200`\n"+
 				"`/userbotdl 2479194095 123 100 200`\n\n"+
 				"Caption replace rules: /listreplace\n"+
-				"Rules add करा: `/setreplace old=new`")
+				"Rules add करा: `/setreplace old=new`\n"+
+				"Stop करायला: /stopuserbotdl")
 		return dispatcher.EndGroups
 	}
 
@@ -604,7 +731,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ Invalid chatID.\nt.me/c/ वरील positive ID वापरा.\nExample: `2479194095`")
 		return dispatcher.EndGroups
 	}
-	// Telegram internal channel ID format
 	var chatID int64
 	if chatIDRaw > 0 {
 		chatID = -1000000000000 - chatIDRaw
@@ -612,13 +738,12 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		chatID = chatIDRaw
 	}
 
-	var topicID int    // 0 = no topic
+	var topicID int
 	var startMsg int
 	var endMsg int
 
 	switch len(a) {
 	case 2:
-		// Single message: /userbotdl <chatID> <msgID>
 		msgID, err := strconv.Atoi(a[1])
 		if err != nil || msgID < 1 {
 			reply(ctx, u, "❌ Invalid messageID. Positive number असायला हवे.")
@@ -628,7 +753,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		endMsg = msgID
 
 	case 3:
-		// Range: /userbotdl <chatID> <start> <end>
 		s, err1 := strconv.Atoi(a[1])
 		e, err2 := strconv.Atoi(a[2])
 		if err1 != nil || err2 != nil || s < 1 || e < 1 {
@@ -643,7 +767,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		endMsg = e
 
 	case 4:
-		// Topic + Range: /userbotdl <chatID> <topicID> <start> <end>
 		t, err1 := strconv.Atoi(a[1])
 		s, err2 := strconv.Atoi(a[2])
 		e, err3 := strconv.Atoi(a[3])
@@ -664,7 +787,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// ── Client checks ─────────────────────────────────────────────────────────
 	userbotClient := MainUserbotClient
 	if userbotClient == nil {
 		reply(ctx, u, "❌ Userbot चालू नाही. Admin ला सांगा userbot session set करायला.")
@@ -676,16 +798,18 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	// ── Determine send targets ────────────────────────────────────────────────
-	// 1. Admin chat (जिथून command आला) — नेहमी
-	// 2. Bot ज्या channel/group मध्ये admin आहे त्या source channel — optional
+	// आधी एखादा process चालू असेल तर warn करा
+	if hasActiveProcess() {
+		reply(ctx, u, "⚠️ आधीच एक `/userbotdl` process चालू आहे.\nथांबवायला: /stopuserbotdl\n\nनवीन process सुरू होत आहे...")
+		stopActiveProcess()
+		time.Sleep(500 * time.Millisecond)
+	}
+
 	adminChatID := u.EffectiveChat().GetID()
 	botPeer := botClient.PeerStorage.GetInputPeerById(adminChatID)
 
-	// Source channel मध्ये bot admin आहे का check करा
 	sourcePeerForSend := getChannelPeerIfBotAdmin(ctx, botClient, chatID)
 
-	// Send channel peer — /setsendchannel ने set केलेला
 	var sendChannelPeer *tg.InputPeerChannel
 	if scID, ok := getSendChannelID(); ok {
 		if peer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, scID); err == nil {
@@ -696,7 +820,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		}
 	}
 
-	// ── Summary message ───────────────────────────────────────────────────────
 	totalMsgs := endMsg - startMsg + 1
 	rangeStr := ""
 	if startMsg == endMsg {
@@ -712,10 +835,14 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	if sourcePeerForSend != nil {
 		channelStr = "\n📢 Source channel मध्ये पण send होईल (bot admin आहे)"
 	}
+	watermarkStr := ""
+	if wmText, ok := getWatermarkText(); ok {
+		watermarkStr = fmt.Sprintf("\n💧 Watermark: `%s`", wmText)
+	}
 
 	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
-		"⏳ Starting...\n📡 Channel: `%d`\n📋 %s%s%s",
-		chatIDRaw, rangeStr, topicStr, channelStr,
+		"⏳ Starting...\n📡 Channel: `%d`\n📋 %s%s%s%s\n\n🛑 Stop: /stopuserbotdl",
+		chatIDRaw, rangeStr, topicStr, channelStr, watermarkStr,
 	)), nil)
 
 	sentMsgID := 0
@@ -725,9 +852,13 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 	// ── Goroutine: process all messages ──────────────────────────────────────
 	go func() {
-		// No overall timeout — range complete होईपर्यंत चालू राहील
+		// [NEW] Cancel context — /stopuserbotdl ने cancel करता येतो
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		defer bgCancel()
+		setActiveCancel(bgCancel)
+		defer func() {
+			bgCancel()
+			clearActiveCancel()
+		}()
 
 		var lastEdit time.Time
 
@@ -760,22 +891,24 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			})
 		}
 
-		// ── Process each message in range ─────────────────────────────────
 		successCount := 0
-		skipCount    := 0
-		errorCount   := 0
+		skipCount := 0
+		errorCount := 0
+		stopped := false
 
-		// Summary message — एकच message, edit होत राहील
 		summaryMsgID := 0
-		// errorLines: map[errorText] -> []msgID (same error group करायला)
 		errorLines := make(map[string][]int)
-		errorOrder := []string{} // insertion order
+		errorOrder := []string{}
 
 		buildSummaryText := func() string {
+			statusLine := ""
+			if stopped {
+				statusLine = "\n🛑 *Process stopped*"
+			}
 			s := fmt.Sprintf(
-				"📊 *Summary*\n📡 `%d` | Range: `%d`→`%d`\n\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d",
+				"📊 *Summary*\n📡 `%d` | Range: `%d`→`%d`\n\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d%s",
 				chatIDRaw, startMsg, endMsg,
-				successCount, skipCount, errorCount,
+				successCount, skipCount, errorCount, statusLine,
 			)
 			if len(errorLines) > 0 {
 				s += "\n\n*Errors:*"
@@ -784,7 +917,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					if len(ids) == 1 {
 						s += fmt.Sprintf("\n• Msg `%d` — `%s`", ids[0], errText)
 					} else {
-						// Multiple same errors — group करा
 						idStrs := make([]string, len(ids))
 						for i, id := range ids {
 							idStrs[i] = fmt.Sprintf("`%d`", id)
@@ -797,10 +929,10 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			return s
 		}
 
+		// [FIX] summaryMsgID parse — सगळे possible update types handle करतो
 		updateSummary := func() {
 			text := buildSummaryText()
 			if summaryMsgID == 0 {
-				// पहिल्यांदा send करा
 				sCtx, sCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer sCancel()
 				sentSummary, err := botClient.API().MessagesSendMessage(sCtx, &tg.MessagesSendMessageRequest{
@@ -810,29 +942,10 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					NoWebpage: true,
 				})
 				if err == nil {
-					// MTProto response type multiple असू शकतो —
-					// सगळे handle करा नाहीतर summaryMsgID कधीच set होत नाही
-					switch upd := sentSummary.(type) {
-					case *tg.Updates:
-						for _, u := range upd.Updates {
-							if mu, ok := u.(*tg.UpdateMessageID); ok {
-								summaryMsgID = mu.ID
-								break
-							}
-							if mu, ok := u.(*tg.UpdateNewMessage); ok {
-								if m, ok := mu.Message.(*tg.Message); ok {
-									summaryMsgID = m.ID
-								}
-								break
-							}
-						}
-					case *tg.UpdateShortSentMessage:
-						// Bot chat मध्ये हा type येतो — direct ID असतो
-						summaryMsgID = upd.ID
-					}
+					// [FIX] सगळे MTProto update types handle करा
+					summaryMsgID = extractMessageID(sentSummary)
 				}
 			} else {
-				// Edit करा
 				eCtx, eCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer eCancel()
 				_, _ = botClient.API().MessagesEditMessage(eCtx, &tg.MessagesEditMessageRequest{
@@ -846,8 +959,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 		for msgID := startMsg; msgID <= endMsg; msgID++ {
 
-			// Context cancel (manual stop) तर exit
+			// Stop check
 			if bgCtx.Err() != nil {
+				stopped = true
 				deleteProgress()
 				updateSummary()
 				return
@@ -855,12 +969,11 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 			currentIdx := msgID - startMsg + 1
 			editProgress(fmt.Sprintf(
-				"⏳ Processing %d/%d\n📡 Channel: `%d` | Msg: `%d`\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d",
+				"⏳ Processing %d/%d\n📡 Channel: `%d` | Msg: `%d`\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d\n\n🛑 Stop: /stopuserbotdl",
 				currentIdx, totalMsgs, chatIDRaw, msgID,
 				successCount, skipCount, errorCount,
 			))
 
-			// ── Retry logic: 2 attempts, मग skip ────────────────────────────
 			const maxRetries = 2
 			var err error
 			for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -891,18 +1004,24 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				)
 
 				if err == nil {
-					break // success — retry loop बाहेर
+					break
 				}
 
-				// Overall context cancel झाला असेल तर retry नको
 				if bgCtx.Err() != nil {
 					break
 				}
 			}
 
+			// Stop झाला असेल तर
+			if bgCtx.Err() != nil {
+				stopped = true
+				deleteProgress()
+				updateSummary()
+				return
+			}
+
 			if err != nil {
 				errorCount++
-				// Error summary मध्ये add करा — same error group करा
 				errKey := err.Error()
 				if _, exists := errorLines[errKey]; !exists {
 					errorOrder = append(errorOrder, errKey)
@@ -918,13 +1037,11 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			successCount++
 			updateSummary()
 
-			// Range मध्ये messages मध्ये थोडा gap द्या Telegram throttle टाळायला
 			if totalMsgs > 1 && msgID < endMsg {
 				time.Sleep(1 * time.Second)
 			}
 		}
 
-		// ── Final summary ──────────────────────────────────────────────────
 		deleteProgress()
 		updateSummary()
 	}()
@@ -932,10 +1049,67 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// ── processSingleMessage ──────────────────────────────────────────────────────
-// inputMediaDocFromUpdates — पहिल्या MessagesSendMedia च्या result मधून
-// InputMediaDocument काढतो. InputFile single-use असल्याने log/source channel
-// ला second send साठी हे वापरायला हवे.
+// ── extractMessageID ─────────────────────────────────────────────────────────
+// [FIX] MessagesSendMessage / MessagesSendMedia च्या result मधून message ID काढतो.
+// सगळे possible MTProto update types handle करतो.
+
+func extractMessageID(result tg.UpdatesClass) int {
+	if result == nil {
+		return 0
+	}
+	switch upd := result.(type) {
+	case *tg.UpdateShortSentMessage:
+		// Bot private chat मध्ये हा येतो — direct ID
+		return upd.ID
+
+	case *tg.Updates:
+		// सगळे updates scan करा
+		for _, u := range upd.Updates {
+			switch mu := u.(type) {
+			case *tg.UpdateMessageID:
+				if mu.ID > 0 {
+					return mu.ID
+				}
+			case *tg.UpdateNewMessage:
+				if m, ok := mu.Message.(*tg.Message); ok && m.ID > 0 {
+					return m.ID
+				}
+			case *tg.UpdateNewChannelMessage:
+				if m, ok := mu.Message.(*tg.Message); ok && m.ID > 0 {
+					return m.ID
+				}
+			}
+		}
+
+	case *tg.UpdatesCombined:
+		for _, u := range upd.Updates {
+			switch mu := u.(type) {
+			case *tg.UpdateMessageID:
+				if mu.ID > 0 {
+					return mu.ID
+				}
+			case *tg.UpdateNewMessage:
+				if m, ok := mu.Message.(*tg.Message); ok && m.ID > 0 {
+					return m.ID
+				}
+			case *tg.UpdateNewChannelMessage:
+				if m, ok := mu.Message.(*tg.Message); ok && m.ID > 0 {
+					return m.ID
+				}
+			}
+		}
+
+	case *tg.UpdateShort:
+		if mu, ok := upd.Update.(*tg.UpdateMessageID); ok && mu.ID > 0 {
+			return mu.ID
+		}
+	}
+	return 0
+}
+
+// ── inputMediaDocFromUpdates ──────────────────────────────────────────────────
+// [FIX] UpdatesCombined पण handle करतो
+
 func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 	if result == nil {
 		return nil
@@ -946,6 +1120,8 @@ func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 		updates = u.Updates
 	case *tg.UpdatesCombined:
 		updates = u.Updates
+	default:
+		return nil
 	}
 	for _, upd := range updates {
 		var m *tg.Message
@@ -976,20 +1152,19 @@ func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 	return nil
 }
 
-// एका message साठी: fetch → (download+reupload if media) → send to targets
-// error return केल्यास caller error count वाढवतो आणि continue करतो
+// ── processSingleMessage ──────────────────────────────────────────────────────
 
 func processSingleMessage(
 	bgCtx context.Context,
 	userbotClient *gotgproto.Client,
 	botClient *gotgproto.Client,
-	chatID int64,        // internal TG ID (negative)
-	chatIDRaw int64,     // user-facing positive ID (for display)
+	chatID int64,
+	chatIDRaw int64,
 	msgID int,
 	topicID int,
-	botPeer tg.InputPeerClass,           // admin chat peer
-	sourcePeer *tg.InputPeerChannel,     // source channel peer (nil if bot not admin)
-	sendChannelPeer *tg.InputPeerChannel, // /setsendchannel peer (nil if not set)
+	botPeer tg.InputPeerClass,
+	sourcePeer *tg.InputPeerChannel,
+	sendChannelPeer *tg.InputPeerChannel,
 	editProgress func(string),
 ) error {
 
@@ -1005,12 +1180,7 @@ func processSingleMessage(
 
 	// ── Step 3: No media → text message copy ─────────────────────────────
 	if tgMsg.Media == nil {
-		// sendChannel set आहे का?
 		if sendChannelPeer != nil {
-			// sendChannel set → फक्त sendChannel + log channel ला send करा
-			// Admin ला फक्त progress/error दिसेल, msg नाही
-
-			// sendChannel ला send
 			scCtx, scCancel := context.WithTimeout(context.Background(), 1*time.Minute)
 			defer scCancel()
 			scReq := &tg.MessagesSendMessageRequest{
@@ -1023,7 +1193,6 @@ func processSingleMessage(
 			}
 			_, _ = botClient.API().MessagesSendMessage(scCtx, scReq)
 
-			// Log channel ला send (text)
 			go func() {
 				lCtx, lCancel := context.WithTimeout(context.Background(), 1*time.Minute)
 				defer lCancel()
@@ -1039,7 +1208,6 @@ func processSingleMessage(
 				})
 			}()
 		} else {
-			// sendChannel नाही → normal: admin ला send
 			textContent := fmt.Sprintf(
 				"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n\n%s",
 				chatIDRaw, msgID, finalCaption,
@@ -1055,7 +1223,6 @@ func processSingleMessage(
 				return fmt.Errorf("text send failed: %w", err)
 			}
 
-			// Source channel असेल तर तिथे पण
 			if sourcePeer != nil {
 				sendCtx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Minute)
 				defer cancel2()
@@ -1084,7 +1251,6 @@ func processSingleMessage(
 		file.FileName, formatSize(file.FileSize), chatIDRaw, msgID,
 	))
 
-	// Stall detection — 5 min no progress
 	stallCtx, stallCancel := context.WithCancel(bgCtx)
 	defer stallCancel()
 	stallTimer := time.AfterFunc(5*time.Minute, stallCancel)
@@ -1121,15 +1287,43 @@ func processSingleMessage(
 	upCtx, upCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer upCancel()
 
-	uploadedFile, err := downloadAndReupload(
-		stallCtx,
-		upCtx,
-		userbotClient,
-		botClient,
-		file,
-		onDownloadProgress,
-		onUploadProgress,
-	)
+	// ── Step 4b: Watermark apply (FFmpeg) ────────────────────────────────
+	// Watermark set असेल तर download → FFmpeg overlay → reupload
+	wmText, wmOk := getWatermarkText()
+
+	var uploadedFile tg.InputFileClass
+
+	if wmOk && isVideoFile(file) {
+		// Watermark path: download to temp → ffmpeg → upload processed file
+		editProgress(fmt.Sprintf(
+			"📥 Downloading for watermark...\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
+			file.FileName, formatSize(file.FileSize), msgID,
+		))
+
+		uploadedFile, err = downloadWatermarkAndReupload(
+			stallCtx,
+			upCtx,
+			userbotClient,
+			botClient,
+			file,
+			wmText,
+			onDownloadProgress,
+			onUploadProgress,
+			editProgress,
+			msgID,
+		)
+	} else {
+		uploadedFile, err = downloadAndReupload(
+			stallCtx,
+			upCtx,
+			userbotClient,
+			botClient,
+			file,
+			onDownloadProgress,
+			onUploadProgress,
+		)
+	}
+
 	stallTimer.Stop()
 
 	if err != nil {
@@ -1139,6 +1333,7 @@ func processSingleMessage(
 		return fmt.Errorf("download/upload failed: %w", err)
 	}
 
+	// ── Step 5: Build media + attributes ─────────────────────────────────
 	// ── Step 5: Build media + attributes ─────────────────────────────────
 	attributes := []tg.DocumentAttributeClass{
 		&tg.DocumentAttributeFilename{FileName: file.FileName},
@@ -1159,7 +1354,6 @@ func processSingleMessage(
 			}
 		}
 	}
-	// Fallback: attribute नसला तरी MIME / extension वरून detect करा
 	if !isVideo {
 		mime := strings.ToLower(file.MimeType)
 		if strings.HasPrefix(mime, "video/") {
@@ -1172,14 +1366,11 @@ func processSingleMessage(
 		}
 	}
 
-	// ── Thumbnail ──────────────────────────────────────────────────────────
-	// Priority 1: User's /setthumbnail bytes
-	// Priority 2: Original document's own thumbnail (extracted via userbot)
+	// ── Thumbnail ─────────────────────────────────────────────────────────
 	var thumbSrc []byte
 	if b, ok := getStoredThumbnailBytes(); ok && len(b) > 0 {
 		thumbSrc = b
 	} else if isVideo {
-		// Source doc thumbnail extract करा
 		if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
 			if d, ok := doc.Document.(*tg.Document); ok {
 				var bestType string
@@ -1222,23 +1413,17 @@ func processSingleMessage(
 		if thumbErr == nil {
 			inputMedia.SetThumb(freshThumb)
 		} else {
-			// Error visible करा जेणेकरून debug होईल
 			editProgress(fmt.Sprintf("⚠️ Thumb upload failed: %v", thumbErr))
 		}
 	}
 
-	// ── Step 6 + 7 + 8: Send targets decide करा ────────────────────────
-	// sendChannel set आहे का?
+	// ── Step 6 + 7 + 8: Send targets ─────────────────────────────────────
 	if sendChannelPeer != nil {
-		// sendChannel set → फक्त sendChannel + log channel
-		// Admin ला फक्त progress/error, file नाही
-
 		fileCaption := finalCaption
 		if fileCaption == "" {
 			fileCaption = file.FileName
 		}
 
-		// sendChannel ला send
 		scCtx, scCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer scCancel()
 		scReq := &tg.MessagesSendMediaRequest{
@@ -1252,16 +1437,17 @@ func processSingleMessage(
 		}
 		scResult, _ := botClient.API().MessagesSendMedia(scCtx, scReq)
 
-		// Log channel: InputFile consumed झाल्याने doc reference वापरतो
+		// [FIX] Log channel: doc reference extract — fallback safe
 		if markCopied(chatID, msgID) {
-			logMedia := tg.InputMediaClass(inputMedia)
-			if dm := inputMediaDocFromUpdates(scResult); dm != nil {
-				logMedia = dm
-			}
-			go copyToLogChannelUploaded(tgMsg, logMedia)
+			go func() {
+				logMedia := tg.InputMediaClass(inputMedia)
+				if dm := inputMediaDocFromUpdates(scResult); dm != nil {
+					logMedia = dm
+				}
+				copyToLogChannelUploaded(tgMsg, logMedia)
+			}()
 		}
 	} else {
-		// sendChannel नाही → admin ला send करा, नंतर log channel
 		adminCaption := fmt.Sprintf(
 			"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n📄 `%s`\n💾 %s\n🔒 Forward protected",
 			chatIDRaw, msgID, file.FileName, formatSize(file.FileSize),
@@ -1281,21 +1467,26 @@ func processSingleMessage(
 			return fmt.Errorf("send to admin failed: %w", err)
 		}
 
-		// Log + source channel: admin send नंतर doc reference वापरतो
-		logMedia := tg.InputMediaClass(inputMedia)
-		if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
-			logMedia = dm
-		}
-
+		// [FIX] Log channel: doc reference extract — fallback safe
 		if markCopied(chatID, msgID) {
-			go copyToLogChannelUploaded(tgMsg, logMedia)
+			go func() {
+				logMedia := tg.InputMediaClass(inputMedia)
+				if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
+					logMedia = dm
+				}
+				copyToLogChannelUploaded(tgMsg, logMedia)
+			}()
 		}
 
-		// Source channel असेल तर तिथे पण
 		if sourcePeer != nil {
 			channelCaption := finalCaption
 			if channelCaption == "" {
 				channelCaption = file.FileName
+			}
+			// [FIX] Source channel: always use doc reference (InputFile already consumed)
+			logMedia := tg.InputMediaClass(inputMedia)
+			if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
+				logMedia = dm
 			}
 			sendCtx2, sendCancel2 := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer sendCancel2()
@@ -1315,29 +1506,176 @@ func processSingleMessage(
 	return nil
 }
 
+// ── isVideoFile ───────────────────────────────────────────────────────────────
+// File video आहे का check — watermark साठी
+
+func isVideoFile(file *types.File) bool {
+	mime := strings.ToLower(file.MimeType)
+	if strings.HasPrefix(mime, "video/") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(file.FileName)) {
+	case ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v", ".ts", ".3gp":
+		return true
+	}
+	return false
+}
+
+// ── downloadWatermarkAndReupload ──────────────────────────────────────────────
+// Video download → FFmpeg watermark overlay → reupload
+// Watermark: bottom-right corner, white text, semi-transparent
+
+func downloadWatermarkAndReupload(
+	dlCtx context.Context,
+	upCtx context.Context,
+	dlClient *gotgproto.Client,
+	upClient *gotgproto.Client,
+	file *types.File,
+	wmText string,
+	onDownloadProgress func(written, total int64),
+	onUploadProgress func(written, total int64),
+	editProgress func(string),
+	msgID int,
+) (tg.InputFileClass, error) {
+
+	// ── Download to temp file ─────────────────────────────────────────────
+	ext := filepath.Ext(file.FileName)
+	if ext == "" {
+		ext = ".mp4"
+	}
+
+	tmpInput, err := os.CreateTemp("", "wm-input-*"+ext)
+	if err != nil {
+		return nil, fmt.Errorf("temp input file create failed: %w", err)
+	}
+	inputPath := tmpInput.Name()
+	defer os.Remove(inputPath)
+
+	var dlWriter io.Writer = tmpInput
+	if onDownloadProgress != nil {
+		dlWriter = &progressWriter{
+			w:          tmpInput,
+			total:      file.FileSize,
+			onProgress: onDownloadProgress,
+		}
+	}
+
+	d := downloader.NewDownloader()
+	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
+	tmpInput.Close()
+	if err != nil {
+		return nil, fmt.Errorf("download failed: %w", err)
+	}
+
+	// ── FFmpeg watermark overlay ──────────────────────────────────────────
+	editProgress(fmt.Sprintf("💧 Applying watermark...\n📄 `%s`\n📌 Msg: `%d`", file.FileName, msgID))
+
+	tmpOutput, err := os.CreateTemp("", "wm-output-*"+ext)
+	if err != nil {
+		return nil, fmt.Errorf("temp output file create failed: %w", err)
+	}
+	outputPath := tmpOutput.Name()
+	tmpOutput.Close()
+	defer os.Remove(outputPath)
+
+	// FFmpeg command:
+	// - drawtext filter: bottom-right corner, white text, semi-transparent black box background
+	// - font size 36, padding 10px from edges
+	// - copy codec (no re-encode) — fast processing
+	// Note: fontconfig available असेल तर font=sans पण चालेल
+	drawtextFilter := fmt.Sprintf(
+		"drawtext=text='%s':"+
+			"fontcolor=white:"+
+			"fontsize=36:"+
+			"box=1:boxcolor=black@0.4:boxborderw=8:"+
+			"x=w-tw-20:y=h-th-20",
+		strings.ReplaceAll(wmText, "'", "\\'"), // single quote escape
+	)
+
+	// -c copy वापरतो — re-encode नाही → fast
+	// काही formats मध्ये filter + copy एकत्र चालत नाही, त्यासाठी fallback
+	args := []string{
+		"-i", inputPath,
+		"-vf", drawtextFilter,
+		"-c:a", "copy",     // audio copy
+		"-c:v", "libx264",  // video re-encode (drawtext साठी आवश्यक)
+		"-preset", "ultrafast", // fastest encoding
+		"-crf", "23",       // quality — 23 = good balance
+		"-movflags", "+faststart",
+		"-y", // overwrite
+		outputPath,
+	}
+
+	ffmpegCtx, ffmpegCancel := context.WithTimeout(upCtx, 25*time.Minute)
+	defer ffmpegCancel()
+
+	cmd := exec.CommandContext(ffmpegCtx, "ffmpeg", args...)
+	ffmpegOut, ffmpegErr := cmd.CombinedOutput()
+	if ffmpegErr != nil {
+		// FFmpeg failed — output log सह error return
+		errMsg := string(ffmpegOut)
+		if len(errMsg) > 300 {
+			errMsg = errMsg[len(errMsg)-300:] // last 300 chars (most relevant)
+		}
+		utils.Logger.Error("FFmpeg watermark failed",
+			zap.String("file", file.FileName),
+			zap.String("output", errMsg),
+			zap.Error(ffmpegErr),
+		)
+		return nil, fmt.Errorf("FFmpeg watermark failed: %w\nFFmpeg: %s", ffmpegErr, errMsg)
+	}
+
+	// Output file stat
+	outInfo, err := os.Stat(outputPath)
+	if err != nil || outInfo.Size() == 0 {
+		return nil, fmt.Errorf("FFmpeg output file empty or missing")
+	}
+
+	// ── Upload processed file ─────────────────────────────────────────────
+	editProgress(fmt.Sprintf("📤 Uploading watermarked...\n📄 `%s`\n📌 Msg: `%d`", file.FileName, msgID))
+
+	readFile, err := os.Open(outputPath)
+	if err != nil {
+		return nil, fmt.Errorf("output file open failed: %w", err)
+	}
+	defer readFile.Close()
+
+	totalSize := outInfo.Size()
+	var upReader io.Reader = readFile
+	if onUploadProgress != nil {
+		upReader = &progressWriter{
+			w:          readFile,
+			total:      totalSize,
+			onProgress: onUploadProgress,
+		}
+	}
+
+	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
+	uploadedFile, err := up.FromReader(upCtx, file.FileName, upReader)
+	if err != nil {
+		return nil, fmt.Errorf("upload failed: %w", err)
+	}
+
+	return uploadedFile, nil
+}
+
 // ── getChannelPeerIfBotAdmin ──────────────────────────────────────────────────
-// Source channel मध्ये bot admin आहे का check करतो.
-// Admin असेल तर *tg.InputPeerChannel return करतो, नसेल तर nil.
 
 func getChannelPeerIfBotAdmin(
 	ctx *ext.Context,
 	botClient *gotgproto.Client,
 	channelID int64,
 ) *tg.InputPeerChannel {
-	// channelID is already in internal TG format (negative)
 	channelPeer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, channelID)
 	if err != nil {
-		// Channel access नाही — bot member नाही
 		return nil
 	}
 
-	// Bot चा self ID
 	if botClient.Self == nil {
 		return nil
 	}
 	botID := botClient.Self.ID
 
-	// Participants check — bot admin आहे का?
 	checkCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -1444,7 +1782,6 @@ func downloadAndReupload(
 }
 
 // ── progressWriter ────────────────────────────────────────────────────────────
-// io.Writer wrapper — Write होताना progress callback call करतो
 
 type progressWriter struct {
 	w          io.Writer
@@ -1469,7 +1806,6 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-// progressWriter io.Reader interface सुद्धा implement करतो (upload साठी)
 func (p *progressWriter) Read(b []byte) (int, error) {
 	r, ok := p.w.(io.Reader)
 	if !ok {
