@@ -27,16 +27,17 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	if peerChatId.Type != int(storage.TypeUser) {
 		return dispatcher.EndGroups
 	}
-	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
-		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
-		return dispatcher.EndGroups
-	}
-
 	// ── Deep Link: /start dl_48271 ────────────────────────────────────────────
+	// Offline-token users are authorized via DB (/settg), so skip AllowedUsers check for this flow.
 	a := args(u)
 	if len(a) > 0 && strings.HasPrefix(a[0], "dl_") {
 		token := strings.TrimSpace(strings.TrimPrefix(a[0], "dl_"))
 		return processDLToken(ctx, u, chatId, token)
+	}
+
+	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
+		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
+		return dispatcher.EndGroups
 	}
 
 	ctx.Reply(u, ext.ReplyTextString(
