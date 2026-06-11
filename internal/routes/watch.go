@@ -317,9 +317,12 @@ func handleWatchStream(c *gin.Context) {
 	// 3b-i. Range header mandatory — browser player always sends Range.
 	// curl/wget without Range = full-file download attempt → block.
 	// HEAD requests (player probes metadata) are allowed without Range.
+	// PDFs (iframe preview) load via plain GET without a Range header — exempt them.
 	if r.Header.Get("Range") == "" && r.Method != http.MethodHead {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Range header required for streaming."})
-		return
+		if cf, _ := db.GetCachedFile(verified.MessageID, verified.ChannelID); cf == nil || strings.ToLower(cf.MimeType) != "application/pdf" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Range header required for streaming."})
+			return
+		}
 	}
 
 	// 3b-ii. In-memory fast path for seek / buffering range requests.
@@ -572,6 +575,8 @@ func setAntiDownloadHeaders(c *gin.Context) {
 	c.Header("X-Frame-Options", "DENY")
 }
 
+// setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
+// Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
 // setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
 // Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
 func setPlayerSecurityHeaders(c *gin.Context) {
