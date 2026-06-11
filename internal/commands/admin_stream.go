@@ -1533,8 +1533,8 @@ func colabWatermark(
 	editProgress func(string),
 	msgID int,
 ) (string, error) {
-	colabURL := config.GetEnv("COLAB_WATERMARK_URL", "")
-	colabSecret := config.GetEnv("COLAB_SECRET_KEY", "")
+	colabURL := os.Getenv("COLAB_WATERMARK_URL")
+	colabSecret := os.Getenv("COLAB_SECRET_KEY")
 
 	if colabURL == "" {
 		return "", fmt.Errorf("COLAB_WATERMARK_URL not set")
@@ -1674,7 +1674,7 @@ func downloadWatermarkAndReupload(
 	}
 
 	// ── Colab watermark ───────────────────────────────────────────────────
-	colabURL := config.GetEnv("COLAB_WATERMARK_URL", "")
+	colabURL := os.Getenv("COLAB_WATERMARK_URL")
 
 	var outputPath string
 
