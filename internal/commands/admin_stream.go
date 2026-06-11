@@ -1255,10 +1255,10 @@ func processSingleMessage(
 
 	stallCtx, stallCancel := context.WithCancel(bgCtx)
 	defer stallCancel()
-	stallTimer := time.AfterFunc(5*time.Minute, stallCancel)
+	stallTimer := time.AfterFunc(30*time.Minute, stallCancel)
 
 	onDownloadProgress := func(written, total int64) {
-		stallTimer.Reset(5 * time.Minute)
+		stallTimer.Reset(30 * time.Minute)
 		if total <= 0 {
 			return
 		}
@@ -1310,7 +1310,10 @@ func processSingleMessage(
 			file,
 			wmText,
 			onDownloadProgress,
-			onUploadProgress,
+			func(written, total int64) {
+				stallTimer.Reset(30 * time.Minute) // upload madhe pan reset
+				onUploadProgress(written, total)
+			},
 			editProgress,
 			msgID,
 		)
@@ -1330,7 +1333,7 @@ func processSingleMessage(
 
 	if err != nil {
 		if stallCtx.Err() != nil && bgCtx.Err() == nil {
-			return fmt.Errorf("download stalled (5min no progress) | Retry: /userbotdl %d %d", chatIDRaw, msgID)
+			return fmt.Errorf("download stalled (30min no progress) | Retry: /userbotdl %d %d", chatIDRaw, msgID)
 		}
 		return fmt.Errorf("download/upload failed: %w", err)
 	}
