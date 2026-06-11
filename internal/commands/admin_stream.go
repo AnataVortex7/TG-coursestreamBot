@@ -535,7 +535,7 @@ func cmdSetThumbnail(ctx *ext.Context, u *ext.Update) error {
 		ThumbSize:     biggestSize.Type,
 	}
 
-	upCtx, upCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	upCtx, upCancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer upCancel()
 
 	tmpFile, err := os.CreateTemp("", "thumb-*.jpg")
@@ -1253,10 +1253,10 @@ func processSingleMessage(
 
 	stallCtx, stallCancel := context.WithCancel(bgCtx)
 	defer stallCancel()
-	stallTimer := time.AfterFunc(5*time.Minute, stallCancel)
+	stallTimer := time.AfterFunc(30*time.Minute, stallCancel)
 
 	onDownloadProgress := func(written, total int64) {
-		stallTimer.Reset(5 * time.Minute)
+		stallTimer.Reset(30 * time.Minute)
 		if total <= 0 {
 			return
 		}
@@ -1328,7 +1328,7 @@ func processSingleMessage(
 
 	if err != nil {
 		if stallCtx.Err() != nil && bgCtx.Err() == nil {
-			return fmt.Errorf("download stalled (5min no progress) | Retry: /userbotdl %d %d", chatIDRaw, msgID)
+			return fmt.Errorf("download stalled (30min no progress) | Retry: /userbotdl %d %d", chatIDRaw, msgID)
 		}
 		return fmt.Errorf("download/upload failed: %w", err)
 	}
