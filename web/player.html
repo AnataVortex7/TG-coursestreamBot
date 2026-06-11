@@ -239,23 +239,60 @@
     z-index: 9999;
   }
 
-  /* ── PDF download button ── */
-  #pdf-download {
+  /* ── PDF section ── */
+  #pdf-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 60vh;
+    padding: 40px 20px;
+    text-align: center;
+  }
+  #pdf-icon { font-size: 4rem; margin-bottom: 12px; }
+  #pdf-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin-bottom: 8px;
+    word-break: break-word;
+    max-width: 480px;
+  }
+  #pdf-hint {
+    font-size: 0.82rem;
+    color: #6b7280;
+    margin-bottom: 28px;
+  }
+  #pdf-btns {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  #pdf-open, #pdf-download {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    margin: 10px 16px;
-    padding: 7px 18px;
-    background: rgba(99,102,241,0.18);
-    color: #a5b4fc;
-    border: 1px solid rgba(99,102,241,0.35);
-    border-radius: 8px;
-    font-size: 0.85rem;
+    padding: 10px 22px;
+    border-radius: 10px;
+    font-size: 0.9rem;
     font-weight: 600;
     text-decoration: none;
-    transition: background 0.2s;
+    transition: background 0.2s, transform 0.1s;
   }
-  #pdf-download:hover { background: rgba(99,102,241,0.32); }
+  #pdf-open {
+    background: rgba(99,102,241,0.22);
+    color: #a5b4fc;
+    border: 1px solid rgba(99,102,241,0.45);
+  }
+  #pdf-open:hover { background: rgba(99,102,241,0.38); transform: translateY(-1px); }
+  #pdf-download {
+    background: rgba(16,185,129,0.15);
+    color: #6ee7b7;
+    border: 1px solid rgba(16,185,129,0.35);
+  }
+  #pdf-download:hover { background: rgba(16,185,129,0.28); transform: translateY(-1px); }
+
 
   /* Below player: back link */
   #below {
@@ -383,22 +420,15 @@
   <div id="title-bar">{{ .title }}</div>
 
   {{ if eq .mediaType "pdf" }}
-    <!-- PDF viewer — Google Docs Viewer for mobile compatibility -->
-    <div id="pdf-viewer-wrap" style="width:100%;height:80vh;position:relative;background:#1a1a2e;">
-      <iframe id="pdf-frame"
-        src="https://docs.google.com/viewer?embedded=true&url={{ .streamURL }}"
-        style="width:100%;height:100%;border:none;display:block;"
-        onload="document.getElementById('pdf-loading').style.display='none';"
-      ></iframe>
-      <div id="pdf-loading" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#a5b4fc;font-size:0.9rem;text-align:center;">
-        <div style="font-size:2rem;margin-bottom:8px;">📄</div>
-        PDF लोड होतोय...<br>
-        <small style="color:#6b7280;">जर दिसला नाही तर खाली Open PDF दाबा</small>
+    <!-- PDF actions -->
+    <div id="pdf-wrap">
+      <div id="pdf-icon">📄</div>
+      <div id="pdf-name">{{ .title }}</div>
+      <div id="pdf-hint">PDF file — खाली बटण दाबून उघडा किंवा डाउनलोड करा</div>
+      <div id="pdf-btns">
+        <a id="pdf-open" href="{{ .viewURL }}" target="_blank">📖 PDF उघडा</a>
+        <a id="pdf-download" href="{{ .downloadURL }}" download="{{ .title }}.pdf">⬇️ Download</a>
       </div>
-    </div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 16px;">
-      <a id="pdf-open" href="{{ .streamURL }}" target="_blank" style="display:inline-flex;align-items:center;gap:6px;padding:7px 18px;background:rgba(99,102,241,0.18);color:#a5b4fc;border:1px solid rgba(99,102,241,0.35);border-radius:8px;font-size:0.85rem;font-weight:600;text-decoration:none;">📖 Open PDF</a>
-      <a id="pdf-download" href="{{ .downloadURL }}" download="{{ .title }}.pdf">⬇️ Download PDF</a>
     </div>
 
   {{ else if eq .mediaType "image" }}
