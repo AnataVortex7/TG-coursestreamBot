@@ -44,7 +44,9 @@ type WatermarkJob struct {
 	SendToChatID  int64     `json:"send_to_chat_id"`
 	SendToTopicID int       `json:"send_to_topic_id,omitempty"`
 	Caption       string    `json:"caption"`
-	OutputPath    string    `json:"output_path,omitempty"` // Colab ne upload kela tar path
+	OutputPath    string    `json:"output_path,omitempty"`
+	ChunkDir      string    `json:"chunk_dir,omitempty"`   // chunks temp dir
+	TotalChunks   int       `json:"total_chunks,omitempty"` // Colab ne kitne chunks pathavnar
 	CreatedAt     time.Time `json:"created_at"`
 	Status        string    `json:"status"`
 	Error         string    `json:"error,omitempty"`
@@ -52,14 +54,12 @@ type WatermarkJob struct {
 }
 
 // ── Colab Online Tracker ──────────────────────────────────────────────────────
-// Poll request aali ki lastPollTime update hoto
-// 2 min poll nahi aali → Colab offline
 
 var colabTracker = struct {
 	mu           sync.Mutex
 	lastPollTime time.Time
 }{
-	lastPollTime: time.Time{}, // zero = never polled
+	lastPollTime: time.Time{},
 }
 
 func RecordPoll() {
@@ -144,30 +144,6 @@ func (q *Queue) Get(jobID string) (*WatermarkJob, bool) {
 	return job, ok
 }
 
-func (q *Queue) Cleanup() {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	cutoff := time.Now().Add(-2 * time.Hour)
-	// Colab offline — processing madhe 30 min+ stuck jobs failed madhe
-	staleCutoff := time.Now().Add(-30 * time.Minute)
-	for id, job := range q.jobs {
-		if job.UpdatedAt.Before(cutoff) {
-			delete(q.jobs, id)
-			continue
-		}
-		if job.Status == StatusProcessing && job.UpdatedAt.Before(staleCutoff) {
-			job.Status = StatusFailed
-			job.Error = "colab offline or timeout (30min no update)"
-			job.UpdatedAt = time.Now()
-			// Progress message edit karo
-			if job.ProgressMsgID > 0 {
-				go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
-					fmt.Sprintf("❌ Colab offline / timeout\n📄 `%s`\n⏱ 30min पेक्षा जास्त वेळ गेला", job.FileName))
-			}
-		}
-	}
-}
-
 // ── SetOutputPath / GetOutputPath ────────────────────────────────────────────
 
 func (q *Queue) SetOutputPath(jobID, path string) {
@@ -187,6 +163,55 @@ func (q *Queue) GetOutputPath(jobID string) (string, bool) {
 		return "", false
 	}
 	return job.OutputPath, true
+}
+
+// ── SetChunkDir / GetChunkDir ─────────────────────────────────────────────────
+// Chunked upload saathi — Colab chunks kuth save ahet track karo
+
+func (q *Queue) SetChunkDir(jobID, dir string, totalChunks int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if job, ok := q.jobs[jobID]; ok {
+		job.ChunkDir = dir
+		job.TotalChunks = totalChunks
+		job.UpdatedAt = time.Now()
+	}
+}
+
+func (q *Queue) GetChunkInfo(jobID string) (dir string, total int, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	job, found := q.jobs[jobID]
+	if !found || job.ChunkDir == "" {
+		return "", 0, false
+	}
+	return job.ChunkDir, job.TotalChunks, true
+}
+
+func (q *Queue) Cleanup() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	cutoff := time.Now().Add(-2 * time.Hour)
+	staleCutoff := time.Now().Add(-30 * time.Minute)
+	for id, job := range q.jobs {
+		if job.UpdatedAt.Before(cutoff) {
+			// chunk dir pan delete karo
+			if job.ChunkDir != "" {
+				os.RemoveAll(job.ChunkDir)
+			}
+			delete(q.jobs, id)
+			continue
+		}
+		if job.Status == StatusProcessing && job.UpdatedAt.Before(staleCutoff) {
+			job.Status = StatusFailed
+			job.Error = "colab offline or timeout (30min no update)"
+			job.UpdatedAt = time.Now()
+			if job.ProgressMsgID > 0 {
+				go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
+					fmt.Sprintf("❌ Colab offline / timeout\n📄 `%s`\n⏱ 30min पेक्षा जास्त वेळ गेला", job.FileName))
+			}
+		}
+	}
 }
 
 // ── Temp File Registry ────────────────────────────────────────────────────────
@@ -241,8 +266,7 @@ func CleanupTempFiles() {
 	}
 }
 
-// ── Pipe Registry — userbot stream pipe saathi ───────────────────────────────
-// Disk nahi — Koyeb userbot ne directly Colab la pipe karil
+// ── Pipe Registry ─────────────────────────────────────────────────────────────
 
 type PipeFn func(w http.ResponseWriter) error
 
@@ -298,7 +322,7 @@ func CleanupPipes() {
 	}
 }
 
-// ── SubmitJob — commands package madhun call karo ─────────────────────────────
+// ── SubmitJob ─────────────────────────────────────────────────────────────────
 
 func SubmitJob(
 	fileURL, fileName string,
@@ -330,9 +354,7 @@ func SubmitJob(
 	return jobID, nil
 }
 
-// ── WaitForJob — job done/failed hoparyant wait karo ─────────────────────────
-// Returns: success, outputPath, errMsg
-// outputPath: Colab ne upload kela tar temp file path, otherwise ""
+// ── WaitForJob ────────────────────────────────────────────────────────────────
 
 func WaitForJob(ctx context.Context, jobID string) (bool, string, string) {
 	ticker := time.NewTicker(3 * time.Second)
@@ -359,7 +381,7 @@ func WaitForJob(ctx context.Context, jobID string) (bool, string, string) {
 	}
 }
 
-// ── EditTgMessage — Bot API direct call ──────────────────────────────────────
+// ── EditTgMessage ─────────────────────────────────────────────────────────────
 
 func EditTgMessage(botToken string, chatID int64, msgID int, text string) {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/editMessageText", botToken)
@@ -387,7 +409,7 @@ func EditTgMessage(botToken string, chatID int64, msgID int, text string) {
 	defer resp.Body.Close()
 }
 
-// ── SecretOK — COLAB_SECRET_KEY verify karo ──────────────────────────────────
+// ── SecretOK ──────────────────────────────────────────────────────────────────
 
 func SecretOK(headerVal string) bool {
 	secret := os.Getenv("COLAB_SECRET_KEY")
@@ -397,7 +419,7 @@ func SecretOK(headerVal string) bool {
 	return headerVal == secret
 }
 
-// ── StartCleanupLoop — main.go madhun once call karo ─────────────────────────
+// ── StartCleanupLoop ──────────────────────────────────────────────────────────
 
 func StartCleanupLoop() {
 	go func() {
