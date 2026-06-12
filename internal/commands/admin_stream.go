@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"net/http"
 	"os/exec"
 	"strconv"
 	"path/filepath"
@@ -1589,11 +1590,120 @@ func downloadWatermarkAndReupload(
 	caption string,
 ) (tg.InputFileClass, bool, error) {
 
-	// ── Download to temp file ─────────────────────────────────────────────
+	// ── Colab Queue: KOYEB_URL set asel tar ───────────────────────────────
+	koyebURL := os.Getenv("KOYEB_URL")
+	if koyebURL != "" {
+		editProgress(fmt.Sprintf(
+			"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
+			file.FileName, msgID,
+		))
+
+		// Pipe token — Koyeb disk nahi, userbot directly response madhe pipe karil
+		pipeToken := fmt.Sprintf("pipe-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
+
+		// PipeFn: Colab GET request aali ki userbot download pipe karil
+		pipeFn := func(w http.ResponseWriter) error {
+			pipeReader, pipeWriter := io.Pipe()
+			dlErrCh := make(chan error, 1)
+			go func() {
+				defer pipeWriter.Close()
+				d := downloader.NewDownloader()
+				_, dlErr := d.Download(dlClient.API(), file.Location).Stream(dlCtx, pipeWriter)
+				dlErrCh <- dlErr
+			}()
+			_, copyErr := io.Copy(w, pipeReader)
+			dlErr := <-dlErrCh
+			if copyErr != nil {
+				return copyErr
+			}
+			return dlErr
+		}
+
+		wmqueue.RegisterPipe(pipeToken, file.FileName, file.FileSize, pipeFn)
+		defer wmqueue.UnregisterPipe(pipeToken)
+
+		fileURL := fmt.Sprintf("%s/api/colab/tempfile/%s", koyebURL, pipeToken)
+
+		jobID, submitErr := wmqueue.SubmitJob(
+			fileURL,
+			file.FileName,
+			file.FileSize,
+			wmText,
+			botToken,
+			adminChatID,
+			progressMsgID,
+			sendToChatID,
+			sendToTopicID,
+			caption,
+			msgID,
+		)
+		if submitErr == nil {
+			editProgress(fmt.Sprintf(
+				"☁️ Job submitted! Colab processing...\n📄 `%s`\n🆔 `%s`\n📌 Msg: `%d`",
+				file.FileName, jobID, msgID,
+			))
+
+			success, outputPath, jobErr := wmqueue.WaitForJob(upCtx, jobID)
+			if success && outputPath != "" {
+				// Colab ne processed file upload kela → Koyeb uploader ne upload karo → MTProto send
+				defer os.Remove(outputPath)
+
+				editProgress(fmt.Sprintf(
+					"📤 Uploading watermarked...\n📄 `%s`\n📌 Msg: `%d`",
+					file.FileName, msgID,
+				))
+
+				outFile, openErr := os.Open(outputPath)
+				if openErr != nil {
+					// fallthrough to local
+					goto localFallback
+				}
+				defer outFile.Close()
+
+				outInfo, statErr := outFile.Stat()
+				if statErr != nil || outInfo.Size() == 0 {
+					goto localFallback
+				}
+
+				var upReader io.Reader = outFile
+				if onUploadProgress != nil {
+					upReader = &progressWriter{
+						w:          outFile,
+						total:      outInfo.Size(),
+						onProgress: onUploadProgress,
+					}
+				}
+
+				up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
+				uploadedInputFile, upErr := up.FromReader(upCtx, file.FileName, upReader)
+				if upErr != nil {
+					goto localFallback
+				}
+				// colabSent=false — caller ne MTProto ne send karayche (existing code)
+				return uploadedInputFile, false, nil
+			}
+			if !success {
+				editProgress(fmt.Sprintf(
+					"⚠️ Colab failed, local FFmpeg try...\n📄 `%s`\n📌 Msg: `%d`\n❌ %s",
+					file.FileName, msgID, jobErr,
+				))
+			}
+		}
+	}
+
+localFallback:
+
+	// ── Local FFmpeg fallback ─────────────────────────────────────────────
+	// Colab nahi/failed — download karo aani local FFmpeg run karo
 	fext := filepath.Ext(file.FileName)
 	if fext == "" {
 		fext = ".mp4"
 	}
+
+	editProgress(fmt.Sprintf(
+		"📥 Downloading for local FFmpeg...\n📄 `%s`\n📌 Msg: `%d`",
+		file.FileName, msgID,
+	))
 
 	tmpInput, err := os.CreateTemp("", "wm-input-*"+fext)
 	if err != nil {
@@ -1611,61 +1721,13 @@ func downloadWatermarkAndReupload(
 		}
 	}
 
-	d := downloader.NewDownloader()
-	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
+	dl := downloader.NewDownloader()
+	_, err = dl.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
 	tmpInput.Close()
 	if err != nil {
 		return nil, false, fmt.Errorf("download failed: %w", err)
 	}
 
-	// ── Colab Queue: KOYEB_URL set asel tar ───────────────────────────────
-	koyebURL := os.Getenv("KOYEB_URL")
-	if koyebURL != "" {
-		editProgress(fmt.Sprintf(
-			"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
-			file.FileName, msgID,
-		))
-
-		// Temp file serve token
-		fileToken := fmt.Sprintf("tf-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
-		wmqueue.RegisterTempFile(fileToken, inputPath, file.FileName)
-		defer wmqueue.UnregisterTempFile(fileToken)
-
-		fileURL := fmt.Sprintf("%s/api/colab/tempfile/%s", koyebURL, fileToken)
-
-		jobID, err := wmqueue.SubmitJob(
-			fileURL,
-			file.FileName,
-			file.FileSize,
-			wmText,
-			botToken,
-			adminChatID,
-			progressMsgID,
-			sendToChatID,
-			sendToTopicID,
-			caption,
-			msgID,
-		)
-		if err == nil {
-			editProgress(fmt.Sprintf(
-				"☁️ Job submitted! Colab processing...\n📄 `%s`\n🆔 `%s`\n📌 Msg: `%d`",
-				file.FileName, jobID, msgID,
-			))
-
-			success, jobErr := wmqueue.WaitForJob(upCtx, jobID)
-			if success {
-				// Colab ne Telegram la already pathavle
-				return nil, true, nil
-			}
-			// Colab failed → local fallback
-			editProgress(fmt.Sprintf(
-				"⚠️ Colab failed, local FFmpeg try...\n📄 `%s`\n📌 Msg: `%d`\n❌ %s",
-				file.FileName, msgID, jobErr,
-			))
-		}
-	}
-
-	// ── Local FFmpeg fallback ─────────────────────────────────────────────
 	tmpOutput, err := os.CreateTemp("", "wm-output-*"+fext)
 	if err != nil {
 		return nil, false, fmt.Errorf("temp output file create failed: %w", err)
