@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"mime/multipart"
-	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -18,6 +16,7 @@ import (
 	"time"
 
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/routes"
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
@@ -1003,6 +1002,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					sourcePeerForSend,
 					sendChannelPeer,
 					editProgress,
+					adminChatID,
+					sentMsgID,
 				)
 
 				if err == nil {
@@ -1168,6 +1169,8 @@ func processSingleMessage(
 	sourcePeer *tg.InputPeerChannel,
 	sendChannelPeer *tg.InputPeerChannel,
 	editProgress func(string),
+	adminChatID int64,
+	sentMsgID int,
 ) error {
 
 	// ── Step 1: Fetch message ─────────────────────────────────────────────
@@ -1294,15 +1297,30 @@ func processSingleMessage(
 	wmText, wmOk := getWatermarkText()
 
 	var uploadedFile tg.InputFileClass
+	var colabSent bool
 
 	if wmOk && isVideoFile(file) {
-		// Watermark path: download to temp → ffmpeg → upload processed file
+		// Watermark path: download → Colab queue (or local FFmpeg) → upload
 		editProgress(fmt.Sprintf(
 			"📥 Downloading for watermark...\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
 			file.FileName, formatSize(file.FileSize), msgID,
 		))
 
-		uploadedFile, err = downloadWatermarkAndReupload(
+		// Bot token + Colab job saathi send target
+		botToken := os.Getenv("BOT_TOKEN")
+		var colabSendChatID int64
+		if sendChannelPeer != nil {
+			colabSendChatID = -(sendChannelPeer.ChannelID + 1000000000000)
+		} else {
+			colabSendChatID = adminChatID
+		}
+
+		finalCaptionForColab := finalCaption
+		if finalCaptionForColab == "" {
+			finalCaptionForColab = file.FileName
+		}
+
+		uploadedFile, colabSent, err = downloadWatermarkAndReupload(
 			stallCtx,
 			upCtx,
 			userbotClient,
@@ -1311,11 +1329,17 @@ func processSingleMessage(
 			wmText,
 			onDownloadProgress,
 			func(written, total int64) {
-				stallTimer.Reset(30 * time.Minute) // upload madhe pan reset
+				stallTimer.Reset(30 * time.Minute)
 				onUploadProgress(written, total)
 			},
 			editProgress,
 			msgID,
+			botToken,
+			adminChatID,
+			sentMsgID,
+			colabSendChatID,
+			topicID,
+			finalCaptionForColab,
 		)
 	} else {
 		uploadedFile, err = downloadAndReupload(
@@ -1336,6 +1360,11 @@ func processSingleMessage(
 			return fmt.Errorf("download stalled (30min no progress) | Retry: /userbotdl %d %d", chatIDRaw, msgID)
 		}
 		return fmt.Errorf("download/upload failed: %w", err)
+	}
+
+	// Colab ne Telegram la already pathavle — caller ne send karayla nako
+	if colabSent {
+		return nil
 	}
 
 	// ── Step 5: Build media + attributes ─────────────────────────────────
@@ -1526,113 +1555,20 @@ func isVideoFile(file *types.File) bool {
 	return false
 }
 
-// ── colabWatermark ────────────────────────────────────────────────────────────
-// Local file → Colab server la pathva → watermarked file receive karo
-func colabWatermark(
-	ctx context.Context,
-	inputPath string,
-	fileName string,
-	wmText string,
-	editProgress func(string),
-	msgID int,
-) (string, error) {
-	colabURL := os.Getenv("COLAB_WATERMARK_URL")
-	colabSecret := os.Getenv("COLAB_SECRET_KEY")
-
-	if colabURL == "" {
-		return "", fmt.Errorf("COLAB_WATERMARK_URL not set")
-	}
-
-	ext := filepath.Ext(fileName)
-	if ext == "" {
-		ext = ".mp4"
-	}
-	outputPath := inputPath + "_wm" + ext
-
-	// Multipart form banva
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Video file add karo
-	part, err := writer.CreateFormFile("video", fileName)
-	if err != nil {
-		return "", fmt.Errorf("multipart create failed: %w", err)
-	}
-
-	f, err := os.Open(inputPath)
-	if err != nil {
-		return "", fmt.Errorf("input file open failed: %w", err)
-	}
-	defer f.Close()
-
-	editProgress(fmt.Sprintf("☁️ Uploading to watermark server...\n📄 `%s`\n📌 Msg: `%d`", fileName, msgID))
-
-	if _, err = io.Copy(part, f); err != nil {
-		return "", fmt.Errorf("file copy to multipart failed: %w", err)
-	}
-
-	_ = writer.WriteField("text", wmText)
-	_ = writer.WriteField("position", "w-tw-20:y=h-th-20")
-	writer.Close()
-
-	// HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", colabURL+"/watermark", body)
-	if err != nil {
-		return "", fmt.Errorf("http request create failed: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("X-Secret-Key", colabSecret)
-
-	// Progress ticker — har 15 sec update
-	start := time.Now()
-	done := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				elapsed := time.Since(start).Round(time.Second)
-				editProgress(fmt.Sprintf("☁️ Watermark server processing...\n📄 `%s`\n📌 Msg: `%d`\n⏱ %s elapsed...", fileName, msgID, elapsed))
-			}
-		}
-	}()
-
-	client := &http.Client{Timeout: 4 * time.Hour}
-	resp, err := client.Do(req)
-	close(done)
-
-	if err != nil {
-		return "", fmt.Errorf("colab request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
-		return "", fmt.Errorf("colab server error %d: %s", resp.StatusCode, string(errBody))
-	}
-
-	// Response save karo
-	outFile, err := os.Create(outputPath)
-	if err != nil {
-		return "", fmt.Errorf("output file create failed: %w", err)
-	}
-	defer outFile.Close()
-
-	if _, err = io.Copy(outFile, resp.Body); err != nil {
-		return "", fmt.Errorf("response save failed: %w", err)
-	}
-
-	elapsed := time.Since(start).Round(time.Second)
-	editProgress(fmt.Sprintf("✅ Watermark done in %s\n📄 `%s`\n📌 Msg: `%d`", elapsed, fileName, msgID))
-
-	return outputPath, nil
-}
-
 // ── downloadWatermarkAndReupload ──────────────────────────────────────────────
-// Video download → Colab watermark → reupload
+// NEW: Colab polling queue use karto.
+// Flow:
+//   1. Userbot ne file download karo → Koyeb temp file
+//   2. Temp file token generate karo → /api/colab/tempfile/:token serve
+//   3. Colab job queue madhe submit karo
+//   4. Colab poll → download → FFmpeg → Bot API send
+//   5. Koyeb wait karto → done/failed
+//   6. Colab ne already Telegram la pathavle → caller ne send karaychi garaj nahi
+//      (return nil, true = colabSent, nil)
+//   7. Failed → local FFmpeg fallback → normal upload return
+//
+// Returns: (uploadedFile, colabSent bool, error)
+// colabSent = true → processSingleMessage ne send karayla nako (Colab ne kele)
 
 func downloadWatermarkAndReupload(
 	dlCtx context.Context,
@@ -1645,17 +1581,23 @@ func downloadWatermarkAndReupload(
 	onUploadProgress func(written, total int64),
 	editProgress func(string),
 	msgID int,
-) (tg.InputFileClass, error) {
+	botToken string,
+	adminChatID int64,
+	progressMsgID int,
+	sendToChatID int64,
+	sendToTopicID int,
+	caption string,
+) (tg.InputFileClass, bool, error) {
 
 	// ── Download to temp file ─────────────────────────────────────────────
-	ext := filepath.Ext(file.FileName)
-	if ext == "" {
-		ext = ".mp4"
+	fext := filepath.Ext(file.FileName)
+	if fext == "" {
+		fext = ".mp4"
 	}
 
-	tmpInput, err := os.CreateTemp("", "wm-input-*"+ext)
+	tmpInput, err := os.CreateTemp("", "wm-input-*"+fext)
 	if err != nil {
-		return nil, fmt.Errorf("temp input file create failed: %w", err)
+		return nil, false, fmt.Errorf("temp input file create failed: %w", err)
 	}
 	inputPath := tmpInput.Name()
 	defer os.Remove(inputPath)
@@ -1673,172 +1615,143 @@ func downloadWatermarkAndReupload(
 	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
 	tmpInput.Close()
 	if err != nil {
-		return nil, fmt.Errorf("download failed: %w", err)
+		return nil, false, fmt.Errorf("download failed: %w", err)
 	}
 
-	// ── Colab watermark ───────────────────────────────────────────────────
-	colabURL := os.Getenv("COLAB_WATERMARK_URL")
+	// ── Colab Queue: KOYEB_URL set asel tar ───────────────────────────────
+	koyebURL := os.Getenv("KOYEB_URL")
+	if koyebURL != "" {
+		editProgress(fmt.Sprintf(
+			"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
+			file.FileName, msgID,
+		))
 
-	var outputPath string
+		// Temp file serve token
+		fileToken := fmt.Sprintf("tf-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
+		routes.RegisterTempFile(fileToken, inputPath, file.FileName)
+		defer routes.UnregisterTempFile(fileToken)
 
-	if colabURL != "" {
-		// Colab server available — tithе process karo
-		var colabErr error
-		outputPath, colabErr = colabWatermark(upCtx, inputPath, file.FileName, wmText, editProgress, msgID)
-		if colabErr != nil {
-			// Colab failed — local FFmpeg fallback
-			editProgress(fmt.Sprintf("⚠️ Colab failed, trying local...\n📄 `%s`\n📌 Msg: `%d`\n❌ %s", file.FileName, msgID, colabErr.Error()))
+		fileURL := fmt.Sprintf("%s/api/colab/tempfile/%s", koyebURL, fileToken)
 
-			ext := filepath.Ext(file.FileName)
-			if ext == "" {
-				ext = ".mp4"
-			}
-			tmpOutput, err := os.CreateTemp("", "wm-output-*"+ext)
-			if err != nil {
-				return nil, fmt.Errorf("temp output file create failed: %w", err)
-			}
-			outputPath = tmpOutput.Name()
-			tmpOutput.Close()
-			defer os.Remove(outputPath)
-
-			drawtextFilter := fmt.Sprintf(
-				"drawtext=text='%s':fontcolor=white:fontsize=36:shadowcolor=black:shadowx=2:shadowy=2:x=w-tw-20:y=h-th-20",
-				strings.ReplaceAll(wmText, "'", "\\'"),
-			)
-
-			ffmpegStart := time.Now()
-			editProgress(fmt.Sprintf("💧 Local watermark processing...\n📄 `%s`\n📌 Msg: `%d`\n⏳ Please wait...", file.FileName, msgID))
-
-			ffmpegDone := make(chan struct{})
-			go func() {
-				ticker := time.NewTicker(15 * time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ffmpegDone:
-						return
-					case <-ticker.C:
-						elapsed := time.Since(ffmpegStart).Round(time.Second)
-						editProgress(fmt.Sprintf("💧 Local watermark processing...\n📄 `%s`\n📌 Msg: `%d`\n⏱ %s elapsed...", file.FileName, msgID, elapsed))
-					}
-				}
-			}()
-
-			args := []string{
-				"-i", inputPath,
-				"-vf", drawtextFilter,
-				"-c:a", "copy",
-				"-c:v", "libx264",
-				"-preset", "ultrafast",
-				"-crf", "28",
-				"-movflags", "+faststart",
-				"-y", outputPath,
-			}
-
-			ffmpegCtx, ffmpegCancel := context.WithTimeout(upCtx, 4*time.Hour)
-			defer ffmpegCancel()
-
-			cmd := exec.CommandContext(ffmpegCtx, "ffmpeg", args...)
-			ffmpegOut, ffmpegErr := cmd.CombinedOutput()
-			close(ffmpegDone)
-
-			if ffmpegErr != nil {
-				errMsg := string(ffmpegOut)
-				if len(errMsg) > 300 {
-					errMsg = errMsg[len(errMsg)-300:]
-				}
-				editProgress(fmt.Sprintf("⚠️ Watermark failed — sending without watermark...\n📄 `%s`\n📌 Msg: `%d`", file.FileName, msgID))
-				return nil, fmt.Errorf("FFmpeg watermark failed: %w\nFFmpeg: %s", ffmpegErr, errMsg)
-			}
-		}
-	} else {
-		// Colab URL nahi — local FFmpeg use karo
-		ext := filepath.Ext(file.FileName)
-		if ext == "" {
-			ext = ".mp4"
-		}
-		tmpOutput, err := os.CreateTemp("", "wm-output-*"+ext)
-		if err != nil {
-			return nil, fmt.Errorf("temp output file create failed: %w", err)
-		}
-		outputPath = tmpOutput.Name()
-		tmpOutput.Close()
-		defer os.Remove(outputPath)
-
-		drawtextFilter := fmt.Sprintf(
-			"drawtext=text='%s':fontcolor=white:fontsize=36:shadowcolor=black:shadowx=2:shadowy=2:x=w-tw-20:y=h-th-20",
-			strings.ReplaceAll(wmText, "'", "\\'"),
+		jobID, err := routes.SubmitWatermarkJob(
+			fileURL,
+			file.FileName,
+			file.FileSize,
+			wmText,
+			botToken,
+			adminChatID,
+			progressMsgID,
+			sendToChatID,
+			sendToTopicID,
+			caption,
+			msgID,
 		)
+		if err == nil {
+			editProgress(fmt.Sprintf(
+				"☁️ Job submitted! Colab processing...\n📄 `%s`\n🆔 `%s`\n📌 Msg: `%d`",
+				file.FileName, jobID, msgID,
+			))
 
-		ffmpegStart := time.Now()
-		editProgress(fmt.Sprintf("💧 Applying watermark...\n📄 `%s`\n📌 Msg: `%d`\n⏳ Processing... please wait.", file.FileName, msgID))
-
-		ffmpegDone := make(chan struct{})
-		go func() {
-			ticker := time.NewTicker(15 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ffmpegDone:
-					return
-				case <-ticker.C:
-					elapsed := time.Since(ffmpegStart).Round(time.Second)
-					editProgress(fmt.Sprintf("💧 Applying watermark...\n📄 `%s`\n📌 Msg: `%d`\n⏱ %s elapsed...", file.FileName, msgID, elapsed))
-				}
+			success, jobErr := routes.WaitForWatermarkJob(upCtx, jobID)
+			if success {
+				// Colab ne Telegram la already pathavle
+				return nil, true, nil
 			}
-		}()
-
-		args := []string{
-			"-i", inputPath,
-			"-vf", drawtextFilter,
-			"-c:a", "copy",
-			"-c:v", "libx264",
-			"-preset", "ultrafast",
-			"-crf", "28",
-			"-movflags", "+faststart",
-			"-y", outputPath,
-		}
-
-		ffmpegCtx, ffmpegCancel := context.WithTimeout(upCtx, 4*time.Hour)
-		defer ffmpegCancel()
-
-		cmd := exec.CommandContext(ffmpegCtx, "ffmpeg", args...)
-		ffmpegOut, ffmpegErr := cmd.CombinedOutput()
-		close(ffmpegDone)
-
-		if ffmpegErr != nil {
-			errMsg := string(ffmpegOut)
-			if len(errMsg) > 300 {
-				errMsg = errMsg[len(errMsg)-300:]
-			}
-			editProgress(fmt.Sprintf("⚠️ Watermark failed — sending without watermark...\n📄 `%s`\n📌 Msg: `%d`", file.FileName, msgID))
-			return nil, fmt.Errorf("FFmpeg watermark failed: %w\nFFmpeg: %s", ffmpegErr, errMsg)
+			// Colab failed → local fallback
+			editProgress(fmt.Sprintf(
+				"⚠️ Colab failed, local FFmpeg try...\n📄 `%s`\n📌 Msg: `%d`\n❌ %s",
+				file.FileName, msgID, jobErr,
+			))
 		}
 	}
 
+	// ── Local FFmpeg fallback ─────────────────────────────────────────────
+	tmpOutput, err := os.CreateTemp("", "wm-output-*"+fext)
+	if err != nil {
+		return nil, false, fmt.Errorf("temp output file create failed: %w", err)
+	}
+	outputPath := tmpOutput.Name()
+	tmpOutput.Close()
 	defer os.Remove(outputPath)
 
-	// Output file stat
-	outInfo, err := os.Stat(outputPath)
-	if err != nil || outInfo.Size() == 0 {
-		return nil, fmt.Errorf("watermark output file empty or missing")
+	drawtextFilter := fmt.Sprintf(
+		"drawtext=text='%s':fontcolor=white:fontsize=36:shadowcolor=black:shadowx=2:shadowy=2:x=w-tw-20:y=h-th-20",
+		strings.ReplaceAll(wmText, "'", "\\'"),
+	)
+
+	ffmpegStart := time.Now()
+	editProgress(fmt.Sprintf(
+		"💧 Local watermark processing...\n📄 `%s`\n📌 Msg: `%d`\n⏳ Please wait...",
+		file.FileName, msgID,
+	))
+
+	ffmpegDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ffmpegDone:
+				return
+			case <-ticker.C:
+				elapsed := time.Since(ffmpegStart).Round(time.Second)
+				editProgress(fmt.Sprintf(
+					"💧 Local watermark processing...\n📄 `%s`\n📌 Msg: `%d`\n⏱ %s elapsed...",
+					file.FileName, msgID, elapsed,
+				))
+			}
+		}
+	}()
+
+	ffmpegCtx, ffmpegCancel := context.WithTimeout(upCtx, 4*time.Hour)
+	defer ffmpegCancel()
+
+	cmd := exec.CommandContext(ffmpegCtx, "ffmpeg",
+		"-i", inputPath,
+		"-vf", drawtextFilter,
+		"-c:a", "copy",
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-crf", "28",
+		"-movflags", "+faststart",
+		"-y", outputPath,
+	)
+	ffmpegOut, ffmpegErr := cmd.CombinedOutput()
+	close(ffmpegDone)
+
+	if ffmpegErr != nil {
+		errMsg := string(ffmpegOut)
+		if len(errMsg) > 300 {
+			errMsg = errMsg[len(errMsg)-300:]
+		}
+		editProgress(fmt.Sprintf(
+			"⚠️ Watermark failed — sending without watermark...\n📄 `%s`\n📌 Msg: `%d`",
+			file.FileName, msgID,
+		))
+		return nil, false, fmt.Errorf("FFmpeg watermark failed: %w\nFFmpeg: %s", ffmpegErr, errMsg)
 	}
 
-	// ── Upload processed file ─────────────────────────────────────────────
-	editProgress(fmt.Sprintf("📤 Uploading watermarked...\n📄 `%s`\n📌 Msg: `%d`", file.FileName, msgID))
+	outInfo, err := os.Stat(outputPath)
+	if err != nil || outInfo.Size() == 0 {
+		return nil, false, fmt.Errorf("watermark output file empty or missing")
+	}
+
+	editProgress(fmt.Sprintf(
+		"📤 Uploading watermarked...\n📄 `%s`\n📌 Msg: `%d`",
+		file.FileName, msgID,
+	))
 
 	readFile, err := os.Open(outputPath)
 	if err != nil {
-		return nil, fmt.Errorf("output file open failed: %w", err)
+		return nil, false, fmt.Errorf("output file open failed: %w", err)
 	}
 	defer readFile.Close()
 
-	totalSize := outInfo.Size()
 	var upReader io.Reader = readFile
 	if onUploadProgress != nil {
 		upReader = &progressWriter{
 			w:          readFile,
-			total:      totalSize,
+			total:      outInfo.Size(),
 			onProgress: onUploadProgress,
 		}
 	}
@@ -1846,10 +1759,10 @@ func downloadWatermarkAndReupload(
 	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
 	uploadedFile, err := up.FromReader(upCtx, file.FileName, upReader)
 	if err != nil {
-		return nil, fmt.Errorf("upload failed: %w", err)
+		return nil, false, fmt.Errorf("upload failed: %w", err)
 	}
 
-	return uploadedFile, nil
+	return uploadedFile, false, nil
 }
 
 // ── getChannelPeerIfBotAdmin ──────────────────────────────────────────────────
