@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"EverythingSuckz/fsb/config"
-	"EverythingSuckz/fsb/internal/routes"
+	"EverythingSuckz/fsb/internal/wmqueue"
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
@@ -1628,12 +1628,12 @@ func downloadWatermarkAndReupload(
 
 		// Temp file serve token
 		fileToken := fmt.Sprintf("tf-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
-		routes.RegisterTempFile(fileToken, inputPath, file.FileName)
-		defer routes.UnregisterTempFile(fileToken)
+		wmqueue.RegisterTempFile(fileToken, inputPath, file.FileName)
+		defer wmqueue.UnregisterTempFile(fileToken)
 
 		fileURL := fmt.Sprintf("%s/api/colab/tempfile/%s", koyebURL, fileToken)
 
-		jobID, err := routes.SubmitWatermarkJob(
+		jobID, err := wmqueue.SubmitJob(
 			fileURL,
 			file.FileName,
 			file.FileSize,
@@ -1652,7 +1652,7 @@ func downloadWatermarkAndReupload(
 				file.FileName, jobID, msgID,
 			))
 
-			success, jobErr := routes.WaitForWatermarkJob(upCtx, jobID)
+			success, jobErr := wmqueue.WaitForJob(upCtx, jobID)
 			if success {
 				// Colab ne Telegram la already pathavle
 				return nil, true, nil
