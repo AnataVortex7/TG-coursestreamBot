@@ -45,7 +45,17 @@ func handleColabPoll(c *gin.Context) {
 		return
 	}
 	job := wmqueue.Default.Poll()
-	c.JSON(http.StatusOK, gin.H{"job": job})
+	if job == nil {
+		c.JSON(http.StatusOK, gin.H{"job": nil})
+		return
+	}
+	// Upload URL — Colab processed file POST karil ithe
+	koyebURL := os.Getenv("KOYEB_URL")
+	uploadURL := fmt.Sprintf("%s/api/colab/upload/%s", koyebURL, job.JobID)
+	c.JSON(http.StatusOK, gin.H{
+		"job":        job,
+		"upload_url": uploadURL,
+	})
 }
 
 // ── POST /api/colab/progress ──────────────────────────────────────────────────
@@ -112,15 +122,35 @@ func handleColabFailed(c *gin.Context) {
 }
 
 // ── GET /api/colab/tempfile/:token ────────────────────────────────────────────
+// Pipe-first: userbot ne directly response madhe stream karto — disk nahi
+// Fallback: temp file serve (old method, nahi vaparleli aata)
 
 func handleColabTempFile(c *gin.Context) {
 	if !colabSecretOK(c) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	token := c.Param("token")
-	filePath, fileName, ok := wmqueue.GetTempFile(token)
-	if !ok {
+	tkn := c.Param("token")
+
+	// ── Pipe mode (userbot direct stream) ────────────────────────────────
+	fileName, fileSize, pipeFn, ok := wmqueue.GetPipe(tkn)
+	if ok {
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+		if fileSize > 0 {
+			c.Header("Content-Length", fmt.Sprintf("%d", fileSize))
+		}
+		c.Header("Content-Type", "application/octet-stream")
+		c.Status(http.StatusOK)
+		if err := pipeFn(c.Writer); err != nil {
+			// Pipe error — Colab download fail hoil, job failed madhe jaeil
+			_ = err
+		}
+		return
+	}
+
+	// ── Fallback: temp file serve ─────────────────────────────────────────
+	filePath, fileName2, ok2 := wmqueue.GetTempFile(tkn)
+	if !ok2 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "file not found or expired"})
 		return
 	}
@@ -129,7 +159,7 @@ func handleColabTempFile(c *gin.Context) {
 		c.JSON(http.StatusGone, gin.H{"error": "file no longer available"})
 		return
 	}
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName2))
 	c.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
 	c.File(filePath)
 }
