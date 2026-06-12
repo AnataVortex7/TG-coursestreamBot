@@ -44,6 +44,7 @@ type WatermarkJob struct {
 	SendToChatID  int64     `json:"send_to_chat_id"`
 	SendToTopicID int       `json:"send_to_topic_id,omitempty"`
 	Caption       string    `json:"caption"`
+	OutputPath    string    `json:"output_path,omitempty"` // Colab ne upload kela tar path
 	CreatedAt     time.Time `json:"created_at"`
 	Status        string    `json:"status"`
 	Error         string    `json:"error,omitempty"`
@@ -118,6 +119,27 @@ func (q *Queue) Cleanup() {
 	}
 }
 
+// ── SetOutputPath / GetOutputPath ────────────────────────────────────────────
+
+func (q *Queue) SetOutputPath(jobID, path string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if job, ok := q.jobs[jobID]; ok {
+		job.OutputPath = path
+		job.UpdatedAt = time.Now()
+	}
+}
+
+func (q *Queue) GetOutputPath(jobID string) (string, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	job, ok := q.jobs[jobID]
+	if !ok || job.OutputPath == "" {
+		return "", false
+	}
+	return job.OutputPath, true
+}
+
 // ── Temp File Registry ────────────────────────────────────────────────────────
 
 type tempFileEntry struct {
@@ -170,6 +192,63 @@ func CleanupTempFiles() {
 	}
 }
 
+// ── Pipe Registry — userbot stream pipe saathi ───────────────────────────────
+// Disk nahi — Koyeb userbot ne directly Colab la pipe karil
+
+type PipeFn func(w http.ResponseWriter) error
+
+type pipeEntry struct {
+	Fn           PipeFn
+	FileName     string
+	FileSize     int64
+	RegisteredAt time.Time
+}
+
+var pipeRegistry = struct {
+	mu    sync.Mutex
+	pipes map[string]*pipeEntry
+}{
+	pipes: make(map[string]*pipeEntry),
+}
+
+func RegisterPipe(token, fileName string, fileSize int64, fn PipeFn) {
+	pipeRegistry.mu.Lock()
+	defer pipeRegistry.mu.Unlock()
+	pipeRegistry.pipes[token] = &pipeEntry{
+		Fn:           fn,
+		FileName:     fileName,
+		FileSize:     fileSize,
+		RegisteredAt: time.Now(),
+	}
+}
+
+func UnregisterPipe(token string) {
+	pipeRegistry.mu.Lock()
+	defer pipeRegistry.mu.Unlock()
+	delete(pipeRegistry.pipes, token)
+}
+
+func GetPipe(token string) (fileName string, fileSize int64, fn PipeFn, ok bool) {
+	pipeRegistry.mu.Lock()
+	defer pipeRegistry.mu.Unlock()
+	entry, found := pipeRegistry.pipes[token]
+	if !found {
+		return "", 0, nil, false
+	}
+	return entry.FileName, entry.FileSize, entry.Fn, true
+}
+
+func CleanupPipes() {
+	pipeRegistry.mu.Lock()
+	defer pipeRegistry.mu.Unlock()
+	cutoff := time.Now().Add(-4 * time.Hour)
+	for token, entry := range pipeRegistry.pipes {
+		if entry.RegisteredAt.Before(cutoff) {
+			delete(pipeRegistry.pipes, token)
+		}
+	}
+}
+
 // ── SubmitJob — commands package madhun call karo ─────────────────────────────
 
 func SubmitJob(
@@ -203,27 +282,29 @@ func SubmitJob(
 }
 
 // ── WaitForJob — job done/failed hoparyant wait karo ─────────────────────────
+// Returns: success, outputPath, errMsg
+// outputPath: Colab ne upload kela tar temp file path, otherwise ""
 
-func WaitForJob(ctx context.Context, jobID string) (bool, string) {
+func WaitForJob(ctx context.Context, jobID string) (bool, string, string) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	timeout := time.After(4 * time.Hour)
 	for {
 		select {
 		case <-ctx.Done():
-			return false, "context cancelled"
+			return false, "", "context cancelled"
 		case <-timeout:
-			return false, "job timeout (4hr exceeded)"
+			return false, "", "job timeout (4hr exceeded)"
 		case <-ticker.C:
 			job, ok := Default.Get(jobID)
 			if !ok {
-				return false, "job not found in queue"
+				return false, "", "job not found in queue"
 			}
 			switch job.Status {
 			case StatusDone:
-				return true, ""
+				return true, job.OutputPath, ""
 			case StatusFailed:
-				return false, job.Error
+				return false, "", job.Error
 			}
 		}
 	}
@@ -276,6 +357,7 @@ func StartCleanupLoop() {
 		for range ticker.C {
 			Default.Cleanup()
 			CleanupTempFiles()
+			CleanupPipes()
 		}
 	}()
 }
