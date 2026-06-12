@@ -27,6 +27,7 @@ func (e *allRoutes) LoadColabAPI(r *Route) {
 	r.Engine.POST("/api/colab/done", handleColabDone)
 	r.Engine.POST("/api/colab/failed", handleColabFailed)
 	r.Engine.GET("/api/colab/tempfile/:token", handleColabTempFile)
+	r.Engine.GET("/api/colab/status", handleColabStatus)
 
 	wmqueue.StartCleanupLoop()
 }
@@ -44,6 +45,9 @@ func handleColabPoll(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	// Colab online tracker update karo
+	wmqueue.RecordPoll()
+
 	job := wmqueue.Default.Poll()
 	if job == nil {
 		c.JSON(http.StatusOK, gin.H{"job": nil})
@@ -162,4 +166,18 @@ func handleColabTempFile(c *gin.Context) {
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName2))
 	c.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
 	c.File(filePath)
+}
+
+// ── GET /api/colab/status ─────────────────────────────────────────────────────
+// Colab online/offline status + pending job count
+
+func handleColabStatus(c *gin.Context) {
+	if !colabSecretOK(c) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"online":        wmqueue.IsColabOnline(),
+		"last_poll_ago": wmqueue.LastPollAgo(),
+	})
 }
