@@ -1245,13 +1245,13 @@ func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 // parallel चालतात, म्हणून हे struct goroutines मध्ये pass केलं जातं.
 
 type preparedMessage struct {
-	textOnly     bool // true असेल तर Phase B ने काही करायची गरज नाही (Phase A ने सगळं केलं)
-	colabSent    bool // true असेल तर Colab ने already Telegram la pathavle — Phase B skip
-	tgMsg        *tg.Message
-	finalCaption string
-	file         *types.File
-	uploadedFile tg.InputFileClass
-	msgID        int
+	textOnly        bool   // true असेल तर Phase B ने काही करायची गरज नाही (Phase A ने सगळं केलं)
+	tgMsg           *tg.Message
+	finalCaption    string
+	file            *types.File
+	uploadedFile    tg.InputFileClass
+	colabOutputPath string // Colab processed file path — Phase B ने MTProto upload करायचे
+	msgID           int
 }
 
 // ── prepareMessage ───────────────────────────────────────────────────────────
@@ -1400,10 +1400,10 @@ func prepareMessage(
 	wmText, wmOk := getWatermarkText()
 
 	var uploadedFile tg.InputFileClass
-	var colabSent bool
+	var colabOutputPath string
 
 	if wmOk && isVideoFile(file) {
-		// Watermark path: download → Colab queue → upload
+		// Watermark path: download → Colab queue → [Phase B MTProto upload]
 		editProgress(fmt.Sprintf(
 			"📥 Downloading for watermark...\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
 			file.FileName, formatSize(file.FileSize), msgID,
@@ -1423,7 +1423,7 @@ func prepareMessage(
 			finalCaptionForColab = file.FileName
 		}
 
-		uploadedFile, colabSent, err = downloadWatermarkAndReupload(
+		uploadedFile, colabOutputPath, err = downloadWatermarkAndReupload(
 			stallCtx,
 			upCtx,
 			userbotClient,
@@ -1465,24 +1465,22 @@ func prepareMessage(
 		return nil, fmt.Errorf("download/upload failed: %w", err)
 	}
 
-	// Colab ne Telegram la already pathavle — Phase B la kahi karayachi garaj nahi
-	if colabSent {
-		return &preparedMessage{colabSent: true}, nil
-	}
-
 	return &preparedMessage{
-		tgMsg:        tgMsg,
-		finalCaption: finalCaption,
-		file:         file,
-		uploadedFile: uploadedFile,
-		msgID:        msgID,
+		tgMsg:           tgMsg,
+		finalCaption:    finalCaption,
+		file:            file,
+		uploadedFile:    uploadedFile,
+		colabOutputPath: colabOutputPath,
+		msgID:           msgID,
 	}, nil
 }
 
 // ── sendPreparedMessage ────────────────────────────────────────────────────────
 // Phase B: prepareMessage चं output घेऊन Telegram कडे final media send करतो
 // (Step 5-8: thumbnail, build media, send to admin/sendChannel/sourcePeer + log channel).
-// textOnly / colabSent cases साठी हे काहीच करत नाही (Phase A ने आधीच पूर्ण केलं).
+// textOnly साठी हे काहीच करत नाही.
+// [PIPELINE FIX] colabOutputPath असेल तर आधी MTProto upload करतो (Phase A मधून shift),
+// त्यामुळे Phase A(N+1) prefetch Colab ला लगेच Job N+1 देऊ शकतो.
 
 func sendPreparedMessage(
 	bgCtx context.Context,
@@ -1498,15 +1496,50 @@ func sendPreparedMessage(
 	pm *preparedMessage,
 ) error {
 
-	if pm.textOnly || pm.colabSent {
+	if pm.textOnly {
 		return nil
 	}
 
 	tgMsg := pm.tgMsg
 	finalCaption := pm.finalCaption
 	file := pm.file
-	uploadedFile := pm.uploadedFile
 	msgID := pm.msgID
+
+	// ── [PIPELINE FIX] Colab output → MTProto upload (Phase B मध्ये) ──────
+	// Phase A आता फक्त WaitForJob (finalize पर्यंत) करतो — upload इथे होतो,
+	// Phase A(N+1) Phase B(N) सोबत parallel चालू होतो.
+	var uploadedFile tg.InputFileClass
+	if pm.colabOutputPath != "" {
+		defer os.Remove(pm.colabOutputPath)
+
+		editProgress(fmt.Sprintf(
+			"📤 Uploading watermarked...\n📄 `%s`\n📌 Msg: `%d`",
+			file.FileName, msgID,
+		))
+
+		outFile, openErr := os.Open(pm.colabOutputPath)
+		if openErr != nil {
+			return fmt.Errorf("colab output open failed: %w", openErr)
+		}
+		defer outFile.Close()
+
+		outInfo, statErr := outFile.Stat()
+		if statErr != nil || outInfo.Size() == 0 {
+			return fmt.Errorf("colab output file empty or missing")
+		}
+
+		uploadCtx, uploadCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer uploadCancel()
+
+		up := uploader.NewUploader(botClient.API()).WithPartSize(256 * 1024)
+		uploadedInputFile, upErr := up.FromReader(uploadCtx, file.FileName, outFile)
+		if upErr != nil {
+			return fmt.Errorf("upload after colab failed: %w", upErr)
+		}
+		uploadedFile = uploadedInputFile
+	} else {
+		uploadedFile = pm.uploadedFile
+	}
 
 	// ── Step 5: Build media + attributes ─────────────────────────────────
 	// ── Step 5: Build media + attributes ─────────────────────────────────
@@ -1697,20 +1730,18 @@ func isVideoFile(file *types.File) bool {
 }
 
 // ── downloadWatermarkAndReupload ──────────────────────────────────────────────
-// NEW: Colab polling queue use karto.
+// [PIPELINE FIX] Colab polling queue use karto.
 // Flow:
-//   1. Userbot ne file download karo → Koyeb temp file
-//   2. Temp file token generate karo → /api/colab/tempfile/:token serve
+//   1. Userbot ne file download karo → Koyeb pipe via HTTP
+//   2. Pipe token generate karo → /api/colab/tempfile/:token serve
 //   3. Colab job queue madhe submit karo
-//   4. Colab poll → download → FFmpeg → Bot API send
-//   5. Koyeb wait karto → done/failed
-//   6. Colab ne already Telegram la pathavle → caller ne send karaychi garaj nahi
-//      (return nil, true = colabSent, nil)
-//   7. Failed → error return (no local fallback)
+//   4. Colab poll → download → FFmpeg → chunk upload → finalize
+//   5. WaitForJob: OutputPath set (= finalize done) → EARLY RETURN (koyeb_done chi vat nahi)
+//   6. colabOutputPath return karo → Phase B MTProto upload karil
+//      (yat Phase A(N+1) prefetch parallel chalu hoto → Colab kal Job N+1 milto)
 //
-// Returns: (uploadedFile, colabSent bool, error)
-// colabSent = true → prepareMessage ne preparedMessage.colabSent=true return karil
-
+// Returns: (uploadedFile, colabOutputPath, error)
+// uploadedFile = nil (colab path case mein), colabOutputPath = Phase B upload karil
 func downloadWatermarkAndReupload(
 	dlCtx context.Context,
 	upCtx context.Context,
@@ -1728,7 +1759,7 @@ func downloadWatermarkAndReupload(
 	sendToChatID int64,
 	sendToTopicID int,
 	caption string,
-) (tg.InputFileClass, bool, error) {
+) (tg.InputFileClass, string, error) {
 
 	// ── Colab Queue: KOYEB_URL set asel tar ───────────────────────────────
 	koyebURL := os.Getenv("KOYEB_URL")
@@ -1792,43 +1823,13 @@ func downloadWatermarkAndReupload(
 				file.FileName, jobID, msgID,
 			))
 
+			// [PIPELINE FIX] WaitForJob: OutputPath set (finalize) वर early return.
+			// koyeb_done chi vat nahi — Phase B MTProto upload karil,
+			// tyamule Phase A(N+1) prefetch lagech chalu hoto.
 			success, outputPath, jobErr := wmqueue.WaitForJob(upCtx, jobID)
 			if success && outputPath != "" {
-				// Colab ne processed file upload kela → Koyeb uploader ne upload karo → MTProto send
-				defer os.Remove(outputPath)
-
-				editProgress(fmt.Sprintf(
-					"📤 Uploading watermarked...\n📄 `%s`\n📌 Msg: `%d`",
-					file.FileName, msgID,
-				))
-
-				outFile, openErr := os.Open(outputPath)
-				if openErr != nil {
-					return nil, false, fmt.Errorf("colab output open failed: %w", openErr)
-				}
-				defer outFile.Close()
-
-				outInfo, statErr := outFile.Stat()
-				if statErr != nil || outInfo.Size() == 0 {
-					return nil, false, fmt.Errorf("colab output file empty or missing")
-				}
-
-				var upReader io.Reader = outFile
-				if onUploadProgress != nil {
-					upReader = &progressWriter{
-						w:          outFile,
-						total:      outInfo.Size(),
-						onProgress: onUploadProgress,
-					}
-				}
-
-				up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
-				uploadedInputFile, upErr := up.FromReader(upCtx, file.FileName, upReader)
-				if upErr != nil {
-					return nil, false, fmt.Errorf("upload after colab failed: %w", upErr)
-				}
-				// colabSent=false — caller ne MTProto ne send karayche (existing code)
-				return uploadedInputFile, false, nil
+				// colabOutputPath return karo — Phase B MTProto upload + Telegram send karil
+				return nil, outputPath, nil
 			}
 
 			// Colab failed — no local fallback
@@ -1840,12 +1841,12 @@ func downloadWatermarkAndReupload(
 				"❌ Colab failed\n📄 `%s`\n📌 Msg: `%d`\n`%s`",
 				file.FileName, msgID, errMsg,
 			))
-			return nil, false, fmt.Errorf("colab watermark failed: %s", errMsg)
+			return nil, "", fmt.Errorf("colab watermark failed: %s", errMsg)
 		}
 	}
 
 	// KOYEB_URL set nahi — Colab unavailable
-	return nil, false, fmt.Errorf("colab unavailable: KOYEB_URL not set")
+	return nil, "", fmt.Errorf("colab unavailable: KOYEB_URL not set")
 }
 
 // ── getChannelPeerIfBotAdmin ──────────────────────────────────────────────────
