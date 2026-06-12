@@ -371,11 +371,15 @@ func WaitForJob(ctx context.Context, jobID string) (bool, string, string) {
 			if !ok {
 				return false, "", "job not found in queue"
 			}
-			switch job.Status {
-			case StatusDone:
-				return true, job.OutputPath, ""
-			case StatusFailed:
+			if job.Status == StatusFailed {
 				return false, "", job.Error
+			}
+			// [PIPELINE FIX] Early return: OutputPath set = Colab finalize done.
+			// koyeb_done ची वाट नाही — Phase B MTProto upload करेल.
+			// यामुळे Phase A(N+1) prefetch finalize नंतर लगेच सुरू होतो,
+			// Colab ला Job N+1 MTProto upload सुरू होण्याआधीच मिळतो.
+			if job.OutputPath != "" {
+				return true, job.OutputPath, ""
 			}
 		}
 	}
