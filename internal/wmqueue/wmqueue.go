@@ -51,6 +51,42 @@ type WatermarkJob struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// ── Colab Online Tracker ──────────────────────────────────────────────────────
+// Poll request aali ki lastPollTime update hoto
+// 2 min poll nahi aali → Colab offline
+
+var colabTracker = struct {
+	mu           sync.Mutex
+	lastPollTime time.Time
+}{
+	lastPollTime: time.Time{}, // zero = never polled
+}
+
+func RecordPoll() {
+	colabTracker.mu.Lock()
+	defer colabTracker.mu.Unlock()
+	colabTracker.lastPollTime = time.Now()
+}
+
+func IsColabOnline() bool {
+	colabTracker.mu.Lock()
+	defer colabTracker.mu.Unlock()
+	if colabTracker.lastPollTime.IsZero() {
+		return false
+	}
+	return time.Since(colabTracker.lastPollTime) < 2*time.Minute
+}
+
+func LastPollAgo() string {
+	colabTracker.mu.Lock()
+	defer colabTracker.mu.Unlock()
+	if colabTracker.lastPollTime.IsZero() {
+		return "never"
+	}
+	d := time.Since(colabTracker.lastPollTime).Round(time.Second)
+	return d.String()
+}
+
 // ── Job Queue ─────────────────────────────────────────────────────────────────
 
 type Queue struct {
@@ -112,9 +148,22 @@ func (q *Queue) Cleanup() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	cutoff := time.Now().Add(-2 * time.Hour)
+	// Colab offline — processing madhe 30 min+ stuck jobs failed madhe
+	staleCutoff := time.Now().Add(-30 * time.Minute)
 	for id, job := range q.jobs {
 		if job.UpdatedAt.Before(cutoff) {
 			delete(q.jobs, id)
+			continue
+		}
+		if job.Status == StatusProcessing && job.UpdatedAt.Before(staleCutoff) {
+			job.Status = StatusFailed
+			job.Error = "colab offline or timeout (30min no update)"
+			job.UpdatedAt = time.Now()
+			// Progress message edit karo
+			if job.ProgressMsgID > 0 {
+				go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
+					fmt.Sprintf("❌ Colab offline / timeout\n📄 `%s`\n⏱ 30min पेक्षा जास्त वेळ गेला", job.FileName))
+			}
 		}
 	}
 }
@@ -352,7 +401,7 @@ func SecretOK(headerVal string) bool {
 
 func StartCleanupLoop() {
 	go func() {
-		ticker := time.NewTicker(30 * time.Minute)
+		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			Default.Cleanup()
