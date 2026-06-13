@@ -46,10 +46,18 @@ func handleColabPoll(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	// Colab online tracker update karo
-	wmqueue.RecordPoll()
+	// प्रत्येक Colab instance चा स्वतःचा unique worker_id (notebook restart
+	// वर नवीन uuid) — multiple Colab instances parallel live असू शकतात,
+	// प्रत्येकाचं online/offline state independently track करण्यासाठी.
+	workerID := c.Query("worker_id")
+	if workerID == "" {
+		workerID = c.GetHeader("X-Worker-ID")
+	}
 
-	job := wmqueue.Default.Poll()
+	// Colab online tracker update karo (per-worker)
+	wmqueue.RecordPoll(workerID)
+
+	job := wmqueue.Default.Poll(workerID)
 	if job == nil {
 		c.JSON(http.StatusOK, gin.H{"job": nil, "stop": wmqueue.IsColabStopRequested()})
 		return
