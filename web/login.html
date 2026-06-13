@@ -360,31 +360,6 @@
       <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()">Create Account &#x2192;</button>
     </div>
 
-    <!-- Step 2: OTP verification -->
-    <div id="reg-step-otp" class="step">
-      <h2>Verify your email</h2>
-      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="reg-email-display" style="color:var(--text);"></strong></p>
-      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>
-
-      <div class="otp-boxes">
-        <input class="otp-box" id="rd0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />
-        <input class="otp-box" id="rd1" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-        <input class="otp-box" id="rd2" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-        <input class="otp-box" id="rd3" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" />
-      </div>
-
-      <button id="btn-reg-verify" class="btn-primary" onclick="verifyRegOTP()">Verify &amp; Create Account &#x2192;</button>
-
-      <div class="resend-row">
-        <span id="reg-resend-timer">Resend in <strong id="reg-resend-countdown">60</strong>s</span>
-        <button id="btn-reg-resend" class="btn-link" onclick="submitRegistration(true)" disabled>Resend OTP</button>
-      </div>
-
-      <div style="margin-top:0.9rem;text-align:center;">
-        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToRegForm()">&#x2190; Change details</button>
-      </div>
-    </div>
-
     <p class="footer-note">Already have an account? <a href="#" onclick="switchTab('login');return false;">Sign in</a></p>
   </div>
 </div>
@@ -643,16 +618,6 @@ async function verifyOTP() {
 }
 
 // ─── Registration flow ────────────────────────────────────────────────────────
-let regEmailAddr = '';
-let regResendInterval = null;
-
-function showRegStep(name) {
-  ['form', 'otp'].forEach(s => {
-    document.getElementById('reg-step-' + s).classList.toggle('active', s === name);
-  });
-  clearRegAlert();
-}
-
 function showRegAlert(type, msg) {
   const el = document.getElementById('reg-alert');
   const icon = type === 'error'
@@ -668,7 +633,7 @@ function clearRegAlert() {
   el.innerHTML = '';
 }
 
-async function submitRegistration(isResend = false) {
+async function submitRegistration() {
   clearRegAlert();
 
   const fullName = document.getElementById('reg-name').value.trim();
@@ -677,114 +642,24 @@ async function submitRegistration(isResend = false) {
   const password = document.getElementById('reg-pass').value;
   const confirm  = document.getElementById('reg-confirm').value;
 
-  if (!isResend) {
-    if (!fullName) { showRegAlert('error', 'Full name is required.'); return; }
-    if (!email)    { showRegAlert('error', 'Email address is required.'); return; }
-    if (password.length < 6) { showRegAlert('error', 'Password must be at least 6 characters.'); return; }
-    if (password !== confirm) { showRegAlert('error', 'Passwords do not match.'); return; }
-  }
-
-  regEmailAddr = email || regEmailAddr;
+  if (!fullName) { showRegAlert('error', 'Full name is required.'); return; }
+  if (!email)    { showRegAlert('error', 'Email address is required.'); return; }
+  if (password.length < 6) { showRegAlert('error', 'Password must be at least 6 characters.'); return; }
+  if (password !== confirm) { showRegAlert('error', 'Passwords do not match.'); return; }
 
   const btn = document.getElementById('btn-reg-submit');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Sending OTP…'; }
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Creating account…';
 
   try {
     const fd = new FormData();
-    fd.append('full_name', fullName || '');
-    fd.append('mobile',    mobile   || '');
-    fd.append('email',     regEmailAddr);
-    fd.append('password',         password || '');
-    fd.append('confirm_password', confirm  || '');
+    fd.append('full_name',        fullName);
+    fd.append('mobile',           mobile);
+    fd.append('email',            email);
+    fd.append('password',         password);
+    fd.append('confirm_password', confirm);
 
     const res  = await fetch('/register', { method: 'POST', body: fd });
-    const data = await res.json();
-
-    if (!res.ok) {
-      if (res.status === 429) {
-        // Already sent — jump to OTP step
-        document.getElementById('reg-email-display').textContent = regEmailAddr;
-        showRegStep('otp');
-        clearRegOTPBoxes();
-        document.getElementById('rd0').focus();
-        startRegResendTimer();
-        showRegAlert('warn', 'OTP was already sent to ' + regEmailAddr + '. Enter it below.');
-        return;
-      }
-      showRegAlert('error', data.error || 'Registration failed. Please try again.');
-      if (btn) { btn.disabled = false; btn.textContent = 'Create Account →'; }
-      return;
-    }
-
-    // Success — show OTP step
-    document.getElementById('reg-email-display').textContent = regEmailAddr;
-    showRegStep('otp');
-    clearRegOTPBoxes();
-    document.getElementById('rd0').focus();
-    startRegResendTimer();
-    if (isResend) showRegAlert('success', 'New OTP sent to ' + regEmailAddr);
-
-  } catch (_) {
-    showRegAlert('error', 'Network error. Please try again.');
-    if (btn) { btn.disabled = false; btn.textContent = 'Create Account →'; }
-  }
-}
-
-function startRegResendTimer() {
-  const resendBtn = document.getElementById('btn-reg-resend');
-  const timerEl   = document.getElementById('reg-resend-timer');
-  const countdown = document.getElementById('reg-resend-countdown');
-  if (regResendInterval) clearInterval(regResendInterval);
-
-  let secs = 60;
-  resendBtn.disabled = true;
-  timerEl.style.display = 'inline';
-  countdown.textContent = secs;
-
-  regResendInterval = setInterval(() => {
-    secs--;
-    countdown.textContent = secs;
-    if (secs <= 0) {
-      clearInterval(regResendInterval);
-      timerEl.style.display = 'none';
-      resendBtn.disabled = false;
-    }
-  }, 1000);
-}
-
-function clearRegOTPBoxes() {
-  ['rd0','rd1','rd2','rd3'].forEach(id => {
-    const el = document.getElementById(id);
-    el.value = '';
-    el.classList.remove('filled');
-  });
-}
-
-function goBackToRegForm() {
-  if (regResendInterval) clearInterval(regResendInterval);
-  clearRegOTPBoxes();
-  showRegStep('form');
-  const btn = document.getElementById('btn-reg-submit');
-  if (btn) { btn.disabled = false; btn.textContent = 'Create Account →'; }
-}
-
-async function verifyRegOTP() {
-  clearRegAlert();
-  const otp = ['rd0','rd1','rd2','rd3'].map(id => document.getElementById(id).value).join('');
-  if (otp.length !== 4) {
-    showRegAlert('error', 'Please enter all 4 digits.');
-    return;
-  }
-
-  const btn = document.getElementById('btn-reg-verify');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Verifying…';
-
-  try {
-    const fd = new FormData();
-    fd.append('email', regEmailAddr);
-    fd.append('otp',   otp);
-    const res  = await fetch('/register/verify', { method: 'POST', body: fd });
     const data = await res.json();
 
     if (res.ok && data.redirect) {
@@ -792,52 +667,15 @@ async function verifyRegOTP() {
       return;
     }
 
-    showRegAlert('error', data.error || 'Verification failed. Try again.');
-    clearRegOTPBoxes();
-    document.getElementById('rd0').focus();
+    showRegAlert('error', data.error || 'Registration failed. Please try again.');
     btn.disabled = false;
-    btn.textContent = 'Verify & Create Account →';
+    btn.textContent = 'Create Account →';
   } catch (_) {
     showRegAlert('error', 'Network error. Please try again.');
     btn.disabled = false;
-    btn.textContent = 'Verify & Create Account →';
+    btn.textContent = 'Create Account →';
   }
 }
-
-// ─── Registration OTP boxes keyboard UX ──────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-  // (existing DOMContentLoaded code is above — this adds reg boxes)
-  const regBoxes = ['rd0','rd1','rd2','rd3'].map(id => document.getElementById(id));
-
-  regBoxes.forEach((box, i) => {
-    box.addEventListener('input', e => {
-      const val = e.target.value.replace(/\D/g, '');
-      e.target.value = val ? val[val.length - 1] : '';
-      e.target.classList.toggle('filled', !!e.target.value);
-      if (val && i < 3) regBoxes[i + 1].focus();
-      if (regBoxes.every(b => b.value)) verifyRegOTP();
-    });
-    box.addEventListener('keydown', e => {
-      if (e.key === 'Backspace' && !box.value && i > 0) {
-        regBoxes[i-1].value = '';
-        regBoxes[i-1].classList.remove('filled');
-        regBoxes[i-1].focus();
-      }
-    });
-    box.addEventListener('paste', e => {
-      e.preventDefault();
-      const text = (e.clipboardData || window.clipboardData).getData('text').replace(/\D/g,'');
-      if (text.length === 4) {
-        regBoxes.forEach((b, idx) => {
-          b.value = text[idx] || '';
-          b.classList.toggle('filled', !!b.value);
-        });
-        regBoxes[3].focus();
-        verifyRegOTP();
-      }
-    });
-  });
-});
 
 async function doPasswordLogin() {
   clearAlert();
