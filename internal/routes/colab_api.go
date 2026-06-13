@@ -86,6 +86,7 @@ func handleColabProgress(c *gin.Context) {
 		JobID    string `json:"job_id"`
 		Message  string `json:"message"`
 		WorkerID string `json:"worker_id"`
+		Seq      int64  `json:"seq"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
@@ -110,9 +111,19 @@ func handleColabProgress(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
 		return
 	}
+
+	// ── Ordered, serialized edit ─────────────────────────────────────────
+	// seq <= last-applied → stale/out-of-order, skip.
+	// आधीचा edit अजून चालू असेल → हा skip (पुढचा update latest % दाखवेल).
+	// Telegram edit complete झाल्यावरच पुढचा pick होतो (FinishProgress).
 	if job.ProgressMsgID > 0 {
-		wmqueue.EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID, req.Message)
+		j, proceed := wmqueue.Default.TryProgress(req.JobID, req.Seq)
+		if proceed {
+			wmqueue.EditTgMessage(j.BotToken, j.ChatID, j.ProgressMsgID, req.Message)
+			wmqueue.Default.FinishProgress(req.JobID)
+		}
 	}
+
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
