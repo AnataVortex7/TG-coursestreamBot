@@ -30,6 +30,7 @@ func (e *allRoutes) LoadColabAPI(r *Route) {
 	r.Engine.GET("/api/colab/status", handleColabStatus)
 
 	wmqueue.StartCleanupLoop()
+	wmqueue.StartColabWatcher()
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -50,7 +51,7 @@ func handleColabPoll(c *gin.Context) {
 
 	job := wmqueue.Default.Poll()
 	if job == nil {
-		c.JSON(http.StatusOK, gin.H{"job": nil})
+		c.JSON(http.StatusOK, gin.H{"job": nil, "stop": wmqueue.IsColabStopRequested()})
 		return
 	}
 	// Colab ne processed file directly Telethon (MTProto, bot_token login) ne
@@ -62,6 +63,7 @@ func handleColabPoll(c *gin.Context) {
 		"job":      job,
 		"api_id":   os.Getenv("API_ID"),
 		"api_hash": os.Getenv("API_HASH"),
+		"stop":     wmqueue.IsColabStopRequested(),
 	})
 }
 
