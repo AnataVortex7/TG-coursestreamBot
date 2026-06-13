@@ -1732,20 +1732,11 @@ func downloadWatermarkAndReupload(
 
 	// ── Colab Queue: KOYEB_URL set asel tar ───────────────────────────────
 	koyebURL := os.Getenv("KOYEB_URL")
-	if koyebURL != "" {
-		// Colab online check — offline asel tar warn karo pan job submit hoto, wait karil
-		if !wmqueue.IsColabOnline() {
-			lastAgo := wmqueue.LastPollAgo()
-			editProgress(fmt.Sprintf(
-				"⚠️ Colab offline (last seen: %s ago)\n📄 `%s`\n📌 Msg: `%d`\n⏳ Job queue madhe add hoil, Colab online alyavar process hoil...",
-				lastAgo, file.FileName, msgID,
-			))
-		} else {
-			editProgress(fmt.Sprintf(
-				"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
-				file.FileName, msgID,
-			))
-		}
+	if koyebURL != "" && wmqueue.IsColabOnline() {
+		editProgress(fmt.Sprintf(
+			"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
+			file.FileName, msgID,
+		))
 
 		// Pipe token — Koyeb disk nahi, userbot directly response madhe pipe karil
 		pipeToken := fmt.Sprintf("pipe-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
@@ -1792,7 +1783,11 @@ func downloadWatermarkAndReupload(
 				file.FileName, jobID, msgID,
 			))
 
-			success, jobErr := wmqueue.WaitForDone(upCtx, jobID)
+			// WaitForDone साठी upCtx (30min timeout) नको — Colab बराच वेळ
+			// offline राहिला तरी job wmqueue मध्ये जिवंत राहतो आणि परत
+			// online झाल्यावर resume होतो. फक्त bot/process shutdown
+			// (bgCtx-कार्यान्वित) झाल्यास थांबावं.
+			success, jobErr := wmqueue.WaitForDone(context.Background(), jobID)
 			if success {
 				// Colab ne FFmpeg karun, Telethon (bot_token, MTProto) ne
 				// directly target chat la file pathavli — Koyeb la file
