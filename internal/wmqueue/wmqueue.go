@@ -44,9 +44,6 @@ type WatermarkJob struct {
 	SendToChatID  int64     `json:"send_to_chat_id"`
 	SendToTopicID int       `json:"send_to_topic_id,omitempty"`
 	Caption       string    `json:"caption"`
-	OutputPath    string    `json:"output_path,omitempty"`
-	ChunkDir      string    `json:"chunk_dir,omitempty"`   // chunks temp dir
-	TotalChunks   int       `json:"total_chunks,omitempty"` // Colab ne kitne chunks pathavnar
 	CreatedAt     time.Time `json:"created_at"`
 	Status        string    `json:"status"`
 	Error         string    `json:"error,omitempty"`
@@ -144,49 +141,8 @@ func (q *Queue) Get(jobID string) (*WatermarkJob, bool) {
 	return job, ok
 }
 
-// ── SetOutputPath / GetOutputPath ────────────────────────────────────────────
-
-func (q *Queue) SetOutputPath(jobID, path string) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if job, ok := q.jobs[jobID]; ok {
-		job.OutputPath = path
-		job.UpdatedAt = time.Now()
-	}
-}
-
-func (q *Queue) GetOutputPath(jobID string) (string, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	job, ok := q.jobs[jobID]
-	if !ok || job.OutputPath == "" {
-		return "", false
-	}
-	return job.OutputPath, true
-}
-
-// ── SetChunkDir / GetChunkDir ─────────────────────────────────────────────────
-// Chunked upload saathi — Colab chunks kuth save ahet track karo
-
-func (q *Queue) SetChunkDir(jobID, dir string, totalChunks int) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if job, ok := q.jobs[jobID]; ok {
-		job.ChunkDir = dir
-		job.TotalChunks = totalChunks
-		job.UpdatedAt = time.Now()
-	}
-}
-
-func (q *Queue) GetChunkInfo(jobID string) (dir string, total int, ok bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	job, found := q.jobs[jobID]
-	if !found || job.ChunkDir == "" {
-		return "", 0, false
-	}
-	return job.ChunkDir, job.TotalChunks, true
-}
+// (OutputPath / ChunkDir helpers काढले — Colab आता थेट Telethon ने
+//  Telegram la send करतो, Koyeb ला processed file परत येत नाही.)
 
 func (q *Queue) Cleanup() {
 	q.mu.Lock()
@@ -195,10 +151,6 @@ func (q *Queue) Cleanup() {
 	staleCutoff := time.Now().Add(-30 * time.Minute)
 	for id, job := range q.jobs {
 		if job.UpdatedAt.Before(cutoff) {
-			// chunk dir pan delete karo
-			if job.ChunkDir != "" {
-				os.RemoveAll(job.ChunkDir)
-			}
 			delete(q.jobs, id)
 			continue
 		}
@@ -354,28 +306,31 @@ func SubmitJob(
 	return jobID, nil
 }
 
-// ── WaitForJob ────────────────────────────────────────────────────────────────
+// ── WaitForDone ───────────────────────────────────────────────────────────────
+// Colab job poll karto, FFmpeg karto, aani स्वतः Telethon ने Telegram la
+// processed file pathvतो. Koyeb फक्त job चा final status (done/failed) wait
+// karto — output file Koyeb kade kadhich yet nahi.
 
-func WaitForJob(ctx context.Context, jobID string) (bool, string, string) {
+func WaitForDone(ctx context.Context, jobID string) (bool, string) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	timeout := time.After(4 * time.Hour)
 	for {
 		select {
 		case <-ctx.Done():
-			return false, "", "context cancelled"
+			return false, "context cancelled"
 		case <-timeout:
-			return false, "", "job timeout (4hr exceeded)"
+			return false, "job timeout (4hr exceeded)"
 		case <-ticker.C:
 			job, ok := Default.Get(jobID)
 			if !ok {
-				return false, "", "job not found in queue"
+				return false, "job not found in queue"
 			}
 			switch job.Status {
 			case StatusDone:
-				return true, job.OutputPath, ""
+				return true, ""
 			case StatusFailed:
-				return false, "", job.Error
+				return false, job.Error
 			}
 		}
 	}
