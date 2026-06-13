@@ -18,6 +18,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"EverythingSuckz/fsb/config"
 )
 
 // ── Job Status ────────────────────────────────────────────────────────────────
@@ -84,6 +86,34 @@ func LastPollAgo() string {
 	return d.String()
 }
 
+// ── Colab Stop Flag ────────────────────────────────────────────────────────────
+// Admin command (/colabstop) ने set होतो — Colab worker पुढच्या poll वर
+// `stop: true` बघून loop graceful exit करतो. बाकी bot/server normal चालतो,
+// फक्त Colab polling loop थांबतो.
+
+var colabStop = struct {
+	mu      sync.Mutex
+	stopped bool
+}{}
+
+func RequestColabStop() {
+	colabStop.mu.Lock()
+	defer colabStop.mu.Unlock()
+	colabStop.stopped = true
+}
+
+func ClearColabStop() {
+	colabStop.mu.Lock()
+	defer colabStop.mu.Unlock()
+	colabStop.stopped = false
+}
+
+func IsColabStopRequested() bool {
+	colabStop.mu.Lock()
+	defer colabStop.mu.Unlock()
+	return colabStop.stopped
+}
+
 // ── Job Queue ─────────────────────────────────────────────────────────────────
 
 type Queue struct {
@@ -148,22 +178,51 @@ func (q *Queue) Cleanup() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	cutoff := time.Now().Add(-2 * time.Hour)
-	staleCutoff := time.Now().Add(-30 * time.Minute)
 	for id, job := range q.jobs {
 		if job.UpdatedAt.Before(cutoff) {
 			delete(q.jobs, id)
 			continue
 		}
-		if job.Status == StatusProcessing && job.UpdatedAt.Before(staleCutoff) {
-			job.Status = StatusFailed
-			job.Error = "colab offline or timeout (30min no update)"
+		// Time-limit नाही — Colab offline असेल तर StartColabWatcher
+		// processing jobs ला परत pending करतो (online झाल्यावर fresh resume).
+	}
+}
+
+// ── RequeueStaleProcessing ────────────────────────────────────────────────────
+// Colab offline असताना "processing" status मध्ये अडकलेले jobs परत "pending"
+// मध्ये टाकतो — Colab online झाल्यावर तेच job परत Poll() मधून मिळतील आणि
+// त्याच ProgressMsgID पासून fresh सुरू होतील (download+ffmpeg+upload पूर्ण नवीन,
+// कारण आधीचं output incomplete असतं).
+
+func (q *Queue) RequeueStaleProcessing() []*WatermarkJob {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var affected []*WatermarkJob
+	for _, job := range q.jobs {
+		if job.Status == StatusProcessing {
+			job.Status = StatusPending
 			job.UpdatedAt = time.Now()
-			if job.ProgressMsgID > 0 {
-				go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
-					fmt.Sprintf("❌ Colab offline / timeout\n📄 `%s`\n⏱ 30min पेक्षा जास्त वेळ गेला", job.FileName))
-			}
+			// प्राधान्याने सर्वात आधी poll व्हावा म्हणून queue च्या पुढे टाकतो
+			q.pending = append([]string{job.JobID}, q.pending...)
+			affected = append(affected, job)
 		}
 	}
+	return affected
+}
+
+// ── ProcessingJobs ───────────────────────────────────────────────────────────
+// सध्या "processing" status मधले सगळे jobs (notification साठी)
+
+func (q *Queue) ProcessingJobs() []*WatermarkJob {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var list []*WatermarkJob
+	for _, job := range q.jobs {
+		if job.Status == StatusProcessing {
+			list = append(list, job)
+		}
+	}
+	return list
 }
 
 // ── Temp File Registry ────────────────────────────────────────────────────────
@@ -314,13 +373,10 @@ func SubmitJob(
 func WaitForDone(ctx context.Context, jobID string) (bool, string) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
-	timeout := time.After(4 * time.Hour)
 	for {
 		select {
 		case <-ctx.Done():
 			return false, "context cancelled"
-		case <-timeout:
-			return false, "job timeout (4hr exceeded)"
 		case <-ticker.C:
 			job, ok := Default.Get(jobID)
 			if !ok {
@@ -384,6 +440,91 @@ func StartCleanupLoop() {
 			Default.Cleanup()
 			CleanupTempFiles()
 			CleanupPipes()
+		}
+	}()
+}
+
+// ── notifyAllowedUsers ─────────────────────────────────────────────────────────
+// ALLOWED_USERS (config) मधल्या प्रत्येक user ला message पाठवतो — Colab
+// online/offline notifications साठी.
+
+func notifyAllowedUsers(text string) {
+	botToken := config.ValueOf.BotToken
+	for _, uid := range config.ValueOf.AllowedUsers {
+		go sendTgMessage(botToken, uid, text)
+	}
+}
+
+func sendTgMessage(botToken string, chatID int64, text string) {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
+	payload, err := json.Marshal(map[string]interface{}{
+		"chat_id":    chatID,
+		"text":       text,
+		"parse_mode": "Markdown",
+	})
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+}
+
+// ── StartColabWatcher ─────────────────────────────────────────────────────────
+// Colab च्या online/offline state मध्ये बदल track करतो:
+//   - online → offline: processing jobs चे progress messages "⏸️ Colab offline"
+//     असे edit करतो + ALLOWED_USERS ला notify करतो.
+//   - offline → online: processing jobs परत pending मध्ये (RequeueStaleProcessing)
+//     टाकतो, त्याच ProgressMsgID वर "🔄 Colab online — fresh restart" edit करतो,
+//     आणि ALLOWED_USERS ला notify करतो.
+//
+// हे bot च्या इतर कुठल्याही functionality ला disturb करत नाही — फक्त wmqueue
+// state वर काम करणारा independent goroutine आहे.
+
+func StartColabWatcher() {
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		wasOnline := false
+		first := true
+		for range ticker.C {
+			online := IsColabOnline()
+			if first {
+				wasOnline = online
+				first = false
+				continue
+			}
+			if wasOnline && !online {
+				// ── online → offline ──────────────────────────────────────
+				for _, job := range Default.ProcessingJobs() {
+					if job.ProgressMsgID > 0 {
+						go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
+							fmt.Sprintf("⏸️ *Colab offline झालं*\n📄 `%s`\n🔄 Colab परत online झाल्यावर हा job आपोआप fresh सुरू होईल — काही करण्याची गरज नाही.", job.FileName))
+					}
+				}
+				notifyAllowedUsers("⚠️ *Colab offline झालं*\nProcessing jobs परत online झाल्यावर fresh resume होतील.")
+			} else if !wasOnline && online {
+				// ── offline → online ──────────────────────────────────────
+				affected := Default.RequeueStaleProcessing()
+				for _, job := range affected {
+					if job.ProgressMsgID > 0 {
+						go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
+							fmt.Sprintf("🔄 *Colab online झालं*\n📄 `%s`\n♻️ Job पुन्हा सुरुवातीपासून सुरू होतोय...", job.FileName))
+					}
+				}
+				notifyAllowedUsers(fmt.Sprintf("✅ *Colab online झालं*\n♻️ %d job(s) resume होत आहेत.", len(affected)))
+			}
+			wasOnline = online
 		}
 	}()
 }
