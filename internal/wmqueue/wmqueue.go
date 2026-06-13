@@ -303,6 +303,8 @@ func (q *Queue) RequeueStaleProcessingForWorker(workerID string) []*WatermarkJob
 		if job.Status == StatusProcessing && job.WorkerID == workerID {
 			job.Status = StatusPending
 			job.WorkerID = ""
+			job.LastProgressSeq = 0 // navin worker cha seq counter 1 pasun suru hoईl
+			job.progressBusy = false
 			job.UpdatedAt = time.Now()
 			q.pending = append([]string{job.JobID}, q.pending...)
 			affected = append(affected, job)
@@ -327,6 +329,8 @@ func (q *Queue) RequeueOrphanedProcessing(onlineSet map[string]bool) []*Watermar
 		if job.Status == StatusProcessing && !onlineSet[job.WorkerID] {
 			job.Status = StatusPending
 			job.WorkerID = ""
+			job.LastProgressSeq = 0 // navin worker cha seq counter 1 pasun suru hoईl
+			job.progressBusy = false
 			job.UpdatedAt = time.Now()
 			q.pending = append([]string{job.JobID}, q.pending...)
 			affected = append(affected, job)
