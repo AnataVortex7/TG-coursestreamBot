@@ -53,12 +53,15 @@ func handleColabPoll(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"job": nil})
 		return
 	}
-	// Upload URL — Colab processed file POST karil ithe
-	koyebURL := os.Getenv("KOYEB_URL")
-	uploadURL := fmt.Sprintf("%s/api/colab/upload/%s", koyebURL, job.JobID)
+	// Colab ne processed file directly Telethon (MTProto, bot_token login) ne
+	// target chat la pathvaycha aahe — job मध्ये send_to_chat_id / bot_token /
+	// caption / etc already aahe (WatermarkJob struct). API_ID/API_HASH हे
+	// Telethon client init साठी lagतात — env madhe je naava aahet tech vapra
+	// (he placeholder names aahet, Go config package madhe check kara).
 	c.JSON(http.StatusOK, gin.H{
-		"job":        job,
-		"upload_url": uploadURL,
+		"job":      job,
+		"api_id":   os.Getenv("API_ID"),
+		"api_hash": os.Getenv("API_HASH"),
 	})
 }
 
