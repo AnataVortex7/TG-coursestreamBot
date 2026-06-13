@@ -2,10 +2,8 @@ package auth
 
 import (
 	"EverythingSuckz/fsb/internal/db"
-	"EverythingSuckz/fsb/internal/email"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -233,11 +231,10 @@ func ShowRegister(c *gin.Context) {
 }
 
 // DoRegister — POST /register
-// Step 1: Validate form, store pending record, send OTP to email.
-// Returns JSON so the frontend can handle the response and show the OTP step.
+// Validate form, create user directly, auto-login (no OTP step).
 func DoRegister(c *gin.Context) {
-	fullName := strings.TrimSpace(c.PostForm("full_name"))
-	mobile   := strings.TrimSpace(c.PostForm("mobile"))
+	fullName  := strings.TrimSpace(c.PostForm("full_name"))
+	mobile    := strings.TrimSpace(c.PostForm("mobile"))
 	emailAddr := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
 	password  := c.PostForm("password")
 	confirm   := c.PostForm("confirm_password")
@@ -246,17 +243,12 @@ func DoRegister(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 	}
 
-	// ── Validation ───────────────────────────────────────────────────────────
 	if fullName == "" {
 		fail("Full name is required.")
 		return
 	}
-	if mobile == "" && emailAddr == "" {
-		fail("Please enter your mobile number or email address.")
-		return
-	}
 	if emailAddr == "" {
-		fail("Email address is required for OTP verification.")
+		fail("Email address is required.")
 		return
 	}
 	if len(password) < 6 {
@@ -268,7 +260,6 @@ func DoRegister(c *gin.Context) {
 		return
 	}
 
-	// ── Check duplicate ───────────────────────────────────────────────────────
 	existing, _ := db.GetUserByMobileOrEmail(emailAddr)
 	if existing != nil {
 		fail("This email is already registered. Please sign in.")
@@ -282,137 +273,20 @@ func DoRegister(c *gin.Context) {
 		}
 	}
 
-	// ── Rate limit ────────────────────────────────────────────────────────────
-	if !db.CanSendRegOTP(emailAddr) {
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": "Please wait 60 seconds before requesting a new OTP.",
-		})
-		return
-	}
-
-	// ── Hash password ─────────────────────────────────────────────────────────
 	hash, err := HashPassword(password)
 	if err != nil {
 		fail("Server error. Please try again.")
 		return
 	}
 
-	// ── Generate + hash OTP ───────────────────────────────────────────────────
-	otpPlain := generateOTP()
-	otpHash, err := HashPassword(otpPlain)
-	if err != nil {
-		fail("Server error. Please try again.")
-		return
-	}
-
-	// ── Store pending registration ────────────────────────────────────────────
-	if err := db.CreatePendingRegistration(emailAddr, mobile, fullName, hash, otpHash); err != nil {
-		fail("Server error. Please try again.")
-		return
-	}
-
-	// ── Send OTP email ────────────────────────────────────────────────────────
-	if err := email.SendRegOTP(emailAddr, fullName, otpPlain); err != nil {
-		log.Printf("[Register] SendRegOTP FAILED for %s: %v", emailAddr, err)
-		_ = db.DeletePendingRegistration(emailAddr)
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": "Failed to send verification email. Please try again.",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"step":  "otp",
-		"email": emailAddr,
-	})
-}
-
-// VerifyRegistrationOTP — POST /register/verify
-// Step 2: Check OTP, create user, auto-login.
-func VerifyRegistrationOTP(c *gin.Context) {
-	emailAddr := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
-	otpCode   := strings.TrimSpace(c.PostForm("otp"))
-
-	if emailAddr == "" || otpCode == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Email and OTP are required."})
-		return
-	}
-	if len(otpCode) != 4 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "OTP must be exactly 4 digits."})
-		return
-	}
-
-	// Fetch pending record
-	rec, err := db.GetPendingRegistration(emailAddr)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error. Please try again."})
-		return
-	}
-	if rec == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "OTP expired or not found. Please register again."})
-		return
-	}
-
-	// ── Cumulative lockout check ──────────────────────────────────────────────
-	// Registration OTP पण same lockout pool मध्ये येतो.
-	// 4 cumulative wrong attempts (across any OTP requests) → 3h lock.
-	if locked, until := db.CheckOTPLock(emailAddr); locked {
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": fmt.Sprintf(
-				"Too many wrong OTP attempts. Try again after %s.",
-				until.Format("3:04 PM, 02 Jan"),
-			),
-		})
-		return
-	}
-
-	// Per-OTP attempt limit (max 3 tries on this specific OTP)
-	if rec.Attempts >= maxOTPAttempts {
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": "Too many wrong attempts. Please register again.",
-		})
-		return
-	}
-
-	// Verify OTP
-	if !CheckPassword(otpCode, rec.OTPHash) {
-		_ = db.IncrementPendingAttempts(rec.ID)
-
-		// Cumulative failure count वाढवतो (cross-OTP tracking)
-		nowLocked, lockMsg := db.RecordOTPLockFailure(emailAddr)
-		if nowLocked {
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": lockMsg})
-			return
-		}
-
-		remaining := maxOTPAttempts - rec.Attempts - 1
-		if remaining <= 0 {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error": "Wrong OTP. No attempts left. Please register again.",
-			})
-		} else {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"error": fmt.Sprintf("Wrong OTP. %d attempt(s) remaining.", remaining),
-			})
-		}
-		return
-	}
-
-	// ✓ OTP correct — reset lockout + create the user
-	db.ResetOTPLock(emailAddr)
-	user, err := db.CreateUserFull("", rec.FullName, rec.Mobile, emailAddr, rec.PasswordHash)
+	user, err := db.CreateUserFull("", fullName, mobile, emailAddr, hash)
 	if err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Clean up pending record
-	_ = db.DeletePendingRegistration(emailAddr)
-
-	// Auto-login
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
-		// Account created but token failed — redirect to login
 		c.JSON(http.StatusOK, gin.H{"redirect": "/login?registered=1"})
 		return
 	}
