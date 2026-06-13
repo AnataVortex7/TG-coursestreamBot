@@ -57,9 +57,9 @@ type WatermarkJob struct {
 // Multiple Colab instances (same public notebook, same secret key) parallel
 // live असू शकतात — प्रत्येकाचा स्वतःचा WORKER_ID (uuid, notebook restart वर
 // नवीन) असतो. प्रत्येक poll मध्ये worker_id येतो — त्याचा lastPollTime track
-// करतो. 20 sec (4 missed polls @ 5s) मध्ये poll आला नाही → तो worker offline.
+// करतो. 10 sec (2 missed polls @ 5s) मध्ये poll आला नाही → तो worker offline.
 
-const workerOfflineThreshold = 20 * time.Second
+const workerOfflineThreshold = 10 * time.Second // 2 missed polls @ 5s
 
 var colabTracker = struct {
 	mu        sync.Mutex
