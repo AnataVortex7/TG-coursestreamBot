@@ -802,6 +802,7 @@ func cmdColabStatus(ctx *ext.Context, u *ext.Update) error {
 	lastPoll := wmqueue.LastPollAgo()
 	stopReq := wmqueue.IsColabStopRequested()
 	processing := wmqueue.Default.ProcessingJobs()
+	activeWorkers := wmqueue.ActiveWorkers()
 
 	status := "🔴 Offline"
 	if online {
@@ -815,13 +816,25 @@ func cmdColabStatus(ctx *ext.Context, u *ext.Update) error {
 	msg := fmt.Sprintf(
 		"☁️ Colab Status\n\n"+
 			"स्थिती: %s\n"+
-			"शेवटचा poll: `%s` पूर्वी\n"+
+			"Active workers: %d\n"+
+			"शेवटचा poll: %s पूर्वी\n"+
 			"Stop request: %s\n"+
-			"सध्या processing: `%d` job(s)",
-		status, lastPoll, stopStatus, len(processing),
+			"सध्या processing: %d job(s)",
+		status, len(activeWorkers), lastPoll, stopStatus, len(processing),
 	)
+	for _, id := range activeWorkers {
+		idShort := id
+		if len(idShort) > 8 {
+			idShort = idShort[:8]
+		}
+		msg += fmt.Sprintf("\n  • worker %s", idShort)
+	}
 	for _, job := range processing {
-		msg += fmt.Sprintf("\n  • `%s` — %s", job.JobID, job.FileName)
+		workerShort := job.WorkerID
+		if len(workerShort) > 8 {
+			workerShort = workerShort[:8]
+		}
+		msg += fmt.Sprintf("\n  • %s — %s (worker %s)", job.JobID, job.FileName, workerShort)
 	}
 	reply(ctx, u, msg)
 	return dispatcher.EndGroups
