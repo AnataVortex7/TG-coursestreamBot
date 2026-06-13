@@ -48,8 +48,8 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
-		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
-		return dispatcher.EndGroups
+		// Non-allowed user — relay handler ला जाऊ द्या (forward to admin)
+		return dispatcher.ContinueGroups
 	}
 	supported, err := supportedMediaFilter(u.EffectiveMessage)
 	if err != nil {
