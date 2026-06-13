@@ -5,6 +5,7 @@ import (
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
+	"EverythingSuckz/fsb/internal/wmqueue"
 	"fmt"
 	"strconv"
 	"strings"
@@ -42,6 +43,10 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("sessions", adminOnly(cmdSessions)))
 	d.AddHandler(handlers.NewCommand("killsession", adminOnly(cmdKillSession)))
 	d.AddHandler(handlers.NewCommand("stats", adminOnly(cmdStats)))
+
+	d.AddHandler(handlers.NewCommand("colabstop", adminOnly(cmdColabStop)))
+	d.AddHandler(handlers.NewCommand("colabstart", adminOnly(cmdColabStart)))
+	d.AddHandler(handlers.NewCommand("colabstatus", adminOnly(cmdColabStatus)))
 }
 
 // ─── adminOnly wrapper ────────────────────────────────────────────────────────
@@ -769,6 +774,57 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ─── Colab Worker Control ─────────────────────────────────────────────────────
+
+func cmdColabStop(ctx *ext.Context, u *ext.Update) error {
+	wmqueue.RequestColabStop()
+	reply(ctx, u,
+		"🛑 Colab stop request पाठवला\n\n"+
+			"Colab worker पुढच्या poll वर हे बघेल आणि चालू job पूर्ण झाल्यावर "+
+			"loop graceful बंद करेल — नवीन jobs घेणार नाही.\n\n"+
+			"परत सुरू करण्यासाठी: `/colabstart`")
+	return dispatcher.EndGroups
+}
+
+func cmdColabStart(ctx *ext.Context, u *ext.Update) error {
+	wmqueue.ClearColabStop()
+	reply(ctx, u,
+		"✅ Colab stop request मागे घेतला\n\n"+
+			"Colab worker (notebook) चालू असेल तर पुढच्या poll वर परत jobs घेईल. "+
+			"जर Colab बंद/restart झालं असेल तर notebook पुन्हा run करा.")
+	return dispatcher.EndGroups
+}
+
+func cmdColabStatus(ctx *ext.Context, u *ext.Update) error {
+	online := wmqueue.IsColabOnline()
+	lastPoll := wmqueue.LastPollAgo()
+	stopReq := wmqueue.IsColabStopRequested()
+	processing := wmqueue.Default.ProcessingJobs()
+
+	status := "🔴 Offline"
+	if online {
+		status = "🟢 Online"
+	}
+	stopStatus := "❌ नाही"
+	if stopReq {
+		stopStatus = "🛑 हो (stop pending)"
+	}
+
+	msg := fmt.Sprintf(
+		"☁️ Colab Status\n\n"+
+			"स्थिती: %s\n"+
+			"शेवटचा poll: `%s` पूर्वी\n"+
+			"Stop request: %s\n"+
+			"सध्या processing: `%d` job(s)",
+		status, lastPoll, stopStatus, len(processing),
+	)
+	for _, job := range processing {
+		msg += fmt.Sprintf("\n  • `%s` — %s", job.JobID, job.FileName)
+	}
+	reply(ctx, u, msg)
+	return dispatcher.EndGroups
 }
 
 // ─── Auto-append new uploads to channel cache ─────────────────────────────────
