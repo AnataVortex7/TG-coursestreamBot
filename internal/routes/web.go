@@ -28,7 +28,6 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	// Register
 	r.Engine.GET("/register", auth.ShowRegister)
 	r.Engine.POST("/register", auth.DoRegister)
-	r.Engine.POST("/register/verify", auth.VerifyRegistrationOTP)
 
 	// Logout
 	r.Engine.POST("/logout", auth.RequireAuth, auth.DoLogout)
