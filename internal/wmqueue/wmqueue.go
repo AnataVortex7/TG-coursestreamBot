@@ -51,6 +51,17 @@ type WatermarkJob struct {
 	Error         string    `json:"error,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	WorkerID      string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
+
+	// ── Progress ordering ──────────────────────────────────────────────────
+	// LastProgressSeq — आता पर्यंत apply झालेला सर्वात मोठा sequence number.
+	// कमी/equal seq असलेला update stale समजून skip केला जातो (out-of-order
+	// network arrival मुळे जुना % नंतर येणं टाळण्यासाठी).
+	LastProgressSeq int64 `json:"-"`
+
+	// progressBusy — सध्या एक EditTgMessage call चालू आहे का (in-flight).
+	// खरं असेल तर पुढचा progress update तो complete होईपर्यंत skip होतो —
+	// त्यामुळे एका वेळी फक्त एकच edit Telegram कडे जातो, ordering राहतं.
+	progressBusy bool `json:"-"`
 }
 
 // ── Colab Worker Online Tracker (per-worker) ──────────────────────────────────
@@ -216,6 +227,41 @@ func (q *Queue) UpdateStatus(jobID, status, errMsg string) {
 		job.Status = status
 		job.Error = errMsg
 		job.UpdatedAt = time.Now()
+	}
+}
+
+// ── TryProgress ───────────────────────────────────────────────────────────────
+// एका वेळी फक्त एक progress edit Telegram कडे जावा यासाठी ordering+lock:
+//   - seq <= LastProgressSeq → stale (out-of-order/late) update, skip करा.
+//   - मागचा edit अजून चालू आहे (progressBusy) → हा update skip करा, पुढचा
+//     update येईल तेव्हा त्या वेळची latest progress दाखवली जाईल.
+// दोन्ही cases मध्ये ok=false. ok=true असेल तर caller ने edit सुरू केल्यावर
+// FinishProgress() call करून busy flag clear करावा.
+func (q *Queue) TryProgress(jobID string, seq int64) (job *WatermarkJob, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	j, found := q.jobs[jobID]
+	if !found {
+		return nil, false
+	}
+	if seq <= j.LastProgressSeq {
+		return nil, false // stale, out-of-order
+	}
+	if j.progressBusy {
+		return nil, false // mागcha edit chalu ahe, ha update skip
+	}
+	j.LastProgressSeq = seq
+	j.progressBusy = true
+	return j, true
+}
+
+// FinishProgress — TryProgress नंतर edit complete/fail झाल्यावर busy flag clear
+// करतो, taki पुढचा progress update pick होऊ शकेल.
+func (q *Queue) FinishProgress(jobID string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if j, ok := q.jobs[jobID]; ok {
+		j.progressBusy = false
 	}
 }
 
