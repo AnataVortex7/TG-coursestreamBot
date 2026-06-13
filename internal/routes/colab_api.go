@@ -83,13 +83,28 @@ func handleColabProgress(c *gin.Context) {
 		return
 	}
 	var req struct {
-		JobID   string `json:"job_id"`
-		Message string `json:"message"`
+		JobID    string `json:"job_id"`
+		Message  string `json:"message"`
+		WorkerID string `json:"worker_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
+
+	// FFmpeg chalu astana /api/colab/poll call hot nahi (blocking),
+	// pan /api/colab/progress dar 3-4 sec yet rahto — tyala pan
+	// "alive" heartbeat mhanun count karo, taki worker false-offline
+	// na disel.
+	workerID := req.WorkerID
+	if workerID == "" {
+		workerID = c.Query("worker_id")
+	}
+	if workerID == "" {
+		workerID = c.GetHeader("X-Worker-ID")
+	}
+	wmqueue.RecordPoll(workerID)
+
 	job, ok := wmqueue.Default.Get(req.JobID)
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
