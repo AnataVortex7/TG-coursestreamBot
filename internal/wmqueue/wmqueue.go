@@ -50,40 +50,94 @@ type WatermarkJob struct {
 	Status        string    `json:"status"`
 	Error         string    `json:"error,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	WorkerID      string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
 }
 
-// ── Colab Online Tracker ──────────────────────────────────────────────────────
+// ── Colab Worker Online Tracker (per-worker) ──────────────────────────────────
+// Multiple Colab instances (same public notebook, same secret key) parallel
+// live असू शकतात — प्रत्येकाचा स्वतःचा WORKER_ID (uuid, notebook restart वर
+// नवीन) असतो. प्रत्येक poll मध्ये worker_id येतो — त्याचा lastPollTime track
+// करतो. 20 sec (4 missed polls @ 5s) मध्ये poll आला नाही → तो worker offline.
+
+const workerOfflineThreshold = 20 * time.Second
 
 var colabTracker = struct {
-	mu           sync.Mutex
-	lastPollTime time.Time
+	mu        sync.Mutex
+	lastPoll  map[string]time.Time // workerID -> last poll time
 }{
-	lastPollTime: time.Time{},
+	lastPoll: make(map[string]time.Time),
 }
 
-func RecordPoll() {
+// RecordPoll — workerID च्या poll चा timestamp नोंदवतो
+func RecordPoll(workerID string) {
+	if workerID == "" {
+		return
+	}
 	colabTracker.mu.Lock()
 	defer colabTracker.mu.Unlock()
-	colabTracker.lastPollTime = time.Now()
+	colabTracker.lastPoll[workerID] = time.Now()
 }
 
+// IsColabOnline — कुठलाही 1 worker तरी online आहे का (overall system status)
 func IsColabOnline() bool {
 	colabTracker.mu.Lock()
 	defer colabTracker.mu.Unlock()
-	if colabTracker.lastPollTime.IsZero() {
-		return false
+	for _, t := range colabTracker.lastPoll {
+		if time.Since(t) < workerOfflineThreshold {
+			return true
+		}
 	}
-	return time.Since(colabTracker.lastPollTime) < 2*time.Minute
+	return false
 }
 
+// ActiveWorkers — सध्या online असलेले worker IDs
+func ActiveWorkers() []string {
+	colabTracker.mu.Lock()
+	defer colabTracker.mu.Unlock()
+	var ids []string
+	for id, t := range colabTracker.lastPoll {
+		if time.Since(t) < workerOfflineThreshold {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// LastPollAgo — सर्वात recent poll कधी झाला (कुठल्याही worker कडून)
 func LastPollAgo() string {
 	colabTracker.mu.Lock()
 	defer colabTracker.mu.Unlock()
-	if colabTracker.lastPollTime.IsZero() {
+	var latest time.Time
+	for _, t := range colabTracker.lastPoll {
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	if latest.IsZero() {
 		return "never"
 	}
-	d := time.Since(colabTracker.lastPollTime).Round(time.Second)
+	d := time.Since(latest).Round(time.Second)
 	return d.String()
+}
+
+// snapshotOnlineWorkers — सध्या online असलेल्या workers चा set (StartColabWatcher साठी)
+func snapshotOnlineWorkers() map[string]bool {
+	colabTracker.mu.Lock()
+	defer colabTracker.mu.Unlock()
+	set := make(map[string]bool)
+	for id, t := range colabTracker.lastPoll {
+		if time.Since(t) < workerOfflineThreshold {
+			set[id] = true
+		}
+	}
+	return set
+}
+
+// forgetWorker — worker बराच वेळ offline राहिला तर tracker मधून काढतो (memory cleanup)
+func forgetWorker(workerID string) {
+	colabTracker.mu.Lock()
+	defer colabTracker.mu.Unlock()
+	delete(colabTracker.lastPoll, workerID)
 }
 
 // ── Colab Stop Flag ────────────────────────────────────────────────────────────
@@ -137,7 +191,7 @@ func (q *Queue) Enqueue(job *WatermarkJob) {
 	q.pending = append(q.pending, job.JobID)
 }
 
-func (q *Queue) Poll() *WatermarkJob {
+func (q *Queue) Poll(workerID string) *WatermarkJob {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for len(q.pending) > 0 {
@@ -148,6 +202,7 @@ func (q *Queue) Poll() *WatermarkJob {
 			continue
 		}
 		job.Status = StatusProcessing
+		job.WorkerID = workerID
 		job.UpdatedAt = time.Now()
 		return job
 	}
@@ -188,21 +243,21 @@ func (q *Queue) Cleanup() {
 	}
 }
 
-// ── RequeueStaleProcessing ────────────────────────────────────────────────────
-// Colab offline असताना "processing" status मध्ये अडकलेले jobs परत "pending"
-// मध्ये टाकतो — Colab online झाल्यावर तेच job परत Poll() मधून मिळतील आणि
-// त्याच ProgressMsgID पासून fresh सुरू होतील (download+ffmpeg+upload पूर्ण नवीन,
-// कारण आधीचं output incomplete असतं).
+// ── RequeueStaleProcessingForWorker ───────────────────────────────────────────
+// एक specific Colab worker offline झाला — फक्त त्याच worker कडे assign झालेले
+// "processing" jobs परत "pending" मध्ये टाकतो (इतर online workers चे जॉब्स
+// untouched राहतात). Online झाल्यावर तेच job परत Poll() मधून मिळतील आणि
+// त्याच ProgressMsgID पासून fresh सुरू होतील.
 
-func (q *Queue) RequeueStaleProcessing() []*WatermarkJob {
+func (q *Queue) RequeueStaleProcessingForWorker(workerID string) []*WatermarkJob {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	var affected []*WatermarkJob
 	for _, job := range q.jobs {
-		if job.Status == StatusProcessing {
+		if job.Status == StatusProcessing && job.WorkerID == workerID {
 			job.Status = StatusPending
+			job.WorkerID = ""
 			job.UpdatedAt = time.Now()
-			// प्राधान्याने सर्वात आधी poll व्हावा म्हणून queue च्या पुढे टाकतो
 			q.pending = append([]string{job.JobID}, q.pending...)
 			affected = append(affected, job)
 		}
@@ -219,6 +274,21 @@ func (q *Queue) ProcessingJobs() []*WatermarkJob {
 	var list []*WatermarkJob
 	for _, job := range q.jobs {
 		if job.Status == StatusProcessing {
+			list = append(list, job)
+		}
+	}
+	return list
+}
+
+// ── ProcessingJobsForWorker ────────────────────────────────────────────────────
+// specific workerID कडे assign असलेले "processing" jobs
+
+func (q *Queue) ProcessingJobsForWorker(workerID string) []*WatermarkJob {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var list []*WatermarkJob
+	for _, job := range q.jobs {
+		if job.Status == StatusProcessing && job.WorkerID == workerID {
 			list = append(list, job)
 		}
 	}
@@ -481,50 +551,70 @@ func sendTgMessage(botToken string, chatID int64, text string) {
 }
 
 // ── StartColabWatcher ─────────────────────────────────────────────────────────
-// Colab च्या online/offline state मध्ये बदल track करतो:
-//   - online → offline: processing jobs चे progress messages "⏸️ Colab offline"
-//     असे edit करतो + ALLOWED_USERS ला notify करतो.
-//   - offline → online: processing jobs परत pending मध्ये (RequeueStaleProcessing)
-//     टाकतो, त्याच ProgressMsgID वर "🔄 Colab online — fresh restart" edit करतो,
-//     आणि ALLOWED_USERS ला notify करतो.
+// प्रत्येक Colab worker (workerID) चं online/offline state independently track
+// करतो (multiple Colab instances parallel live असू शकतात — public notebook +
+// shared secret key मुळे):
+//   - worker online → offline: त्या worker कडे assign असलेल्या processing jobs
+//     चे progress messages "⏸️ Colab worker offline" असे edit करतो + ALLOWED_USERS
+//     ला notify करतो.
+//   - worker offline → online (किंवा नवीन worker पहिल्यांदा दिसला): त्या worker कडे
+//     अडकलेले processing jobs (RequeueStaleProcessingForWorker) परत pending मध्ये
+//     टाकतो, त्याच ProgressMsgID वर "🔄 fresh restart" edit करतो, आणि
+//     ALLOWED_USERS ला notify करतो.
 //
 // हे bot च्या इतर कुठल्याही functionality ला disturb करत नाही — फक्त wmqueue
 // state वर काम करणारा independent goroutine आहे.
 
 func StartColabWatcher() {
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-		wasOnline := false
-		first := true
+		previouslyOnline := make(map[string]bool)
 		for range ticker.C {
-			online := IsColabOnline()
-			if first {
-				wasOnline = online
-				first = false
-				continue
-			}
-			if wasOnline && !online {
-				// ── online → offline ──────────────────────────────────────
-				for _, job := range Default.ProcessingJobs() {
-					if job.ProgressMsgID > 0 {
-						go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
-							fmt.Sprintf("⏸️ *Colab offline झालं*\n📄 `%s`\n🔄 Colab परत online झाल्यावर हा job आपोआप fresh सुरू होईल — काही करण्याची गरज नाही.", job.FileName))
+			nowOnline := snapshotOnlineWorkers()
+
+			// ── नवीन online झालेले / पहिल्यांदा दिसलेले workers ──────────────
+			for id := range nowOnline {
+				if !previouslyOnline[id] {
+					affected := Default.RequeueStaleProcessingForWorker(id)
+					for _, job := range affected {
+						if job.ProgressMsgID > 0 {
+							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
+								fmt.Sprintf("🔄 *Colab worker online झालं*\n📄 `%s`\n♻️ Job पुन्हा सुरुवातीपासून सुरू होतोय...", job.FileName))
+						}
+					}
+					if len(affected) > 0 {
+						notifyAllowedUsers(fmt.Sprintf("✅ *Colab worker online झालं* (`%s`)\n♻️ %d job(s) resume होत आहेत.", shortID(id), len(affected)))
+					} else {
+						notifyAllowedUsers(fmt.Sprintf("✅ *Colab worker online झालं* (`%s`)", shortID(id)))
 					}
 				}
-				notifyAllowedUsers("⚠️ *Colab offline झालं*\nProcessing jobs परत online झाल्यावर fresh resume होतील.")
-			} else if !wasOnline && online {
-				// ── offline → online ──────────────────────────────────────
-				affected := Default.RequeueStaleProcessing()
-				for _, job := range affected {
-					if job.ProgressMsgID > 0 {
-						go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
-							fmt.Sprintf("🔄 *Colab online झालं*\n📄 `%s`\n♻️ Job पुन्हा सुरुवातीपासून सुरू होतोय...", job.FileName))
-					}
-				}
-				notifyAllowedUsers(fmt.Sprintf("✅ *Colab online झालं*\n♻️ %d job(s) resume होत आहेत.", len(affected)))
 			}
-			wasOnline = online
+
+			// ── आता offline झालेले workers ───────────────────────────────────
+			for id := range previouslyOnline {
+				if !nowOnline[id] {
+					processing := Default.ProcessingJobsForWorker(id)
+					for _, job := range processing {
+						if job.ProgressMsgID > 0 {
+							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
+								fmt.Sprintf("⏸️ *Colab worker offline झालं*\n📄 `%s`\n🔄 दुसरा/तोच worker परत online झाल्यावर हा job आपोआप fresh सुरू होईल.", job.FileName))
+						}
+					}
+					notifyAllowedUsers(fmt.Sprintf("⚠️ *Colab worker offline झालं* (`%s`)\nProcessing jobs परत online झाल्यावर fresh resume होतील.", shortID(id)))
+					forgetWorker(id)
+				}
+			}
+
+			previouslyOnline = nowOnline
 		}
 	}()
+}
+
+// shortID — लांब uuid worker ID पैकी फक्त सुरुवातीचे काही अक्षर दाखवण्यासाठी
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
