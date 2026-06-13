@@ -311,6 +311,30 @@ func (q *Queue) RequeueStaleProcessingForWorker(workerID string) []*WatermarkJob
 	return affected
 }
 
+// ── RequeueOrphanedProcessing ─────────────────────────────────────────────────
+// नवीन (किंवा परत) Colab worker online झाला तेव्हा call होतो — फक्त त्याच नवीन
+// worker च्या जुन्या WorkerID शी match शोधण्यावर अवलंबून न राहता, सध्या
+// "processing" status मधले आणि सध्या कुठल्याही online worker ला assign
+// नसलेले (म्हणजे त्यांचा WorkerID onlineSet मध्ये नाही) असे सगळे jobs परत
+// "pending" मध्ये टाकतो. हे navin worker ID generate होत असल्यामुळे
+// (notebook restart वर uuid बदलतो) old↔new WorkerID mismatch मुळे job
+// कायमचा orphaned राहण्याची समस्या टाळतो.
+func (q *Queue) RequeueOrphanedProcessing(onlineSet map[string]bool) []*WatermarkJob {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var affected []*WatermarkJob
+	for _, job := range q.jobs {
+		if job.Status == StatusProcessing && !onlineSet[job.WorkerID] {
+			job.Status = StatusPending
+			job.WorkerID = ""
+			job.UpdatedAt = time.Now()
+			q.pending = append([]string{job.JobID}, q.pending...)
+			affected = append(affected, job)
+		}
+	}
+	return affected
+}
+
 // ── ProcessingJobs ───────────────────────────────────────────────────────────
 // सध्या "processing" status मधले सगळे jobs (notification साठी)
 
@@ -622,7 +646,12 @@ func StartColabWatcher() {
 			// ── नवीन online झालेले / पहिल्यांदा दिसलेले workers ──────────────
 			for id := range nowOnline {
 				if !previouslyOnline[id] {
-					affected := Default.RequeueStaleProcessingForWorker(id)
+					// नवीन worker च्या स्वतःच्या (नवीन) WorkerID शी जुने
+					// processing jobs कधीच match होणार नाहीत (notebook
+					// restart वर uuid बदलतो) — त्यामुळे सध्या कुठल्याही
+					// online worker ला assign नसलेले सगळे "processing"
+					// jobs orphaned समजून requeue करतो.
+					affected := Default.RequeueOrphanedProcessing(nowOnline)
 					for _, job := range affected {
 						if job.ProgressMsgID > 0 {
 							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
