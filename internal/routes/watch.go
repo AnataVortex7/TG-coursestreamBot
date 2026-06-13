@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"io"
 	"net/http"
@@ -430,7 +431,7 @@ func handleWatchStream(c *gin.Context) {
 			file.FileSize, file.FileName, file.MimeType,
 			file.DCID,
 			streamKey,
-			c.ClientIP(),
+			normalizeClientIP(c.ClientIP()),
 		)
 		if tokErr != nil {
 			log.Error("failed to generate worker token — falling back to local stream", zap.Error(tokErr))
@@ -813,7 +814,20 @@ func handlePDFDownload(c *gin.Context) {
 	}
 }
 
-// normalizeWatchMime — stream वेळी browser-safe Content-Type देतो.
+// normalizeClientIP — IPv4-mapped IPv6 addresses normalize करतो.
+// "::ffff:49.36.46.209" → "49.36.46.209"
+// Pure IPv6 किंवा IPv4 → as-is
+// हे solve करतं: token generate वेळी IPv6 होतो, worker request वेळी IPv4 येतो.
+func normalizeClientIP(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ip
+	}
+	if v4 := parsed.To4(); v4 != nil {
+		return v4.String()
+	}
+	return parsed.String()
+}
 // MKV, AVI इत्यादी types video/mp4 म्हणून serve केले जातात.
 func normalizeWatchMime(mime, fileName string) string {
 	switch strings.ToLower(mime) {
