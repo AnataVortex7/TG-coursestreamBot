@@ -431,7 +431,7 @@ func handleWatchStream(c *gin.Context) {
 			file.FileSize, file.FileName, file.MimeType,
 			file.DCID,
 			streamKey,
-			normalizeClientIP(c.ClientIP()),
+			"",  // IP check disabled
 		)
 		if tokErr != nil {
 			log.Error("failed to generate worker token — falling back to local stream", zap.Error(tokErr))
