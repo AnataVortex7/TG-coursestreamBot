@@ -65,7 +65,7 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 			repliedMsgID := replyTo.ReplyToMsgID
 			if targetUserID, found := relayMap.Load(repliedMsgID); found {
 				uid := targetUserID.(int64)
-				sendReplyToUser(ctx, uid, msg)
+				sendReplyToUser(ctx, u, uid, msg.Message)
 				return dispatcher.EndGroups
 			}
 		}
@@ -148,7 +148,7 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 }
 
 // sendReplyToUser — admin चे reply user ला पाठवतो (text + media दोन्ही handle)
-func sendReplyToUser(ctx *ext.Context, userID int64, msg *tg.Message) {
+func sendReplyToUser(ctx *ext.Context, u *ext.Update, userID int64, msg *tg.Message) {
 	botClient := MainBotClient
 	if botClient == nil {
 		return
@@ -156,7 +156,7 @@ func sendReplyToUser(ctx *ext.Context, userID int64, msg *tg.Message) {
 
 	userPeer := ctx.PeerStorage.GetInputPeerById(userID)
 	if userPeer == nil {
-		ctx.Reply(&ext.Update{}, ext.ReplyTextString("❌ User peer सापडला नाही."), nil)
+		ctx.Reply(u, ext.ReplyTextString("❌ User peer सापडला नाही."), nil)
 		return
 	}
 
