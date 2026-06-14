@@ -272,6 +272,22 @@
           </div>
         </div>
       </div>
+
+      <div class="card">
+        <div class="card-head"><div class="card-title">⚙️ Contact Settings</div></div>
+        <div class="card-body">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+            <div>
+              <div style="font-weight:600;font-size:14px;color:#333;">Telegram Contact</div>
+              <div style="font-size:12px;color:#888;margin-top:2px;">ON असेल तर users contact page var "Contact via Telegram" button baghtil ani direct bot var jaatil. OFF asel tar email contact form dakhavla jaail.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <span class="badge" id="tg-contact-badge">—</span>
+              <button class="btn btn-sm" id="tg-contact-toggle-btn" onclick="toggleTelegramContact()">Toggle</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- USERS -->
@@ -888,6 +904,58 @@ async function loadStats() {
     document.getElementById('s-files').textContent=d.files??'—';
     document.getElementById('s-sessions').textContent=d.sessions??'—';
   } catch(e){}
+  loadTelegramContactSetting();
+}
+
+async function loadTelegramContactSetting() {
+  const badge = document.getElementById('tg-contact-badge');
+  if (!badge) return;
+  try {
+    const res = await api('/settings/telegram-contact');
+    const d = await res.json();
+    renderTgContactBadge(d.enabled);
+  } catch(e) {
+    badge.textContent = '—';
+  }
+}
+
+function renderTgContactBadge(enabled) {
+  const badge = document.getElementById('tg-contact-badge');
+  const btn = document.getElementById('tg-contact-toggle-btn');
+  if (enabled) {
+    badge.className = 'badge badge-green';
+    badge.textContent = '✅ Service Available';
+    btn.textContent = 'Turn OFF';
+  } else {
+    badge.className = 'badge badge-red';
+    badge.textContent = '⛔ Service Unavailable';
+    btn.textContent = 'Turn ON';
+  }
+  badge.dataset.enabled = enabled ? '1' : '0';
+}
+
+async function toggleTelegramContact() {
+  const badge = document.getElementById('tg-contact-badge');
+  const current = badge.dataset.enabled === '1';
+  const next = !current;
+  const btn = document.getElementById('tg-contact-toggle-btn');
+  btn.disabled = true;
+  try {
+    const res = await api('/settings/telegram-contact', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: next })
+    });
+    const d = await res.json();
+    if (res.ok) {
+      renderTgContactBadge(d.enabled);
+      toast(d.enabled ? '✅ Telegram Contact ON kela' : '⛔ Telegram Contact OFF kela');
+    } else {
+      toast('❌ ' + (d.error || 'Update fail'), 'error');
+    }
+  } catch(e) {
+    toast('❌ Network error', 'error');
+  }
+  btn.disabled = false;
 }
 
 async function loadDetailStats() {

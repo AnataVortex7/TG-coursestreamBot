@@ -268,7 +268,15 @@
   </div>
   <div class="nav-right">
     <span class="nav-user">👤 {{ .username }}</span>
+    {{ if .telegramContactEnabled }}
+    <a href="https://t.me/{{ .botUsername }}?start=ct_{{ .userIDHex }}" target="_blank"
+       style="background:#229ED9;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="#fff"><path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3L19.66 4.5c.73-.33 1.43.18 1.15 1.3l-3 14.13c-.23 1.04-.84 1.3-1.7.81L11 17.5l-1.22 1.15z"/></svg>
+      Contact via Telegram
+    </a>
+    {{ else }}
     <button onclick="openContactModal()" style="background:var(--accent);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px;">📩 Contact Admin</button>
+    {{ end }}
     <form method="POST" action="/logout" style="margin:0">
       <button type="submit" class="btn-logout">Sign out</button>
     </form>
