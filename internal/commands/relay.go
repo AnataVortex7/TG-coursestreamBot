@@ -54,6 +54,12 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.ContinueGroups
 	}
 
+	// Bot चे स्वतःचे messages relay skip करा
+	// Bot ने admin ला पाठवलेले progress/file messages relay होऊ नयेत
+	if MainBotClient != nil && u.EffectiveUser().GetID() == MainBotClient.Self.ID {
+		return dispatcher.ContinueGroups
+	}
+
 	senderID := u.EffectiveUser().GetID()
 	chatID    := u.EffectiveChat().GetID()
 
