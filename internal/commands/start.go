@@ -264,7 +264,7 @@ func handleContactDeepLink(ctx *ext.Context, u *ext.Update, chatID int64, userID
 			"🌐 New Contact Request (via Website)\n👤 Telegram: %s\nTG ID: %d%s\n\n👇 User चा message खाली येईल — reply करायला त्या message ला reply करा.",
 			name, chatID, siteInfo,
 		)
-		for _, adminID := range getAdminIDs() {
+		for _, adminID := range []int64(config.ValueOf.AllowedUsers) {
 			adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
 			if adminPeer == nil {
 				continue
