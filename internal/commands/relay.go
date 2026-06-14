@@ -18,6 +18,7 @@ package commands
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 
 	"EverythingSuckz/fsb/config"
@@ -36,12 +37,20 @@ var relayMap sync.Map // map[int]int64
 func (m *command) LoadZRelay(d dispatcher.Dispatcher) {
 	log := m.log.Named("relay")
 	defer log.Sugar().Info("Loaded relay handler")
-	d.AddHandler(handlers.NewMessage(nil, handleRelay))
+	// Group -1 — sendLink (group 0) च्या आधी चालतो.
+	// sendLink plain text messages साठी EndGroups देतो (media नसल्यास),
+	// त्यामुळे relay आधी असणं गरजेचं — नाहीतर admin चं text reply पुढे जातच नाही.
+	d.AddHandlerToGroup(handlers.NewMessage(nil, handleRelay), -1)
 }
 
 func handleRelay(ctx *ext.Context, u *ext.Update) error {
 	msg := u.EffectiveMessage
 	if msg == nil {
+		return dispatcher.ContinueGroups
+	}
+
+	// Commands (/start, /register वगैरे) — relay skip, command handlers (group 0) ला जाऊ देतो
+	if strings.HasPrefix(msg.Message, "/") {
 		return dispatcher.ContinueGroups
 	}
 
