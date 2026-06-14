@@ -671,16 +671,28 @@ func StartColabWatcher() {
 			}
 
 			// ── आता offline झालेले workers ───────────────────────────────────
+			// ── आता offline झालेले workers ───────────────────────────────────
 			for id := range previouslyOnline {
 				if !nowOnline[id] {
-					processing := Default.ProcessingJobsForWorker(id)
-					for _, job := range processing {
+					// [FIX] Job लगेच pending मध्ये requeue करा —
+					// दुसरा online worker असेल तर तो लगेच pick करेल.
+					// Bug: आधी फक्त message edit होत होतं, job StatusProcessing मध्येच
+					// stuck राहायचं. नवीन worker "नवीन नाही" म्हणून RequeueOrphaned
+					// trigger होत नव्हतं — आता offline च्या वेळीच requeue करतो.
+					requeuedJobs := Default.RequeueStaleProcessingForWorker(id)
+					for _, job := range requeuedJobs {
 						if job.ProgressMsgID > 0 {
-							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
-								fmt.Sprintf("⏸️ *Colab worker offline झालं*\n📄 `%s`\n🔄 दुसरा/तोच worker परत online झाल्यावर हा job आपोआप fresh सुरू होईल.", job.FileName))
+							onlineWorkers := ActiveWorkers()
+							var statusMsg string
+							if len(onlineWorkers) > 0 {
+								statusMsg = fmt.Sprintf("⏸️ *Colab worker offline झालं*\n📄 `%s`\n🔄 दुसरा online worker आहे — job लवकरच resume होईल.", job.FileName)
+							} else {
+								statusMsg = fmt.Sprintf("⏸️ *Colab worker offline झालं*\n📄 `%s`\n🔄 कुठलाही worker online नाही — नवीन worker online झाल्यावर job resume होईल.", job.FileName)
+							}
+							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID, statusMsg)
 						}
 					}
-					notifyAllowedUsers(fmt.Sprintf("⚠️ *Colab worker offline झालं* (`%s`)\nProcessing jobs परत online झाल्यावर fresh resume होतील.", shortID(id)))
+					notifyAllowedUsers(fmt.Sprintf("⚠️ *Colab worker offline झालं* (`%s`)\nProcessing jobs pending मध्ये टाकले — available worker लगेच pick करेल.", shortID(id)))
 					forgetWorker(id)
 				}
 			}
