@@ -50,7 +50,7 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	// Commands (/start, /register वगैरे) — relay skip, command handlers (group 0) ला जाऊ देतो
-	if strings.HasPrefix(msg.Message, "/") {
+	if strings.HasPrefix(msg.Text, "/") {
 		return dispatcher.ContinueGroups
 	}
 
