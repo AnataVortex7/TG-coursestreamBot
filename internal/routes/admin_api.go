@@ -366,6 +366,10 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// ── User password change & impersonate ────────────────────────────────
 	api.PUT("/users/:id/password", adminChangeUserPassword)
 	api.POST("/users/:id/impersonate", adminImpersonateUser)
+
+	// ── Settings ─────────────────────────────────────────────────────────
+	api.GET("/settings/telegram-contact", adminGetTelegramContact)
+	api.POST("/settings/telegram-contact", adminSetTelegramContact)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1354,4 +1358,30 @@ func adminImpersonateUser(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "redirect": "/courses"})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SETTINGS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/admin/settings/telegram-contact
+func adminGetTelegramContact(c *gin.Context) {
+	enabled := db.GetSettingBool(db.SettingTelegramContact, false)
+	c.JSON(http.StatusOK, gin.H{"enabled": enabled})
+}
+
+// POST /api/admin/settings/telegram-contact  { "enabled": true/false }
+func adminSetTelegramContact(c *gin.Context) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+	if err := db.SetSettingBool(db.SettingTelegramContact, req.Enabled); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "enabled": req.Enabled})
 }

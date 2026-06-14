@@ -4,6 +4,7 @@
 package routes
 
 import (
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
@@ -18,6 +19,21 @@ import (
 
 func (e *allRoutes) LoadContact(r *Route) {
 	r.Engine.POST("/api/contact", auth.RequireAuth, handleUserContact)
+	r.Engine.GET("/api/contact-settings", handleContactSettings)
+}
+
+// ─── Contact settings (public) ────────────────────────────────────────────────
+// Frontend ला सांगतो — Telegram contact option दाखवायची की email form.
+func handleContactSettings(c *gin.Context) {
+	enabled := db.GetSettingBool(db.SettingTelegramContact, false)
+	botUsername := config.ValueOf.BotUsername
+	if botUsername == "" {
+		botUsername = "Driven_soulbot"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"telegram_enabled": enabled,
+		"bot_username":     botUsername,
+	})
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────

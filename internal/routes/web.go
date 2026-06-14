@@ -152,9 +152,17 @@ func handleCoursesList(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "courses.html", gin.H{
-		"username":  username,
-		"myCourses": myCourses,
-		"available": available,
+		"username":               username,
+		"userIDHex":              userID.Hex(),
+		"myCourses":              myCourses,
+		"available":              available,
+		"botUsername":            func() string {
+			if config.ValueOf.BotUsername != "" {
+				return config.ValueOf.BotUsername
+			}
+			return "Driven_soulbot"
+		}(),
+		"telegramContactEnabled": db.GetSettingBool(db.SettingTelegramContact, false),
 	})
 }
 
