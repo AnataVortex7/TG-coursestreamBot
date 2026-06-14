@@ -13,6 +13,7 @@ import (
 	"github.com/celestix/gotgproto/ext"
 	"github.com/celestix/gotgproto/storage"
 	"github.com/gotd/td/tg"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 func (m *command) LoadStart(dispatcher dispatcher.Dispatcher) {
@@ -35,8 +36,17 @@ func start(ctx *ext.Context, u *ext.Update) error {
 		return processDLToken(ctx, u, chatId, token)
 	}
 
+	// ── Deep Link: /start ct_<userIDHex> ──────────────────────────────────────
+	// Website "Contact via Telegram" button वरून आलेला user.
+	// AllowedUsers check skip करतो — relay.go कडे आधीच forward होईल.
+	if len(a) > 0 && strings.HasPrefix(a[0], "ct_") {
+		return handleContactDeepLink(ctx, u, chatId, strings.TrimPrefix(a[0], "ct_"))
+	}
+
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
-		ctx.Reply(u, ext.ReplyTextString("You are not allowed to use this bot."), nil)
+		ctx.Reply(u, ext.ReplyTextString(
+			"👋 Namaskar!\n\nखाली तुमचा message किंवा file पाठवा — ते admin ला जाईल आणि लवकरच reply मिळेल.",
+		), nil)
 		return dispatcher.EndGroups
 	}
 
@@ -219,5 +229,56 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		_ = ctx.DeleteMessages(chatID, []int{sentMsg.ID})
 	}
 
+	return dispatcher.EndGroups
+}
+
+// handleContactDeepLink — /start ct_<userIDHex>
+// Website "Contact via Telegram" button वरून आलेला user.
+// Admin ला website account info सोबत notify करतो, user ला reply करतो.
+// पुढचा कोणताही message relay.go कडून automatically admin ला forward होईल.
+func handleContactDeepLink(ctx *ext.Context, u *ext.Update, chatID int64, userIDHex string) error {
+	tgUser := u.EffectiveUser()
+	name := tgUser.FirstName
+	if tgUser.LastName != "" {
+		name += " " + tgUser.LastName
+	}
+	if tgUser.Username != "" {
+		name += " (@" + tgUser.Username + ")"
+	}
+
+	// Website account details (असल्यास)
+	siteInfo := ""
+	if objID, err := primitive.ObjectIDFromHex(userIDHex); err == nil {
+		if siteUser, err := db.GetUserByID(objID); err == nil && siteUser != nil {
+			siteInfo = fmt.Sprintf(
+				"\n👤 Website Account: %s\n📧 Email: %s\n📱 Mobile: %s",
+				siteUser.FullName, siteUser.Email, siteUser.Mobile,
+			)
+		}
+	}
+
+	// Admin ला notify करतो
+	botClient := MainBotClient
+	if botClient != nil {
+		header := fmt.Sprintf(
+			"🌐 New Contact Request (via Website)\n👤 Telegram: %s\nTG ID: %d%s\n\n👇 User चा message खाली येईल — reply करायला त्या message ला reply करा.",
+			name, chatID, siteInfo,
+		)
+		for _, adminID := range getAdminIDs() {
+			adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+			if adminPeer == nil {
+				continue
+			}
+			_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+				Peer:     adminPeer,
+				Message:  header,
+				RandomID: rand.Int63(),
+			})
+		}
+	}
+
+	ctx.Reply(u, ext.ReplyTextString(
+		"👋 Namaskar!\n\nखाली तुमचा message किंवा file पाठवा — ते थेट admin ला जाईल आणि लवकरच reply मिळेल.",
+	), nil)
 	return dispatcher.EndGroups
 }
