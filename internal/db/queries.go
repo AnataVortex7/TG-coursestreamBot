@@ -1009,6 +1009,62 @@ func UpdateUserPassword(userID primitive.ObjectID, newPasswordHash string) error
 	return err
 }
 
+// GetAllLinkedUsers — TelegramID linked असलेले सगळे active users returns करतो.
+// Broadcast साठी वापरतो.
+func GetAllLinkedUsers() ([]User, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColUsers.Find(ctx, bson.M{
+		"telegram_id": bson.M{"$gt": 0},
+		"is_active":   true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var users []User
+	if err := cursor.All(ctx, &users); err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APP SETTINGS — key-value toggles (admin panel वरून control होतात)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SettingTelegramContact = "telegram_contact_enabled"
+
+// GetSettingBool — key साठी bool value मिळवतो. Key नसेल तर defaultVal return करतो.
+func GetSettingBool(key string, defaultVal bool) bool {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var doc struct {
+		Value bool `bson:"value"`
+	}
+	err := ColSettings.FindOne(ctx, bson.M{"_id": key}).Decode(&doc)
+	if err != nil {
+		return defaultVal
+	}
+	return doc.Value
+}
+
+// SetSettingBool — key साठी bool value set/update करतो.
+func SetSettingBool(key string, value bool) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColSettings.UpdateOne(ctx,
+		bson.M{"_id": key},
+		bson.M{"$set": bson.M{"value": value}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN IMPERSONATE SESSION
 // ═══════════════════════════════════════════════════════════════════════════════

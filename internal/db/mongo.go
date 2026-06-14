@@ -32,6 +32,7 @@ var (
 	ColWatchHistory  *mongo.Collection // user watch history + view counts
 	ColAnnouncements *mongo.Collection // admin broadcast announcements
 	ColFolders       *mongo.Collection // course folders (subject-wise grouping)
+	ColSettings      *mongo.Collection // key-value app settings (toggles etc.)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -211,6 +212,7 @@ func Connect() {
 	ColWatchHistory  = Database.Collection("watch_history")           // ← watch history
 	ColAnnouncements = Database.Collection("announcements")           // ← broadcast announcements
 	ColFolders       = Database.Collection("course_folders")          // ← course folders
+	ColSettings      = Database.Collection("app_settings")            // ← key-value settings
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
