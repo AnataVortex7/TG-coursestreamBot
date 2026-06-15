@@ -590,21 +590,62 @@ func StartCleanupLoop() {
 
 // ── notifyAllowedUsers ─────────────────────────────────────────────────────────
 // ALLOWED_USERS (config) मधल्या प्रत्येक user ला message पाठवतो — Colab
-// online/offline notifications साठी.
+// online/offline notifications साठी. Message 10 sec नंतर auto-delete होतो.
 
 func notifyAllowedUsers(text string) {
 	botToken := config.ValueOf.BotToken
 	for _, uid := range config.ValueOf.AllowedUsers {
-		go sendTgMessage(botToken, uid, text)
+		go func(chatID int64) {
+			msgID := sendTgMessage(botToken, chatID, text)
+			if msgID == 0 {
+				return
+			}
+			time.Sleep(10 * time.Second)
+			deleteTgMessage(botToken, chatID, msgID)
+		}(uid)
 	}
 }
 
-func sendTgMessage(botToken string, chatID int64, text string) {
+func sendTgMessage(botToken string, chatID int64, text string) int64 {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	payload, err := json.Marshal(map[string]interface{}{
 		"chat_id":    chatID,
 		"text":       text,
 		"parse_mode": "Markdown",
+	})
+	if err != nil {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || !result.OK {
+		return 0
+	}
+	return result.Result.MessageID
+}
+
+func deleteTgMessage(botToken string, chatID int64, msgID int64) {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/deleteMessage", botToken)
+	payload, err := json.Marshal(map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": msgID,
 	})
 	if err != nil {
 		return
