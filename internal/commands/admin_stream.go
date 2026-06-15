@@ -1732,7 +1732,7 @@ func downloadWatermarkAndReupload(
 
 	// ── Colab Queue: KOYEB_URL set asel tar ───────────────────────────────
 	koyebURL := os.Getenv("KOYEB_URL")
-	if koyebURL != "" && wmqueue.IsColabOnline() {
+	if koyebURL != "" {
 		editProgress(fmt.Sprintf(
 			"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
 			file.FileName, msgID,
