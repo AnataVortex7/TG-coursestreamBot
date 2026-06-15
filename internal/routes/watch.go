@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"io"
 	"net/http"
@@ -142,6 +143,7 @@ func (e *allRoutes) LoadWatch(r *Route) {
 	r.Engine.GET("/watch/:token", auth.RequireAuth, handleWatch)
 	r.Engine.GET("/watch-stream/:token", auth.RequireAuth, handleWatchStream)
 	r.Engine.GET("/pdf-download/:token", auth.RequireAuth, handlePDFDownload)
+	r.Engine.GET("/pdf-view/:token", auth.RequireAuth, handlePDFView)
 
 	// Resume position API
 	r.Engine.POST("/api/watch/position/:token", auth.RequireAuth, handleSavePosition)
@@ -239,8 +241,10 @@ func handleWatch(c *gin.Context) {
 	}
 
 	downloadURL := ""
+	viewURL := ""
 	if mediaType == "pdf" {
 		downloadURL = "/pdf-download/" + tokenStr
+		viewURL = "/pdf-view/" + tokenStr
 	}
 
 	// Resume position — server-side load (no extra API call from player)
@@ -267,6 +271,7 @@ func handleWatch(c *gin.Context) {
 		"streamURL":      "/watch-stream/" + tokenStr + "?n=" + nonce,
 		"mediaType":      mediaType,
 		"downloadURL":    downloadURL,
+		"viewURL":        viewURL,
 		"resumePosition": resumePos,
 		"watchToken":     tokenStr,
 		"watermark":      watermark,
@@ -317,9 +322,12 @@ func handleWatchStream(c *gin.Context) {
 	// 3b-i. Range header mandatory — browser player always sends Range.
 	// curl/wget without Range = full-file download attempt → block.
 	// HEAD requests (player probes metadata) are allowed without Range.
+	// PDFs (iframe preview) load via plain GET without a Range header — exempt them.
 	if r.Header.Get("Range") == "" && r.Method != http.MethodHead {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Range header required for streaming."})
-		return
+		if cf, _ := db.GetCachedFile(verified.MessageID, verified.ChannelID); cf == nil || strings.ToLower(cf.MimeType) != "application/pdf" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Range header required for streaming."})
+			return
+		}
 	}
 
 	// 3b-ii. In-memory fast path for seek / buffering range requests.
@@ -423,7 +431,7 @@ func handleWatchStream(c *gin.Context) {
 			file.FileSize, file.FileName, file.MimeType,
 			file.DCID,
 			streamKey,
-			c.ClientIP(),
+			"",  // IP check disabled
 		)
 		if tokErr != nil {
 			log.Error("failed to generate worker token — falling back to local stream", zap.Error(tokErr))
@@ -573,6 +581,9 @@ func setAntiDownloadHeaders(c *gin.Context) {
 }
 
 // setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
+// setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
+// Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
+// setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
 // Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
 func setPlayerSecurityHeaders(c *gin.Context) {
     host := config.ValueOf.Host
@@ -640,6 +651,84 @@ func requirePlayerReferer(c *gin.Context) bool {
     
     return false
 }
+// ── /pdf-view/:token ──────────────────────────────────────────────────────────
+// Serves a PDF inline in the browser (new tab). No X-Frame-Options / anti-download
+// headers — browser renders it natively. Same auth checks as pdf-download.
+
+func handlePDFView(c *gin.Context) {
+	tokenStr := c.Param("token")
+
+	verified, err := token.Verify(tokenStr)
+	if err != nil {
+		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Invalid or expired link."})
+		return
+	}
+
+	sess, err := db.GetSessionByToken(verified.SessionToken)
+	if err != nil || sess == nil {
+		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Session ended. Please log in again."})
+		return
+	}
+
+	currentUserID := auth.GetUserID(c)
+	tokenUserID, err := primitive.ObjectIDFromHex(verified.UserID)
+	if err != nil || tokenUserID != currentUserID {
+		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "This link belongs to a different account."})
+		return
+	}
+
+	cachedFile, err := db.GetCachedFile(verified.MessageID, verified.ChannelID)
+	if err != nil || cachedFile == nil {
+		c.HTML(http.StatusNotFound, "error.html", gin.H{"code": 404, "message": "File not found."})
+		return
+	}
+
+	if strings.ToLower(cachedFile.MimeType) != "application/pdf" {
+		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Only PDF files can be viewed inline."})
+		return
+	}
+
+	hasAccess, err := db.HasAccess(currentUserID, cachedFile.CourseID)
+	if err != nil || !hasAccess {
+		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "You do not have access to this course."})
+		return
+	}
+
+	worker := bot.GetNextWorker()
+	file, err := utils.TimeFuncWithResult(log, "FileFromMessage(pdf-view)", func() (*types.File, error) {
+		return utils.FileFromMessageInChannel(c, worker.Client, verified.MessageID, cachedFile.ChannelID)
+	})
+	if err != nil {
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Could not load file from Telegram."})
+		return
+	}
+
+	fileName := cachedFile.FileName
+	if fileName == "" {
+		fileName = "document.pdf"
+	}
+
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Length", strconv.FormatInt(file.FileSize, 10))
+	// inline = browser opens it directly (PDF viewer), not download
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", fileName))
+	c.Header("Cache-Control", "no-store")
+
+	pipe, err := stream.NewStreamPipe(c, worker.Client, file.Location, 0, file.FileSize-1, log)
+	if err != nil {
+		log.Error("pdf view pipe error", zap.Error(err))
+		return
+	}
+	defer pipe.Close()
+
+	c.Writer.WriteHeader(http.StatusOK)
+	if _, err := io.CopyN(c.Writer, pipe, file.FileSize); err != nil {
+		if !utils.IsClientDisconnectError(err) {
+			log.Error("pdf view copy error", zap.Error(err))
+		}
+	}
+}
+
 // ── /pdf-download/:token ──────────────────────────────────────────────────────
 // Serves a PDF as an attachment (downloadable). Only works for PDF mime type.
 // Same auth + token + access checks as watch-stream, but with attachment header.
@@ -725,7 +814,20 @@ func handlePDFDownload(c *gin.Context) {
 	}
 }
 
-// normalizeWatchMime — stream वेळी browser-safe Content-Type देतो.
+// normalizeClientIP — IPv4-mapped IPv6 addresses normalize करतो.
+// "::ffff:49.36.46.209" → "49.36.46.209"
+// Pure IPv6 किंवा IPv4 → as-is
+// हे solve करतं: token generate वेळी IPv6 होतो, worker request वेळी IPv4 येतो.
+func normalizeClientIP(ip string) string {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return ip
+	}
+	if v4 := parsed.To4(); v4 != nil {
+		return v4.String()
+	}
+	return parsed.String()
+}
 // MKV, AVI इत्यादी types video/mp4 म्हणून serve केले जातात.
 func normalizeWatchMime(mime, fileName string) string {
 	switch strings.ToLower(mime) {
