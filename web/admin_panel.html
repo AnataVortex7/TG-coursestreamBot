@@ -2018,6 +2018,21 @@ async function loadWorkers() {
   }
 }
 
+async function removeWorker(url) {
+  if (!confirm(`Worker remove करायचा?\n${url}`)) return;
+  try {
+    const res = await api('/worker/remove', {
+      method: 'DELETE',
+      body: JSON.stringify({worker_url: url})
+    });
+    const d = await res.json();
+    if (!d.ok) { alert('❌ ' + (d.error || 'Error')); return; }
+    loadWorkers();
+  } catch(e) {
+    alert('❌ ' + e.message);
+  }
+}
+
 async function addWorker() {
   const input = document.getElementById('worker-url-input');
   const msg = document.getElementById('worker-add-msg');
