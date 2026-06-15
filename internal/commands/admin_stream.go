@@ -716,10 +716,16 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				"→ Range of messages\n\n"+
 				"`/userbotdl <chatID> <topicID> <start> <end>`\n"+
 				"→ Topic + Range\n\n"+
+				"`/userbotdl <chatID> msg1,msg2,msg3`\n"+
+				"→ Specific messages (comma-separated)\n\n"+
+				"`/userbotdl <chatID> <topicID> msg1,msg2,msg3`\n"+
+				"→ Topic + Specific messages\n\n"+
 				"*Examples:*\n"+
 				"`/userbotdl 2479194095 5654`\n"+
 				"`/userbotdl 2479194095 100 200`\n"+
-				"`/userbotdl 2479194095 123 100 200`\n\n"+
+				"`/userbotdl 2479194095 123 100 200`\n"+
+				"`/userbotdl 2479194095 101,205,310`\n"+
+				"`/userbotdl 2479194095 123 101,205,310`\n\n"+
 				"Caption replace rules: /listreplace\n"+
 				"Rules add करा: `/setreplace old=new`\n"+
 				"Stop करायला: /stopuserbotdl")
@@ -742,30 +748,76 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	var topicID int
 	var startMsg int
 	var endMsg int
+	var specificMsgIDs []int // comma-separated msg IDs साठी
+
+	// helper: comma-separated msg IDs parse करतो — "101,205,310" → []int{101,205,310}
+	parseCommaMsgIDs := func(s string) ([]int, bool) {
+		parts := strings.Split(s, ",")
+		ids := make([]int, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			id, err := strconv.Atoi(p)
+			if err != nil || id < 1 {
+				return nil, false
+			}
+			ids = append(ids, id)
+		}
+		return ids, len(ids) > 0
+	}
 
 	switch len(a) {
 	case 2:
-		msgID, err := strconv.Atoi(a[1])
-		if err != nil || msgID < 1 {
-			reply(ctx, u, "❌ Invalid messageID. Positive number असायला हवे.")
-			return dispatcher.EndGroups
+		// comma आहे का check करा → specific msgs without topic
+		if strings.Contains(a[1], ",") {
+			ids, ok := parseCommaMsgIDs(a[1])
+			if !ok {
+				reply(ctx, u, "❌ Invalid message IDs. Comma-separated positive numbers असायला हवेत.\nExample: `101,205,310`")
+				return dispatcher.EndGroups
+			}
+			specificMsgIDs = ids
+		} else {
+			msgID, err := strconv.Atoi(a[1])
+			if err != nil || msgID < 1 {
+				reply(ctx, u, "❌ Invalid messageID. Positive number असायला हवे.")
+				return dispatcher.EndGroups
+			}
+			startMsg = msgID
+			endMsg = msgID
 		}
-		startMsg = msgID
-		endMsg = msgID
 
 	case 3:
-		s, err1 := strconv.Atoi(a[1])
-		e, err2 := strconv.Atoi(a[2])
-		if err1 != nil || err2 != nil || s < 1 || e < 1 {
-			reply(ctx, u, "❌ Invalid range. दोन्ही positive numbers असायला हवेत.")
-			return dispatcher.EndGroups
+		// a[2] मध्ये comma आहे → <chatID> <topicID> msg1,msg2,msg3
+		if strings.Contains(a[2], ",") {
+			t, err1 := strconv.Atoi(a[1])
+			if err1 != nil || t < 1 {
+				reply(ctx, u, "❌ Invalid topicID. Positive number असायला हवे.")
+				return dispatcher.EndGroups
+			}
+			ids, ok := parseCommaMsgIDs(a[2])
+			if !ok {
+				reply(ctx, u, "❌ Invalid message IDs. Comma-separated positive numbers असायला हवेत.\nExample: `101,205,310`")
+				return dispatcher.EndGroups
+			}
+			topicID = t
+			specificMsgIDs = ids
+		} else {
+			// existing: <chatID> <start> <end>
+			s, err1 := strconv.Atoi(a[1])
+			e, err2 := strconv.Atoi(a[2])
+			if err1 != nil || err2 != nil || s < 1 || e < 1 {
+				reply(ctx, u, "❌ Invalid range. दोन्ही positive numbers असायला हवेत.")
+				return dispatcher.EndGroups
+			}
+			if s > e {
+				reply(ctx, u, fmt.Sprintf("❌ Start (%d) > End (%d) — start ≤ end असायला हवे.", s, e))
+				return dispatcher.EndGroups
+			}
+			startMsg = s
+			endMsg = e
 		}
-		if s > e {
-			reply(ctx, u, fmt.Sprintf("❌ Start (%d) > End (%d) — start ≤ end असायला हवे.", s, e))
-			return dispatcher.EndGroups
-		}
-		startMsg = s
-		endMsg = e
 
 	case 4:
 		t, err1 := strconv.Atoi(a[1])
@@ -821,12 +873,22 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		}
 	}
 
-	totalMsgs := endMsg - startMsg + 1
+	totalMsgs := 0
 	rangeStr := ""
-	if startMsg == endMsg {
-		rangeStr = fmt.Sprintf("Msg `%d`", startMsg)
+	if len(specificMsgIDs) > 0 {
+		totalMsgs = len(specificMsgIDs)
+		idStrsPreview := make([]string, len(specificMsgIDs))
+		for i, id := range specificMsgIDs {
+			idStrsPreview[i] = fmt.Sprintf("`%d`", id)
+		}
+		rangeStr = fmt.Sprintf("Msgs: %s (%d total)", strings.Join(idStrsPreview, ", "), totalMsgs)
 	} else {
-		rangeStr = fmt.Sprintf("Msgs `%d` → `%d` (%d total)", startMsg, endMsg, totalMsgs)
+		totalMsgs = endMsg - startMsg + 1
+		if startMsg == endMsg {
+			rangeStr = fmt.Sprintf("Msg `%d`", startMsg)
+		} else {
+			rangeStr = fmt.Sprintf("Msgs `%d` → `%d` (%d total)", startMsg, endMsg, totalMsgs)
+		}
 	}
 	topicStr := ""
 	if topicID > 0 {
@@ -910,11 +972,24 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			if stopped {
 				statusLine = "\n🛑 *Process stopped*"
 			}
-			s := fmt.Sprintf(
-				"📊 *Summary*\n📡 `%d` | Range: `%d`→`%d`\n\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d%s",
-				chatIDRaw, startMsg, endMsg,
-				successCount, skipCount, errorCount, statusLine,
-			)
+			var s string
+			if len(specificMsgIDs) > 0 {
+				idStrs := make([]string, len(specificMsgIDs))
+				for i, id := range specificMsgIDs {
+					idStrs[i] = fmt.Sprintf("`%d`", id)
+				}
+				s = fmt.Sprintf(
+					"📊 *Summary*\n📡 `%d` | Msgs: %s\n\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d%s",
+					chatIDRaw, strings.Join(idStrs, ", "),
+					successCount, skipCount, errorCount, statusLine,
+				)
+			} else {
+				s = fmt.Sprintf(
+					"📊 *Summary*\n📡 `%d` | Range: `%d`→`%d`\n\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d%s",
+					chatIDRaw, startMsg, endMsg,
+					successCount, skipCount, errorCount, statusLine,
+				)
+			}
 			if len(errorLines) > 0 {
 				s += "\n\n*Errors:*"
 				for _, errText := range errorOrder {
@@ -1018,7 +1093,18 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		var pendingPhaseA *phaseAOutcome
 		var pendingMsgID int
 
-		for msgID := startMsg; msgID <= endMsg; msgID++ {
+		// ── message IDs list तयार करो ─────────────────────────────────────────
+		var msgIDList []int
+		if len(specificMsgIDs) > 0 {
+			msgIDList = specificMsgIDs
+		} else {
+			msgIDList = make([]int, 0, endMsg-startMsg+1)
+			for id := startMsg; id <= endMsg; id++ {
+				msgIDList = append(msgIDList, id)
+			}
+		}
+
+		for msgIdx, msgID := range msgIDList {
 
 			// Stop check
 			if bgCtx.Err() != nil {
@@ -1028,7 +1114,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				return
 			}
 
-			currentIdx := msgID - startMsg + 1
+			currentIdx := msgIdx + 1
 			editProgress(fmt.Sprintf(
 				"⏳ Processing %d/%d\n📡 Channel: `%d` | Msg: `%d`\n✅ Done: %d | ⏭ Skip: %d | ❌ Err: %d\n\n🛑 Stop: /stopuserbotdl",
 				currentIdx, totalMsgs, chatIDRaw, msgID,
@@ -1089,8 +1175,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			}(phA.pm)
 
 			// ── त्याच वेळी पुढच्या msgID चं Phase A prefetch करो (lookahead=1) ──
-			nextMsgID := msgID + 1
-			if nextMsgID <= endMsg && bgCtx.Err() == nil {
+			if msgIdx+1 < len(msgIDList) && bgCtx.Err() == nil {
+				nextMsgID := msgIDList[msgIdx+1]
 				pm, err := runPhaseA(nextMsgID)
 				pendingPhaseA = &phaseAOutcome{pm: pm, err: err}
 				pendingMsgID = nextMsgID
@@ -1124,7 +1210,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			successCount++
 			updateSummary()
 
-			if totalMsgs > 1 && msgID < endMsg {
+			if totalMsgs > 1 && msgIdx < len(msgIDList)-1 {
 				time.Sleep(1 * time.Second)
 			}
 		}
