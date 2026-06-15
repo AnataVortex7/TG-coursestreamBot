@@ -150,7 +150,7 @@ func getRouter(log *zap.Logger) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
- 	   SkipPaths: []string{"/", "/courses", "/login", "/api/worker/stream-check", "/api/colab/poll", "/api/colab/progress", "/ping"},
+ 	   SkipPaths: []string{"/", "/courses", "/login", "/api/worker/stream-check", "/api/colab/poll","/api/admin/stream/live", "/api/colab/progress", "/ping"},
 	}))
 	router.Use(gin.ErrorLogger())
 	router.Use(globalSecurityHeaders())
