@@ -79,6 +79,9 @@ func (e *allRoutes) LoadWeb(r *Route) {
 		protected.GET("/courses", handleCoursesList)
 		protected.GET("/course/:id", handleCourseDetail)
 
+		// Lazy-load — एका folder च्या files (large courses साठी fast load)
+		protected.GET("/api/course/:course_id/folder/:folder_id/files", handleFolderFiles)
+
 		// Announcements API (auth required)
 		protected.GET("/api/announcements", handleGlobalAnnouncements)
 		protected.GET("/api/announcements/:course_id", handleCourseAnnouncements)
@@ -170,65 +173,55 @@ func handleCoursesList(c *gin.Context) {
 
 // VideoEntry — एक file चा template data
 type VideoEntry struct {
-	Index        int
-	FileKey      string // AES-encrypted {message_id, channel_id} — HTML मध्ये safe
-	Title        string
-	Caption      string
-	FileName     string
-	MimeType     string
-	FileSize     string
-	StreamURL    string
-	MediaType    string
-	HasMedia     bool
-	ViewCount    int
-	LastViewedAt string
-	CourseIDHex  string
+	Index        int    `json:"index"`
+	FileKey      string `json:"fileKey"` // AES-encrypted {message_id, channel_id} — HTML मध्ये safe
+	Title        string `json:"title"`
+	Caption      string `json:"caption"`
+	FileName     string `json:"fileName"`
+	MimeType     string `json:"mimeType"`
+	FileSize     string `json:"fileSize"`
+	StreamURL    string `json:"streamURL"`
+	MediaType    string `json:"mediaType"`
+	HasMedia     bool   `json:"hasMedia"`
+	ViewCount    int    `json:"viewCount"`
+	LastViewedAt string `json:"lastViewedAt"`
+	CourseIDHex  string `json:"courseIDHex"`
 }
 
 // FolderGroup — template ला folder + त्यातले files एकत्र देतो
 type FolderGroup struct {
-	FolderID   string
-	Name       string
-	Files      []VideoEntry
-	IsUngrouped bool // true = folder नाही, range बाहेरचे files
+	FolderID    string       `json:"folderID"`
+	Name        string       `json:"name"`
+	Files       []VideoEntry `json:"files"`
+	IsUngrouped bool         `json:"isUngrouped"` // true = folder नाही, range बाहेरचे files
+	FileCount   int          `json:"fileCount"`   // lazy-load साठी — Files empty असतानाही count दाखवायला
 }
 
-func handleCourseDetail(c *gin.Context) {
-	// Wake sleeping admin workers — user is about to watch a video
-	go workerreg.WakeAll()
-
-	userID := auth.GetUserID(c)
-	username := auth.GetUsername(c)
-
-	courseIDHex := c.Param("id")
-	courseID, err := primitive.ObjectIDFromHex(courseIDHex)
-	if err != nil {
-		c.HTML(http.StatusBadRequest, "error.html", gin.H{
-			"code":    400,
-			"message": "Invalid course link.",
-		})
-		return
+// courseContentContext — एका course साठी सगळी loaded data (files, folders, helpers).
+// handleCourseDetail आणि handleFolderFiles दोन्ही हे वापरतात — duplicate code टाळण्यासाठी.
+type courseContentContext struct {
+	userID       primitive.ObjectID
+	courseIDHex  string
+	hasAccess    bool
+	sessionToken string
+	files        []db.CachedFile // dedup केलेले, sort_order नुसार sorted
+	folders      []db.CourseFolder
+	viewMap      map[int]struct {
+		count        int
+		lastViewedAt string
 	}
+}
+
+// loadCourseContent — course चे files (deduped), folders आणि watch-history एकत्र लोड करतो.
+func loadCourseContent(c *gin.Context, courseID primitive.ObjectID) (*courseContentContext, error) {
+	userID := auth.GetUserID(c)
 
 	hasAccess, _ := db.HasAccess(userID, courseID)
-
-	course, err := db.GetCourseByID(courseID)
-	if err != nil || course == nil {
-		c.HTML(http.StatusNotFound, "error.html", gin.H{
-			"code":    404,
-			"message": "Course not found.",
-		})
-		return
-	}
 
 	// सर्व files sort_order नुसार
 	files, err := db.FilesForCourse(courseID)
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
-			"code":    500,
-			"message": "Failed to load course content.",
-		})
-		return
+		return nil, err
 	}
 
 	// ── Deduplicate — same video चे .mkv + .mp4 दोन्ही असल्यास एकच दाखवा ──
@@ -236,26 +229,31 @@ func handleCourseDetail(c *gin.Context) {
 	formatPriority := func(mime, name string) int {
 		mime = strings.ToLower(mime)
 		name = strings.ToLower(name)
-		if strings.Contains(mime, "mp4") || strings.HasSuffix(name, ".mp4")   { return 4 }
-		if strings.Contains(mime, "webm") || strings.HasSuffix(name, ".webm") { return 3 }
-		if strings.Contains(mime, "avi") || strings.HasSuffix(name, ".avi")   { return 2 }
-		if strings.HasSuffix(name, ".mkv")                                     { return 1 }
+		if strings.Contains(mime, "mp4") || strings.HasSuffix(name, ".mp4") {
+			return 4
+		}
+		if strings.Contains(mime, "webm") || strings.HasSuffix(name, ".webm") {
+			return 3
+		}
+		if strings.Contains(mime, "avi") || strings.HasSuffix(name, ".avi") {
+			return 2
+		}
+		if strings.HasSuffix(name, ".mkv") {
+			return 1
+		}
 		return 0
 	}
 
 	// Title normalize करा — extension, resolution tags काढा
-	// "[640x360p] .mkv" / "[1280x720p]" / ".mp4" सगळं strip करा
 	normalizeTitle := func(title, filename string) string {
 		s := strings.TrimSpace(title)
 		if s == "" {
 			s = strings.TrimSpace(filename)
 		}
 		s = strings.ToLower(s)
-		// extension काढा
 		for _, ext := range []string{".mkv", ".mp4", ".avi", ".webm", ".mov", ".flv"} {
 			s = strings.ReplaceAll(s, ext, "")
 		}
-		// resolution tags काढा: [640x360p], [1280x720p], [640x360] etc
 		for _, pat := range []string{"[640x360p]", "[1280x720p]", "[640x360]", "[1280x720]", "[1920x1080p]", "[1920x1080]", "[480x360p]", "[480x360]"} {
 			s = strings.ReplaceAll(s, pat, "")
 		}
@@ -273,7 +271,6 @@ func handleCourseDetail(c *gin.Context) {
 			bestFile[key] = f
 		}
 	}
-	// Original order preserve करा
 	seenKeys := make(map[titleKey]bool)
 	deduped := make([]db.CachedFile, 0, len(bestFile))
 	for _, f := range files {
@@ -285,145 +282,249 @@ func handleCourseDetail(c *gin.Context) {
 	}
 	files = deduped
 
-	// Folders for this course — order नुसार sorted
+	// Folders for this course
 	folders, err := db.GetFoldersForCourse(courseID)
 	if err != nil {
-		folders = []db.CourseFolder{} // error आला तरी page break नाही
+		folders = []db.CourseFolder{}
 	}
 
 	sessionToken := auth.GetSessionToken(c)
 
-	// Watch history — एका DB call मध्ये
+	// Watch history
 	historyRecords, _ := db.GetWatchHistoryForCourse(userID, courseID)
-	type viewInfo struct {
+	viewMap := make(map[int]struct {
 		count        int
 		lastViewedAt string
-	}
-	viewMap := make(map[int]viewInfo, len(historyRecords))
+	}, len(historyRecords))
 	for _, h := range historyRecords {
-		viewMap[h.MessageID] = viewInfo{
+		viewMap[h.MessageID] = struct {
+			count        int
+			lastViewedAt string
+		}{
 			count:        h.ViewCount,
 			lastViewedAt: h.LastViewedAt.Local().Format("02 Jan 2006, 3:04 PM"),
 		}
 	}
 
-	// ── Build VideoEntry for each file ────────────────────────────────────────
-	buildEntry := func(i int, f db.CachedFile) VideoEntry {
-		mime := strings.ToLower(f.MimeType)
-		mediaType := "document"
-		switch {
-		case strings.Contains(mime, "video"):
-			mediaType = "video"
-		case strings.Contains(mime, "audio"):
-			mediaType = "audio"
-		case mime == "application/pdf":
-			mediaType = "pdf"
-		case strings.Contains(mime, "image"):
-			mediaType = "photo"
-		}
+	return &courseContentContext{
+		userID:       userID,
+		courseIDHex:  courseID.Hex(),
+		hasAccess:    hasAccess,
+		sessionToken: sessionToken,
+		files:        files,
+		folders:      folders,
+		viewMap:      viewMap,
+	}, nil
+}
 
-		streamURL := ""
-		hasMedia := false
-		if hasAccess {
-			if tok, err := token.New(f.MessageID, f.ChannelID, userID.Hex(), sessionToken); err == nil {
-				streamURL = "/watch/" + tok
-				hasMedia = true
-			}
-		}
+// buildEntry — एका CachedFile पासून VideoEntry बनवतो (stream token सहित).
+func (ctx *courseContentContext) buildEntry(f db.CachedFile) VideoEntry {
+	mime := strings.ToLower(f.MimeType)
+	mediaType := "document"
+	switch {
+	case strings.Contains(mime, "video"):
+		mediaType = "video"
+	case strings.Contains(mime, "audio"):
+		mediaType = "audio"
+	case mime == "application/pdf":
+		mediaType = "pdf"
+	case strings.Contains(mime, "image"):
+		mediaType = "photo"
+	}
 
-		fileKey, _ := token.NewFileKey(f.MessageID, f.ChannelID)
-		vi := viewMap[f.MessageID]
-		return VideoEntry{
-			Index:        f.SortOrder,
-			FileKey:      fileKey,
-			Title:        f.Title,
-			Caption:      f.Caption,
-			FileName:     f.FileName,
-			MimeType:     f.MimeType,
-			FileSize:     humanSize(f.FileSize),
-			StreamURL:    streamURL,
-			MediaType:    mediaType,
-			HasMedia:     hasMedia,
-			ViewCount:    vi.count,
-			LastViewedAt: vi.lastViewedAt,
-			CourseIDHex:  courseIDHex,
+	streamURL := ""
+	hasMedia := false
+	if ctx.hasAccess {
+		if tok, err := token.New(f.MessageID, f.ChannelID, ctx.userID.Hex(), ctx.sessionToken); err == nil {
+			streamURL = "/watch/" + tok
+			hasMedia = true
 		}
 	}
 
-	// ── Group files into folders ───────────────────────────────────────────────
-	// Folders नसल्यास flat playlist (जसं आधी होतं — backward compat)
-	if len(folders) == 0 {
-		playlist := make([]VideoEntry, 0, len(files))
-		for i, f := range files {
-			playlist = append(playlist, buildEntry(i, f))
+	fileKey, _ := token.NewFileKey(f.MessageID, f.ChannelID)
+	vi := ctx.viewMap[f.MessageID]
+	return VideoEntry{
+		Index:        f.SortOrder,
+		FileKey:      fileKey,
+		Title:        f.Title,
+		Caption:      f.Caption,
+		FileName:     f.FileName,
+		MimeType:     f.MimeType,
+		FileSize:     humanSize(f.FileSize),
+		StreamURL:    streamURL,
+		MediaType:    mediaType,
+		HasMedia:     hasMedia,
+		ViewCount:    vi.count,
+		LastViewedAt: vi.lastViewedAt,
+		CourseIDHex:  ctx.courseIDHex,
+	}
+}
+
+func handleCourseDetail(c *gin.Context) {
+	// Wake sleeping admin workers — user is about to watch a video
+	go workerreg.WakeAll()
+
+	username := auth.GetUsername(c)
+
+	courseIDHex := c.Param("id")
+	courseID, err := primitive.ObjectIDFromHex(courseIDHex)
+	if err != nil {
+		c.HTML(http.StatusBadRequest, "error.html", gin.H{
+			"code":    400,
+			"message": "Invalid course link.",
+		})
+		return
+	}
+
+	course, err := db.GetCourseByID(courseID)
+	if err != nil || course == nil {
+		c.HTML(http.StatusNotFound, "error.html", gin.H{
+			"code":    404,
+			"message": "Course not found.",
+		})
+		return
+	}
+
+	ctx, err := loadCourseContent(c, courseID)
+	if err != nil {
+		c.HTML(http.StatusInternalServerError, "error.html", gin.H{
+			"code":    500,
+			"message": "Failed to load course content.",
+		})
+		return
+	}
+
+	// ── Folders नसल्यास flat playlist (जसं आधी होतं — backward compat) ────────
+	// इथे मात्र performance साठी fix limit ठेवतोय: 200 पेक्षा जास्त files
+	// असल्यास सुद्धा "No Folder" नावाचा एकच lazy group बनवतो.
+	if len(ctx.folders) == 0 {
+		if len(ctx.files) > 200 {
+			// Lazy single-group mode — मोठ्या flat courses साठी सुद्धा fast load
+			fg := FolderGroup{
+				FolderID:    "ungrouped",
+				Name:        course.Title,
+				Files:       []VideoEntry{},
+				IsUngrouped: true,
+				FileCount:   len(ctx.files),
+			}
+			c.HTML(http.StatusOK, "course_detail.html", gin.H{
+				"username":     username,
+				"course":       course,
+				"playlist":     []VideoEntry{},
+				"folderGroups": []FolderGroup{fg},
+				"hasFolders":   true,
+				"lazyLoad":     true,
+				"totalCount":   len(ctx.files),
+				"hasAccess":    ctx.hasAccess,
+				"botUsername":  config.ValueOf.BotUsername,
+			})
+			return
+		}
+
+		playlist := make([]VideoEntry, 0, len(ctx.files))
+		for _, f := range ctx.files {
+			playlist = append(playlist, ctx.buildEntry(f))
 		}
 		c.HTML(http.StatusOK, "course_detail.html", gin.H{
 			"username":     username,
 			"course":       course,
-			"playlist":     playlist,      // flat list — जुना template काम करतो
-			"folderGroups": []FolderGroup{}, // empty — template folder section skip करतो
+			"playlist":     playlist,
+			"folderGroups": []FolderGroup{},
 			"hasFolders":   false,
+			"lazyLoad":     false,
 			"totalCount":   len(playlist),
-			"hasAccess":    hasAccess,
+			"hasAccess":    ctx.hasAccess,
 			"botUsername":  config.ValueOf.BotUsername,
 		})
 		return
 	}
 
-	// Folder असल्यास — group करतो
-	// map: folderID → FolderGroup (pointer for in-place append)
-	groupMap := make(map[primitive.ObjectID]*FolderGroup, len(folders))
-	orderedGroups := make([]*FolderGroup, 0, len(folders)+1)
+	// ── Folders असल्यास — फक्त counts काढतो, files lazy-load होतील ────────────
+	counts := make(map[primitive.ObjectID]int, len(ctx.folders))
+	ungroupedCount := 0
+	for _, f := range ctx.files {
+		matchedFolder := db.FolderForSortOrder(ctx.folders, f.SortOrder)
+		if matchedFolder == nil {
+			ungroupedCount++
+		} else {
+			counts[matchedFolder.ID]++
+		}
+	}
 
-	for _, f := range folders {
-		g := &FolderGroup{
+	result := make([]FolderGroup, 0, len(ctx.folders)+1)
+	for _, f := range ctx.folders {
+		result = append(result, FolderGroup{
 			FolderID:    f.ID.Hex(),
 			Name:        f.Name,
-			Files:       []VideoEntry{},
+			Files:       []VideoEntry{}, // lazy — page-load वर पाठवत नाही
 			IsUngrouped: false,
-		}
-		groupMap[f.ID] = g
-		orderedGroups = append(orderedGroups, g)
+			FileCount:   counts[f.ID],
+		})
 	}
-
-	// Ungrouped — range बाहेरचे files
-	ungrouped := &FolderGroup{
-		FolderID:    "ungrouped",
-		Name:        "Ungrouped",
-		Files:       []VideoEntry{},
-		IsUngrouped: true,
-	}
-
-	for i, f := range files {
-		entry := buildEntry(i, f)
-		matchedFolder := db.FolderForSortOrder(folders, f.SortOrder)
-		if matchedFolder == nil {
-			ungrouped.Files = append(ungrouped.Files, entry)
-		} else {
-			groupMap[matchedFolder.ID].Files = append(groupMap[matchedFolder.ID].Files, entry)
-		}
-	}
-
-	// Final ordered list — empty folders दाखवतो (admin ला visible असतात)
-	result := make([]FolderGroup, 0, len(orderedGroups)+1)
-	for _, g := range orderedGroups {
-		result = append(result, *g)
-	}
-	// Ungrouped files असतील तरच शेवटी add करतो
-	if len(ungrouped.Files) > 0 {
-		result = append(result, *ungrouped)
+	if ungroupedCount > 0 {
+		result = append(result, FolderGroup{
+			FolderID:    "ungrouped",
+			Name:        "Ungrouped",
+			Files:       []VideoEntry{},
+			IsUngrouped: true,
+			FileCount:   ungroupedCount,
+		})
 	}
 
 	c.HTML(http.StatusOK, "course_detail.html", gin.H{
 		"username":     username,
 		"course":       course,
-		"playlist":     []VideoEntry{}, // folders असताना हे empty — template folderGroups वापरतो
+		"playlist":     []VideoEntry{},
 		"folderGroups": result,
 		"hasFolders":   true,
-		"totalCount":   len(files),
-		"hasAccess":    hasAccess,
+		"lazyLoad":     true,
+		"totalCount":   len(ctx.files),
+		"hasAccess":    ctx.hasAccess,
 		"botUsername":  config.ValueOf.BotUsername,
 	})
+}
+
+// ─── /api/course/:course_id/folder/:folder_id/files (lazy-load) ───────────────
+// folder_id == "ungrouped" → range बाहेरचे files. अन्यथा folder ObjectID hex.
+func handleFolderFiles(c *gin.Context) {
+	courseIDHex := c.Param("course_id")
+	courseID, err := primitive.ObjectIDFromHex(courseIDHex)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course id"})
+		return
+	}
+
+	folderIDParam := c.Param("folder_id")
+
+	ctx, err := loadCourseContent(c, courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load content"})
+		return
+	}
+
+	entries := make([]VideoEntry, 0, 64)
+
+	if folderIDParam == "ungrouped" {
+		for _, f := range ctx.files {
+			if db.FolderForSortOrder(ctx.folders, f.SortOrder) == nil {
+				entries = append(entries, ctx.buildEntry(f))
+			}
+		}
+	} else {
+		folderID, err := primitive.ObjectIDFromHex(folderIDParam)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid folder id"})
+			return
+		}
+		for _, f := range ctx.files {
+			matched := db.FolderForSortOrder(ctx.folders, f.SortOrder)
+			if matched != nil && matched.ID == folderID {
+				entries = append(entries, ctx.buildEntry(f))
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"files": entries})
 }
 
 // ─── MIME helpers ─────────────────────────────────────────────────────────────
