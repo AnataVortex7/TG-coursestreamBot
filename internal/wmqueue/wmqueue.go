@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -70,7 +71,7 @@ type WatermarkJob struct {
 // नवीन) असतो. प्रत्येक poll मध्ये worker_id येतो — त्याचा lastPollTime track
 // करतो. 10 sec (2 missed polls @ 5s) मध्ये poll आला नाही → तो worker offline.
 
-const workerOfflineThreshold = 10 * time.Second // 2 missed polls @ 5s
+const workerOfflineThreshold = 30 * time.Second // 6 missed polls @ 5s — network lag/processing veles khota offline tick na yenya sathi
 
 var colabTracker = struct {
 	mu        sync.Mutex
@@ -590,7 +591,7 @@ func StartCleanupLoop() {
 
 // ── notifyAllowedUsers ─────────────────────────────────────────────────────────
 // ALLOWED_USERS (config) मधल्या प्रत्येक user ला message पाठवतो — Colab
-// online/offline notifications साठी. Message 10 sec नंतर auto-delete होतो.
+// online/offline notifications साठी. Message 30 sec नंतर auto-delete होतो.
 
 func notifyAllowedUsers(text string) {
 	botToken := config.ValueOf.BotToken
@@ -598,9 +599,10 @@ func notifyAllowedUsers(text string) {
 		go func(chatID int64) {
 			msgID := sendTgMessage(botToken, chatID, text)
 			if msgID == 0 {
+				log.Printf("[wmqueue] notifyAllowedUsers: sendTgMessage failed chatID=%d", chatID)
 				return
 			}
-			time.Sleep(10 * time.Second)
+			time.Sleep(30 * time.Second)
 			deleteTgMessage(botToken, chatID, msgID)
 		}(uid)
 	}
@@ -614,6 +616,52 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 		"parse_mode": "Markdown",
 	})
 	if err != nil {
+		log.Printf("[wmqueue] sendTgMessage: marshal error: %v", err)
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+	if err != nil {
+		log.Printf("[wmqueue] sendTgMessage: request build error: %v", err)
+		return 0
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[wmqueue] sendTgMessage: http error: %v", err)
+		return 0
+	}
+	defer resp.Body.Close()
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("[wmqueue] sendTgMessage: decode error: %v", err)
+		return 0
+	}
+	if !result.OK {
+		// Markdown parse error किंवा इतर Telegram API error असल्यास plain text retry करतो
+		log.Printf("[wmqueue] sendTgMessage: API error chatID=%d desc=%s — retrying without markdown", chatID, result.Description)
+		return sendTgMessagePlain(botToken, chatID, text)
+	}
+	return result.Result.MessageID
+}
+
+// sendTgMessagePlain — Markdown parse fail झाल्यास plain text ने retry (escape issue मुळे
+// message कधीच न पाठवलं जाण्याचा bug टाळण्यासाठी — त्यामुळे delete सुद्धा कधी होणार नाही).
+func sendTgMessagePlain(botToken string, chatID int64, text string) int64 {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
+	payload, err := json.Marshal(map[string]interface{}{
+		"chat_id": chatID,
+		"text":    text,
+	})
+	if err != nil {
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -626,16 +674,19 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[wmqueue] sendTgMessagePlain: http error: %v", err)
 		return 0
 	}
 	defer resp.Body.Close()
 	var result struct {
-		OK     bool `json:"ok"`
-		Result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
 			MessageID int64 `json:"message_id"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || !result.OK {
+		log.Printf("[wmqueue] sendTgMessagePlain: API error chatID=%d desc=%s", chatID, result.Description)
 		return 0
 	}
 	return result.Result.MessageID
@@ -648,21 +699,31 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 		"message_id": msgID,
 	})
 	if err != nil {
+		log.Printf("[wmqueue] deleteTgMessage: marshal error: %v", err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
+		log.Printf("[wmqueue] deleteTgMessage: request build error: %v", err)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
+		log.Printf("[wmqueue] deleteTgMessage: http error: %v", err)
 		return
 	}
 	defer resp.Body.Close()
+	var result struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && !result.OK {
+		log.Printf("[wmqueue] deleteTgMessage: API error chatID=%d msgID=%d desc=%s", chatID, msgID, result.Description)
+	}
 }
 
 // ── StartColabWatcher ─────────────────────────────────────────────────────────
