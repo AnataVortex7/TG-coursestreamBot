@@ -135,12 +135,24 @@ func handleColabDone(c *gin.Context) {
 		return
 	}
 	var req struct {
-		JobID string `json:"job_id"`
+		JobID    string `json:"job_id"`
+		WorkerID string `json:"worker_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
+	// [FIX] done call sudha heartbeat mhanun count karo — upload step la time
+	// lagla aani tya darmyan progress na aalyas worker khota offline na disel.
+	workerID := req.WorkerID
+	if workerID == "" {
+		workerID = c.Query("worker_id")
+	}
+	if workerID == "" {
+		workerID = c.GetHeader("X-Worker-ID")
+	}
+	wmqueue.RecordPoll(workerID)
+
 	wmqueue.Default.UpdateStatus(req.JobID, wmqueue.StatusDone, "")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -153,13 +165,23 @@ func handleColabFailed(c *gin.Context) {
 		return
 	}
 	var req struct {
-		JobID string `json:"job_id"`
-		Error string `json:"error"`
+		JobID    string `json:"job_id"`
+		Error    string `json:"error"`
+		WorkerID string `json:"worker_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
+	workerID := req.WorkerID
+	if workerID == "" {
+		workerID = c.Query("worker_id")
+	}
+	if workerID == "" {
+		workerID = c.GetHeader("X-Worker-ID")
+	}
+	wmqueue.RecordPoll(workerID)
+
 	wmqueue.Default.UpdateStatus(req.JobID, wmqueue.StatusFailed, req.Error)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
