@@ -334,7 +334,7 @@ func handleCourseDetail(c *gin.Context) {
 		fileKey, _ := token.NewFileKey(f.MessageID, f.ChannelID)
 		vi := viewMap[f.MessageID]
 		return VideoEntry{
-			Index:        i + 1,
+			Index:        f.SortOrder,
 			FileKey:      fileKey,
 			Title:        f.Title,
 			Caption:      f.Caption,
