@@ -154,13 +154,13 @@
 <div class="folders-grid-wrap">
   <div class="folders-grid">
     {{ range $fi, $folder := .folderGroups }}
-    <div class="folder-card" data-folder-idx="{{ $fi }}" onclick="toggleFolder({{ $fi }})">
+    <div class="folder-card" data-folder-idx="{{ $fi }}" data-folder-id="{{ $folder.FolderID }}" onclick="toggleFolder({{ $fi }})">
       <div class="folder-icon-wrap">
         {{ if $folder.IsUngrouped }}📄{{ else }}📁{{ end }}
-        <span class="folder-badge">{{ len $folder.Files }}</span>
+        <span class="folder-badge">{{ $folder.FileCount }}</span>
       </div>
       <div class="folder-card-title">{{ $folder.Name }}</div>
-      <div class="folder-card-meta">{{ len $folder.Files }} files</div>
+      <div class="folder-card-meta">{{ $folder.FileCount }} files</div>
     </div>
     {{ end }}
   </div>
@@ -169,13 +169,17 @@
 {{ range $fi, $folder := .folderGroups }}
 <div class="folder-section" data-folder-idx="{{ $fi }}">
   <!-- Folder Body -->
-  <div class="folder-body" id="folder-body-{{ $fi }}">
+  <div class="folder-body" id="folder-body-{{ $fi }}" data-folder-id="{{ $folder.FolderID }}" data-loaded="{{ if $.lazyLoad }}false{{ else }}true{{ end }}">
     <div class="folder-body-header">
       <span class="folder-body-title">{{ if $folder.IsUngrouped }}📄{{ else }}📁{{ end }} {{ $folder.Name }}</span>
       <button class="folder-body-close" onclick="toggleFolder({{ $fi }})">✕</button>
     </div>
-    {{ if $folder.Files }}
-    <div class="grid">
+    {{ if $.lazyLoad }}
+    <div class="grid" id="folder-grid-{{ $fi }}">
+      <div class="folder-empty" id="folder-loading-{{ $fi }}">⏳ Loading files…</div>
+    </div>
+    {{ else if $folder.Files }}
+    <div class="grid" id="folder-grid-{{ $fi }}">
       {{ range $folder.Files }}
       <div class="card type-{{ .MediaType }}"
            data-type="{{ .MediaType }}"
@@ -312,6 +316,8 @@
 
 <script>
   const HAS_FOLDERS = {{ .hasFolders }};
+  const LAZY_LOAD   = {{ .lazyLoad }};
+  const COURSE_ID   = "{{ .course.ID.Hex }}";
   const PAGE_SIZE   = 50;
   let currentFilter = 'all';
   let currentPage   = 1;
@@ -321,6 +327,88 @@
   document.querySelectorAll('.folder-card').forEach(function(card, i) {
     card.classList.add('fc-c' + (i % 8));
   });
+
+  // ── Card HTML builder (client-side, lazy-loaded files साठी) ─────────────
+  function fileTypeBadge(t) {
+    if (t === 'video') return '🎬 Video';
+    if (t === 'audio') return '🎵 Audio';
+    if (t === 'pdf') return '📄 PDF';
+    if (t === 'photo') return '🖼️ Photo';
+    return '📦 Document';
+  }
+
+  function buildCardHTML(f) {
+    const esc = s => (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    let actions = '';
+    if (f.hasMedia) {
+      const watchLabel = f.mediaType === 'video' ? '▶ Watch'
+        : f.mediaType === 'audio' ? '🎵 Listen'
+        : f.mediaType === 'pdf' ? '📄 View PDF'
+        : f.mediaType === 'photo' ? '🖼️ View Photo' : '📂 Open';
+      const watchClass = f.mediaType === 'video' ? 'btn-watch'
+        : f.mediaType === 'audio' ? 'btn-listen'
+        : f.mediaType === 'pdf' ? 'btn-view'
+        : f.mediaType === 'photo' ? 'btn-photo' : 'btn-open';
+      actions += `<a href="${esc(f.streamURL)}" target="_blank" class="btn ${watchClass}">${watchLabel}</a>`;
+      if (f.mediaType === 'video' || f.mediaType === 'audio') {
+        actions += `<button class="btn btn-offline" onclick="getOfflineToken('${esc(f.courseIDHex)}','${esc(f.fileKey)}', this)" title="Telegram मध्ये offline download साठी token generate करा">📥 Offline</button>`;
+      }
+    } else {
+      actions = '<button class="btn btn-locked" disabled>🔒 Access Required</button>';
+    }
+
+    let viewHistory = '';
+    if (f.viewCount) {
+      viewHistory = `<div class="view-history"><span class="view-count-badge">👁 ${f.viewCount} वेळा बघितलं</span>`;
+      if (f.lastViewedAt) viewHistory += `<span class="last-viewed-badge">🕐 ${esc(f.lastViewedAt)}</span>`;
+      viewHistory += '</div>';
+    }
+
+    return `<div class="card type-${f.mediaType}" data-type="${f.mediaType}" data-name="${esc(f.fileName)}" data-title="${esc(f.title)}">
+      <div class="card-stripe"></div>
+      <div class="card-body">
+        <div class="card-header-row">
+          <span class="type-badge">${fileTypeBadge(f.mediaType)}</span>
+          <span class="msg-id">#${f.index}</span>
+        </div>
+        ${f.title ? `<div class="file-name">${esc(f.title)}</div>` : ''}
+        <div class="meta">
+          ${f.fileSize ? `<span>💾 ${esc(f.fileSize)}</span>` : ''}
+          ${f.mimeType ? `<span>🏷️ ${esc(f.mimeType)}</span>` : ''}
+        </div>
+        ${viewHistory}
+      </div>
+      <div class="card-actions">${actions}</div>
+    </div>`;
+  }
+
+  // ── Folder lazy fetch ─────────────────────────────────────────────────────
+  const folderFetchInFlight = {};
+  async function loadFolderFiles(idx) {
+    const body = document.getElementById('folder-body-' + idx);
+    if (!body || body.dataset.loaded === 'true' || folderFetchInFlight[idx]) return;
+    const folderId = body.dataset.folderId;
+    const gridEl   = document.getElementById('folder-grid-' + idx);
+    const loadingEl = document.getElementById('folder-loading-' + idx);
+    folderFetchInFlight[idx] = true;
+    try {
+      const res = await fetch('/api/course/' + COURSE_ID + '/folder/' + folderId + '/files');
+      if (!res.ok) throw new Error('Failed: ' + res.status);
+      const data = await res.json();
+      const files = data.files || [];
+      if (files.length === 0) {
+        gridEl.innerHTML = '<div class="folder-empty">📭 या folder मध्ये अजून files नाहीत.</div>';
+      } else {
+        gridEl.innerHTML = files.map(buildCardHTML).join('');
+      }
+      body.dataset.loaded = 'true';
+      applyFilters();
+    } catch (e) {
+      if (loadingEl) loadingEl.textContent = '❌ Load करताना error आला. पुन्हा try करा.';
+    } finally {
+      delete folderFetchInFlight[idx];
+    }
+  }
 
   // ── Folder toggle ────────────────────────────────────────────────────────
   function toggleFolder(idx) {
@@ -334,6 +422,7 @@
       body.classList.add('open');
       if (card) card.classList.add('active');
       body.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (LAZY_LOAD) loadFolderFiles(idx);
     }
   }
 
@@ -344,6 +433,7 @@
     if (firstBody) {
       firstBody.classList.add('open');
       if (firstCard) firstCard.classList.add('active');
+      if (LAZY_LOAD) loadFolderFiles(0);
     }
   }
 
