@@ -31,10 +31,6 @@ import (
 )
 
 // ── Active stream key registry ────────────────────────────────────────────────
-// प्रत्येक user साठी latest stream चा unique key store करतो.
-// नवीन stream सुरू झाला की नवीन key generate होतो — जुना key invalid होतो.
-// Worker दर 5 सेकंदाला हा key verify करतो; key मिळाला नाही तर stream बंद करतो.
-
 var activeStreamKeys sync.Map // userIDHex → streamKey (string)
 
 // nonceStreamKeys — handleWatch madhe ek vela streamKey generate hoto,
@@ -44,11 +40,6 @@ var activeStreamKeys sync.Map // userIDHex → streamKey (string)
 var nonceStreamKeys sync.Map // nonce (string) → streamKey (string)
 
 // ── Admin Panel: Live Stream Tracking ────────────────────────────────────────
-// प्रत्येक user चा current active stream info admin panel साठी store करतो.
-// Main server फक्त redirect करतो त्यामुळे stream end कळत नाही —
-// entry 2 तासांनंतर (token TTL) auto-expire होते.
-// User ने नवीन stream सुरू केला तर जुनी entry "replaced" म्हणून 2 min दाखवतो.
-
 type streamMetaEntry struct {
 	UserID    string
 	UserEmail string
@@ -73,8 +64,6 @@ var (
 	recentlyReplacedMeta sync.Map // userIDHex → *replacedStreamEntry (2 min TTL)
 )
 
-// storeStreamMeta — stream सुरू होताना call करतो.
-// जुनी entry असल्यास replaced log मध्ये 2 min साठी save होते.
 func storeStreamMeta(userIDHex, userEmail, userName, fileName, workerURL, streamKey string) {
 	if existing, ok := activeStreamMeta.Load(userIDHex); ok {
 		old := existing.(*streamMetaEntry)
@@ -102,7 +91,6 @@ func storeStreamMeta(userIDHex, userEmail, userName, fileName, workerURL, stream
 	})
 }
 
-// liveStreamsList — admin panel साठी सर्व active streams देतो (expired clean करतो).
 func liveStreamsList() []*streamMetaEntry {
 	now := time.Now()
 	var out []*streamMetaEntry
@@ -118,7 +106,6 @@ func liveStreamsList() []*streamMetaEntry {
 	return out
 }
 
-// replacedStreamsList — recently replaced (killed) streams देतो (2 min TTL).
 func replacedStreamsList() []*replacedStreamEntry {
 	var out []*replacedStreamEntry
 	recentlyReplacedMeta.Range(func(_, v any) bool {
@@ -128,7 +115,6 @@ func replacedStreamsList() []*replacedStreamEntry {
 	return out
 }
 
-// genStreamKey generates a cryptographically random 16-byte hex key.
 func genStreamKey() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -150,6 +136,10 @@ func (e *allRoutes) LoadWatch(r *Route) {
 }
 
 // ── /watch/:token ─────────────────────────────────────────────────────────────
+// FIX: Worker token इथेच generate होतो — एकदाच.
+// streamURL directly worker URL असतो (redirect नाही).
+// त्यामुळे browser seek करताना same worker URL ला Range request पाठवतो —
+// worker ला नवीन token येत नाही, नवीन streamKey येत नाही → seek working.
 
 func handleWatch(c *gin.Context) {
 	tokenStr := c.Param("token")
@@ -190,7 +180,7 @@ func handleWatch(c *gin.Context) {
 		return
 	}
 
-	// Record view — fire-and-forget (don't block player load on DB write)
+	// Record view — fire-and-forget
 	go func() {
 		if err := db.RecordView(currentUserID, verified.MessageID, verified.ChannelID, cachedFile.CourseID); err != nil {
 			log.Warn("failed to record view", zap.Error(err))
@@ -208,10 +198,7 @@ func handleWatch(c *gin.Context) {
 		return
 	}
 
-	// ── StreamKey — EKDACH generate, nonce sathi store ────────────────────
-	// handleWatchStream pratyek range request la hya streamKey la lookup karto.
-	// Navya video sathi handleWatch call zhala ki navya streamKey ne
-	// activeStreamKeys overwrite hoto — junya video che range requests blocked.
+	// StreamKey — एकदाच generate करतो
 	watchStreamKey, skErr := genStreamKey()
 	if skErr != nil {
 		c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Server error. Please try again."})
@@ -219,7 +206,6 @@ func handleWatch(c *gin.Context) {
 	}
 	nonceStreamKeys.Store(nonce, watchStreamKey)
 	activeStreamKeys.Store(currentUserID.Hex(), watchStreamKey)
-	// TTL nantar auto-cleanup
 	go func(n string) {
 		time.Sleep(token.StreamTokenTTL + 5*time.Minute)
 		nonceStreamKeys.Delete(n)
@@ -247,10 +233,8 @@ func handleWatch(c *gin.Context) {
 		viewURL = "/pdf-view/" + tokenStr
 	}
 
-	// Resume position — server-side load (no extra API call from player)
 	resumePos, _ := db.GetWatchPosition(currentUserID, verified.MessageID, verified.ChannelID)
 
-	// Watermark — user चे email + mobile player वर दाखवण्यासाठी
 	watermark := ""
 	if user, err := db.GetUserByID(currentUserID); err == nil && user != nil {
 		if user.Email != "" {
@@ -265,10 +249,60 @@ func handleWatch(c *gin.Context) {
 		}
 	}
 
+	// ── Worker routing — इथेच होतो, handleWatchStream मध्ये नाही ──────────
+	// Video/audio साठी worker available असेल तर directly worker URL द्यायचा.
+	// Browser तोच URL वापरतो seek साठी — नवीन token generate होत नाही.
+	// PDF/image साठी worker redirect नको — ते /watch-stream/ वरूनच serve होतात.
+	streamURL := "/watch-stream/" + tokenStr + "?n=" + nonce
+
+	if mediaType != "pdf" && mediaType != "image" {
+		workerBase := workerreg.Next()
+		if workerBase != "" {
+			botWorker := bot.GetNextWorker()
+			file, fileErr := utils.TimeFuncWithResult(log, "FileFromMessage(handleWatch-worker)", func() (*types.File, error) {
+				return utils.FileFromMessageInChannel(c, botWorker.Client, verified.MessageID, cachedFile.ChannelID)
+			})
+			if fileErr != nil {
+				log.Warn("handleWatch: failed to fetch file for worker token — falling back to local stream", zap.Error(fileErr))
+			} else {
+				workerTok, tokErr := token.NewWorkerToken(
+					int64(verified.MessageID), cachedFile.ChannelID, verified.UserID,
+					config.ValueOf.ApiID, config.ValueOf.ApiHash, botWorker.BotToken,
+					file.FileType,
+					file.ID, file.AccessHash, file.FileReference,
+					file.ThumbSize,
+					file.FileSize, file.FileName, file.MimeType,
+					file.DCID,
+					watchStreamKey,
+					"", // IP check disabled
+				)
+				if tokErr != nil {
+					log.Error("handleWatch: failed to generate worker token — falling back to local stream", zap.Error(tokErr))
+				} else {
+					// User info for admin tracking
+					var liveUserEmail, liveUserName string
+					if u, _ := db.GetUserByID(currentUserID); u != nil {
+						liveUserEmail = u.Email
+						liveUserName = u.FullName
+						if liveUserName == "" {
+							liveUserName = u.Username
+						}
+					}
+					storeStreamMeta(currentUserID.Hex(), liveUserEmail, liveUserName, cachedFile.FileName, workerBase, watchStreamKey)
+					streamURL = workerBase + "/worker-stream/" + workerTok
+					log.Debug("handleWatch: using worker stream URL",
+						zap.String("worker", workerBase),
+						zap.Int("messageID", verified.MessageID),
+					)
+				}
+			}
+		}
+	}
+
 	setPlayerSecurityHeaders(c)
 	c.HTML(http.StatusOK, "player.html", gin.H{
 		"title":          title,
-		"streamURL":      "/watch-stream/" + tokenStr + "?n=" + nonce,
+		"streamURL":      streamURL,
 		"mediaType":      mediaType,
 		"downloadURL":    downloadURL,
 		"viewURL":        viewURL,
@@ -279,6 +313,10 @@ func handleWatch(c *gin.Context) {
 }
 
 // ── /watch-stream/:token ──────────────────────────────────────────────────────
+// हा आता फक्त LOCAL STREAM करतो.
+// Worker available असताना handleWatch directly worker URL देतो —
+// त्यामुळे हा endpoint worker साठी कधीच call होत नाही.
+// Worker down असेल / fallback असेल तेव्हाच हा वापरला जातो.
 
 func handleWatchStream(c *gin.Context) {
 	w := c.Writer
@@ -319,10 +357,7 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// 3b-i. Range header mandatory — browser player always sends Range.
-	// curl/wget without Range = full-file download attempt → block.
-	// HEAD requests (player probes metadata) are allowed without Range.
-	// PDFs (iframe preview) load via plain GET without a Range header — exempt them.
+	// 3b-i. Range header mandatory
 	if r.Header.Get("Range") == "" && r.Method != http.MethodHead {
 		if cf, _ := db.GetCachedFile(verified.MessageID, verified.ChannelID); cf == nil || strings.ToLower(cf.MimeType) != "application/pdf" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Range header required for streaming."})
@@ -331,9 +366,6 @@ func handleWatchStream(c *gin.Context) {
 	}
 
 	// 3b-ii. In-memory fast path for seek / buffering range requests.
-	// nonceStreamKeys is populated on the very first validated request.
-	// Subsequent seek/range requests skip DB — fast and seek-safe.
-	// If server restarted (nonceStreamKeys cleared), falls through to DB check.
 	_, alreadyActive := nonceStreamKeys.Load(nonce)
 
 	if !alreadyActive {
@@ -347,12 +379,10 @@ func handleWatchStream(c *gin.Context) {
 			c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Stream nonce mismatch. Please reload the player."})
 			return
 		}
-		// Consume nonce from DB — one-time use.
-		// In-memory nonceStreamKeys stays valid for all seek/range requests.
 		go db.ConsumeStreamNonce(nonce)
 	}
 
-	// 3c. Referer check — फक्त आपल्या player page वरूनच stream होऊ शकेल
+	// 3c. Referer check
 	if !requirePlayerReferer(c) {
 		c.HTML(http.StatusForbidden, "error.html", gin.H{
 			"code":    403,
@@ -361,9 +391,7 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// 3d. StreamKey lookup — handleWatch madhe ek vela generate zhala,
-	// ithe faqt lookup karto. Pratyek range request la same key milto.
-	// Server restart zhala (nonceStreamKeys clear) tar user la reload sangto.
+	// 3d. StreamKey lookup
 	rawSK, skFound := nonceStreamKeys.Load(nonce)
 	if !skFound {
 		c.HTML(http.StatusForbidden, "error.html", gin.H{
@@ -374,27 +402,13 @@ func handleWatchStream(c *gin.Context) {
 	}
 	streamKey := rawSK.(string)
 
-	// 3e. Concurrent stream check — he user cha ACTIVE stream ahe ka?
-	// Navya video sathi handleWatch call zhala ki activeStreamKeys madhe
-	// navya streamKey ne overwrite hoto — ha check tyala block karto.
+	// 3e. Concurrent stream check
 	activeKey, activeExists := activeStreamKeys.Load(currentUserID.Hex())
 	if !activeExists || activeKey.(string) != streamKey {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": "Another stream is already active on your account. Please close other tabs and try again.",
 		})
 		return
-	}
-
-	// ── User info for admin live stream tracking ─────────────────────────────
-	// var ने declare करतो — goto localStream: label च्या आधी असणे आवश्यक आहे
-	// (Go मध्ये goto variable declaration cross करत नाही).
-	var liveUserEmail, liveUserName string
-	if u, _ := db.GetUserByID(currentUserID); u != nil {
-		liveUserEmail = u.Email
-		liveUserName = u.FullName
-		if liveUserName == "" {
-			liveUserName = u.Username
-		}
 	}
 
 	// 4. File + access check
@@ -409,52 +423,21 @@ func handleWatchStream(c *gin.Context) {
 		return
 	}
 
-	// ── 5. Worker routing ──────────────────────────────────────────────────
-	workerBase := workerreg.Next()
-	if workerBase != "" {
-		// Fetch file metadata from Telegram so the worker doesn't have to.
-		botWorker := bot.GetNextWorker()
-		file, fileErr := utils.TimeFuncWithResult(log, "FileFromMessage(worker)", func() (*types.File, error) {
-			return utils.FileFromMessageInChannel(c, botWorker.Client, verified.MessageID, cachedFile.ChannelID)
-		})
-		if fileErr != nil {
-			log.Warn("failed to fetch file for worker token — falling back to local stream", zap.Error(fileErr))
-			goto localStream
+	// ── Admin tracking (local stream) ──────────────────────────────────────
+	var liveUserEmail, liveUserName string
+	if u, _ := db.GetUserByID(currentUserID); u != nil {
+		liveUserEmail = u.Email
+		liveUserName = u.FullName
+		if liveUserName == "" {
+			liveUserName = u.Username
 		}
-
-		workerTok, tokErr := token.NewWorkerToken(
-			int64(verified.MessageID), cachedFile.ChannelID, verified.UserID,
-			config.ValueOf.ApiID, config.ValueOf.ApiHash, botWorker.BotToken,
-			file.FileType,
-			file.ID, file.AccessHash, file.FileReference,
-			file.ThumbSize,
-			file.FileSize, file.FileName, file.MimeType,
-			file.DCID,
-			streamKey,
-			"",  // IP check disabled
-		)
-		if tokErr != nil {
-			log.Error("failed to generate worker token — falling back to local stream", zap.Error(tokErr))
-			goto localStream
-		}
-
-		workerURL := workerBase + "/worker-stream/" + workerTok
-		log.Debug("redirecting to worker",
-			zap.String("worker", workerBase),
-			zap.Int("messageID", verified.MessageID),
-		)
-		storeStreamMeta(currentUserID.Hex(), liveUserEmail, liveUserName, cachedFile.FileName, workerBase, streamKey)
-		http.Redirect(w, r, workerURL, http.StatusFound)
-		return
 	}
-
-	// ── 6. Local stream fallback (no healthy workers) ──────────────────────
-localStream:
 	storeStreamMeta(currentUserID.Hex(), liveUserEmail, liveUserName, cachedFile.FileName, "", streamKey)
-	log.Debug("no healthy workers — streaming locally",
+	log.Debug("watch-stream: local stream (no worker)",
 		zap.Int("messageID", verified.MessageID),
 	)
 
+	// 5. Local stream
 	worker := bot.GetNextWorker()
 	file, err := utils.TimeFuncWithResult(log, "FileFromMessage", func() (*types.File, error) {
 		return utils.FileFromMessageInChannel(c, worker.Client, verified.MessageID, cachedFile.ChannelID)
@@ -464,7 +447,7 @@ localStream:
 		return
 	}
 
-	// Small file / photo — CDN redirect handled
+	// Small file / photo
 	if file.FileSize == 0 {
 		data, err := downloadPhotoChunked(c, worker.Client.API(), file.Location)
 		if err != nil {
@@ -522,8 +505,7 @@ localStream:
 	}
 	defer pipe.Close()
 
-	// Local stream — chunk serve karaypurvi ek vela streamKey validate karo.
-	// Junya video che range requests ithe block hotat.
+	// Final streamKey check before serving chunk
 	if cur, ok := activeStreamKeys.Load(currentUserID.Hex()); !ok || cur.(string) != streamKey {
 		http.Error(w, "Stream replaced by a newer session.", http.StatusTooManyRequests)
 		return
@@ -536,10 +518,7 @@ localStream:
 	}
 }
 
-
 // ── POST /api/watch/position/:token ──────────────────────────────────────────
-// JS player दर 10s ला current position save करतो.
-// Body: {"position": 123.4}
 
 func handleSavePosition(c *gin.Context) {
 	tokenStr := c.Param("token")
@@ -565,7 +544,6 @@ func handleSavePosition(c *gin.Context) {
 		return
 	}
 
-	// Fire-and-forget — player ला wait नको
 	go func() {
 		_ = db.SaveWatchPosition(currentUserID, verified.MessageID, verified.ChannelID, body.Position)
 	}()
@@ -580,80 +558,67 @@ func setAntiDownloadHeaders(c *gin.Context) {
 	c.Header("X-Frame-Options", "DENY")
 }
 
-// setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
-// setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
-// Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
-// setPlayerSecurityHeaders — /watch/:token च्या HTML response साठी.
-// Player page कुठे embed होणार नाही आणि media फक्त आपल्याच server वरून येईल.
 func setPlayerSecurityHeaders(c *gin.Context) {
-    host := config.ValueOf.Host
-    mediaSrc := "'self' " + host
+	host := config.ValueOf.Host
+	mediaSrc := "'self' " + host
 
-    // Env-var workers
-    for _, wu := range config.ValueOf.WorkerURLs {
-        mediaSrc += " " + wu
-    }
-    // Admin-added workers
-    for _, s := range workerreg.Status() {
-        if s["added_by"] == "admin" {
-            if u, ok := s["url"].(string); ok && u != "" {
-                mediaSrc += " " + u
-            }
-        }
-    }
+	// Env-var workers
+	for _, wu := range config.ValueOf.WorkerURLs {
+		mediaSrc += " " + wu
+	}
+	// Admin-added workers
+	for _, s := range workerreg.Status() {
+		if s["added_by"] == "admin" {
+			if u, ok := s["url"].(string); ok && u != "" {
+				mediaSrc += " " + u
+			}
+		}
+	}
 
-    // connect-src मध्ये PUBLIC_URL पण add करा
-    connectSrc := "'self'"
-    if publicURL := os.Getenv("PUBLIC_URL"); publicURL != "" {
-        connectSrc += " " + publicURL
-    }
+	connectSrc := "'self'"
+	if publicURL := os.Getenv("PUBLIC_URL"); publicURL != "" {
+		connectSrc += " " + publicURL
+	}
 
-    c.Header("X-Frame-Options", "DENY")
-    c.Header("Content-Security-Policy",
-        "default-src 'self'; "+
-            "media-src "+mediaSrc+"; "+
-            "script-src 'self' 'unsafe-inline'; "+
-            "style-src 'self' 'unsafe-inline'; "+
-            "img-src 'self' data:; "+
-            "connect-src "+connectSrc+"; "+  // ← हे बदललं
-            "frame-ancestors 'none'")
+	c.Header("X-Frame-Options", "DENY")
+	c.Header("Content-Security-Policy",
+		"default-src 'self'; "+
+			"media-src "+mediaSrc+"; "+
+			"script-src 'self' 'unsafe-inline'; "+
+			"style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data:; "+
+			"connect-src "+connectSrc+"; "+
+			"frame-ancestors 'none'")
 }
-
-// requirePlayerReferer — watch-stream वर येणारी request
-// आपल्याच /watch/ page वरून आली आहे का ते check करतो.
-// Direct URL access, curl, wget, external downloaders block होतात.
 
 func requirePlayerReferer(c *gin.Context) bool {
-    referer := c.Request.Header.Get("Referer")
-    if referer == "" {
-        return true
-    }
-    
-    // Main host check
-    host := config.ValueOf.Host
-    if strings.HasPrefix(referer, host+"/watch/") {
-        return true
-    }
-    
-    // Worker URLs पण allow करा
-    for _, workerURL := range config.ValueOf.WorkerURLs {
-        if strings.HasPrefix(referer, workerURL+"/watch/") {
-            return true
-        }
-    }
-    
-    // PUBLIC_URL env variable check
-    if publicURL := os.Getenv("PUBLIC_URL"); publicURL != "" {
-        if strings.HasPrefix(referer, publicURL+"/watch/") {
-            return true
-        }
-    }
-    
-    return false
+	referer := c.Request.Header.Get("Referer")
+	if referer == "" {
+		return true
+	}
+
+	host := config.ValueOf.Host
+	if strings.HasPrefix(referer, host+"/watch/") {
+		return true
+	}
+
+	for _, workerURL := range config.ValueOf.WorkerURLs {
+		if strings.HasPrefix(referer, workerURL+"/watch/") {
+			return true
+		}
+	}
+
+	if publicURL := os.Getenv("PUBLIC_URL"); publicURL != "" {
+		if strings.HasPrefix(referer, publicURL+"/watch/") {
+			return true
+		}
+	}
+
+	return false
 }
+
 // ── /pdf-view/:token ──────────────────────────────────────────────────────────
-// Serves a PDF inline in the browser (new tab). No X-Frame-Options / anti-download
-// headers — browser renders it natively. Same auth checks as pdf-download.
+// ── /pdf-view/:token ──────────────────────────────────────────────────────────
 
 func handlePDFView(c *gin.Context) {
 	tokenStr := c.Param("token")
@@ -710,7 +675,6 @@ func handlePDFView(c *gin.Context) {
 
 	c.Header("Content-Type", "application/pdf")
 	c.Header("Content-Length", strconv.FormatInt(file.FileSize, 10))
-	// inline = browser opens it directly (PDF viewer), not download
 	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", fileName))
 	c.Header("Cache-Control", "no-store")
 
@@ -730,27 +694,22 @@ func handlePDFView(c *gin.Context) {
 }
 
 // ── /pdf-download/:token ──────────────────────────────────────────────────────
-// Serves a PDF as an attachment (downloadable). Only works for PDF mime type.
-// Same auth + token + access checks as watch-stream, but with attachment header.
 
 func handlePDFDownload(c *gin.Context) {
 	tokenStr := c.Param("token")
 
-	// 1. Token verify
 	verified, err := token.Verify(tokenStr)
 	if err != nil {
 		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Invalid or expired download link."})
 		return
 	}
 
-	// 2. Session check
 	sess, err := db.GetSessionByToken(verified.SessionToken)
 	if err != nil || sess == nil {
 		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Your session has ended. Please log in again."})
 		return
 	}
 
-	// 3. UserID match
 	currentUserID := auth.GetUserID(c)
 	tokenUserID, err := primitive.ObjectIDFromHex(verified.UserID)
 	if err != nil || tokenUserID != currentUserID {
@@ -758,27 +717,23 @@ func handlePDFDownload(c *gin.Context) {
 		return
 	}
 
-	// 4. File lookup
 	cachedFile, err := db.GetCachedFile(verified.MessageID, verified.ChannelID)
 	if err != nil || cachedFile == nil {
 		c.HTML(http.StatusNotFound, "error.html", gin.H{"code": 404, "message": "File not found."})
 		return
 	}
 
-	// 5. PDF only
 	if strings.ToLower(cachedFile.MimeType) != "application/pdf" {
 		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "Download is only available for PDF files."})
 		return
 	}
 
-	// 6. Access check
 	hasAccess, err := db.HasAccess(currentUserID, cachedFile.CourseID)
 	if err != nil || !hasAccess {
 		c.HTML(http.StatusForbidden, "error.html", gin.H{"code": 403, "message": "You do not have access to this course."})
 		return
 	}
 
-	// 7. Fetch file from Telegram and stream as attachment
 	worker := bot.GetNextWorker()
 	file, err := utils.TimeFuncWithResult(log, "FileFromMessage(pdf-download)", func() (*types.File, error) {
 		return utils.FileFromMessageInChannel(c, worker.Client, verified.MessageID, cachedFile.ChannelID)
@@ -795,7 +750,6 @@ func handlePDFDownload(c *gin.Context) {
 
 	c.Header("Content-Type", "application/pdf")
 	c.Header("Content-Length", strconv.FormatInt(file.FileSize, 10))
-	// attachment = browser downloads instead of opening inline
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
 	c.Header("Cache-Control", "no-store")
 
@@ -814,10 +768,7 @@ func handlePDFDownload(c *gin.Context) {
 	}
 }
 
-// normalizeClientIP — IPv4-mapped IPv6 addresses normalize करतो.
-// "::ffff:49.36.46.209" → "49.36.46.209"
-// Pure IPv6 किंवा IPv4 → as-is
-// हे solve करतं: token generate वेळी IPv6 होतो, worker request वेळी IPv4 येतो.
+// normalizeClientIP — IPv4-mapped IPv6 normalize करतो (logging साठी).
 func normalizeClientIP(ip string) string {
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
@@ -828,7 +779,8 @@ func normalizeClientIP(ip string) string {
 	}
 	return parsed.String()
 }
-// MKV, AVI इत्यादी types video/mp4 म्हणून serve केले जातात.
+
+// normalizeWatchMime — MKV, AVI इत्यादी video/mp4 म्हणून serve करतो.
 func normalizeWatchMime(mime, fileName string) string {
 	switch strings.ToLower(mime) {
 	case "video/x-matroska", "video/mkv", "video/x-msvideo",
@@ -837,7 +789,6 @@ func normalizeWatchMime(mime, fileName string) string {
 	case "video/mp4", "video/webm", "video/ogg":
 		return mime
 	case "":
-		// mime नाही — extension वरून guess कर
 		ext := strings.ToLower(filepath.Ext(fileName))
 		switch ext {
 		case ".webm":
