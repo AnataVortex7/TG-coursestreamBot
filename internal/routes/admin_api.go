@@ -524,6 +524,14 @@ func adminAddCourse(c *gin.Context) {
 		return
 	}
 
+	// Channel madhe userbot admin/owner असेल tar sagle bots (main bot + worker
+	// bots) automatic admin karaychा प्रयत्न background madhe होतो — /addcourse
+	// Telegram command madhe je already hote, tech ata admin panel varun
+	// course add kelyavar pn hoईल.
+	if commands.SyncChannelAdmins != nil {
+		go commands.SyncChannelAdmins(req.ChannelID)
+	}
+
 	// Background goroutine: sarv registered users la "New Course" email pathav
 	go func(courseTitle, courseBuyLink, coursePrice string) {
 		users, err := db.ListUsers()
