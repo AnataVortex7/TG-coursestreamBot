@@ -718,11 +718,13 @@
       if (screen.orientation && screen.orientation.lock) {
         screen.orientation.lock('landscape').catch(() => {});
       }
+      resetHide();
     } else {
       // Fullscreen exit — orientation release karo
       if (screen.orientation && screen.orientation.unlock) {
         screen.orientation.unlock();
       }
+      resetHide();
     }
   });
 
