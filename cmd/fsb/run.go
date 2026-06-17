@@ -73,6 +73,8 @@ func runApp(cmd *cobra.Command, args []string) {
 	bot.StartUserBotFromDB(log)
 	// Userbot client commands package ला द्या (import cycle टाळायला)
 	commands.MainUserbotClient = bot.UserBot.GetClient()
+	// Course channel admin-sync hook — cmdAddCourse use karto (import cycle टाळायला)
+	commands.SyncChannelAdmins = bot.UserBot.AddBotsAsAdminsForChannel
 
 	// ── Init external worker pool (Koyeb workers) ─────────────────────────────
 	// workerreg.Init reads WORKER_URLS / WORKER_URL1..N from config,
