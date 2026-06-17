@@ -38,7 +38,7 @@ func init() {
 }
 
 const (
-	cookieName    = "fsb_session"
+	cookieName    = "ak_session"
 	sessionExpiry = 30 * 24 * time.Hour // 30 days
 )
 

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	csrfCookieName = "fsb_csrf"
+	csrfCookieName = "ak_csrf"
 	CSRFHeader     = "X-CSRF-Token"
 	csrfMaxAge     = 86400 // 24 hours
 )
