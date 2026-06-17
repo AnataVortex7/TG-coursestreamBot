@@ -71,11 +71,21 @@ func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
 	u.log.Sugar().Infof("Channel %d: userbot admin status check kartoy", channelID)
 	ctx := u.client.CreateContext()
 
+	// DB/admin-panel madhe course channel ID Bot-API format madhe save hoто
+	// (-100xxxxxxxxxx, @userinfobot deto tasach). MTProto cha ChannelsGetChannels
+	// la matra raw channel ID (-100 prefix shivay) lagto, nahitar "no channels
+	// found" yet — LOG_CHANNEL hyaआधीच config.go madhe stripInt() ne strip hoто
+	// mhanun te direct chalte, course channels sathi ithech strip karावे lagते.
+	mtprotoID := channelID
+	if mtprotoID < 0 {
+		mtprotoID = (-mtprotoID) - 1000000000000
+	}
+
 	channelInfos, err := u.client.API().ChannelsGetChannels(
 		ctx,
 		[]tg.InputChannelClass{
 			&tg.InputChannel{
-				ChannelID: channelID,
+				ChannelID: mtprotoID,
 			},
 		},
 	)
