@@ -2,7 +2,9 @@ package bot
 
 import (
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/db"
 	"errors"
+	"time"
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
@@ -179,8 +181,42 @@ func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
 	return nil
 }
 
-// AddBotsAsAdmins - purvi cha behavior: fakt LOG_CHANNEL sathi chalто.
-// Userbot start/restart zalyavar automatic call hoto (StartUserBot, StartUserBotFromDB).
+// AddBotsAsAdmins - userbot start/restart (redeploy) zalyavar automatic call hoto
+// (StartUserBot, StartUserBotFromDB, StartFromSession).
+//
+// Flow:
+//  1. LOG_CHANNEL sathi sync (purvi cha behavior, jasach aahe).
+//  2. DB madhle SAGLE active courses fetch karto (db.ListAllCourses) ani
+//     pratyek course chya channel_id sathi pn AddBotsAsAdminsForChannel call
+//     karto. Yamule redeploy/restart झाल्यावर LOG_CHANNEL + sagle course
+//     channels — sarvatra sagle bots (env varun navin add zalele multi-token
+//     bots dharun) admin aahet ka recheck hoто, nasel tar admin banवले jातात.
+//     Already admin asलेले bots skip hotat (AddBotsAsAdminsForChannel madhe
+//     to check already aahe).
+//  3. Pratyek channel nantar chota delay (flood-wait टाळण्यासाठी), kaaran
+//     khup courses asतील tar Telegram कडून FLOOD_WAIT yeu shakto.
 func (u *UserBotStruct) AddBotsAsAdmins() error {
-	return u.AddBotsAsAdminsForChannel(config.ValueOf.LogChannelID)
+	if err := u.AddBotsAsAdminsForChannel(config.ValueOf.LogChannelID); err != nil {
+		u.log.Warn("AddBotsAsAdmins: LOG_CHANNEL sync madhe issue", zap.Error(err))
+	}
+
+	courses, err := db.ListAllCourses()
+	if err != nil {
+		u.log.Error("AddBotsAsAdmins: courses list nahi milali", zap.Error(err))
+		return err
+	}
+
+	for _, course := range courses {
+		if course.ChannelID == 0 {
+			continue
+		}
+		if err := u.AddBotsAsAdminsForChannel(course.ChannelID); err != nil {
+			u.log.Warn("AddBotsAsAdmins: course channel sync madhe issue",
+				zap.Int64("channel_id", course.ChannelID),
+				zap.String("course", course.Title),
+				zap.Error(err))
+		}
+		time.Sleep(1500 * time.Millisecond)
+	}
+	return nil
 }
