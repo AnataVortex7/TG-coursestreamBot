@@ -65,7 +65,6 @@
     opacity: 0;
     transition: opacity 0.25s;
   }
-  #player-wrap:hover #controls,
   #player-wrap.show-controls #controls { opacity: 1; }
 
   /* Progress bar */
@@ -174,7 +173,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  #player-wrap:hover #title-bar,
   #player-wrap.show-controls #title-bar { opacity: 1; }
 
   /* Loading spinner */
@@ -718,13 +716,11 @@
       if (screen.orientation && screen.orientation.lock) {
         screen.orientation.lock('landscape').catch(() => {});
       }
-      resetHide();
     } else {
       // Fullscreen exit — orientation release karo
       if (screen.orientation && screen.orientation.unlock) {
         screen.orientation.unlock();
       }
-      resetHide();
     }
   });
 
