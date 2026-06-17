@@ -794,7 +794,7 @@ let umAutoRefreshTimer = null;
 
 // ─── CSRF Helper ──────────────────────────────────────────────────────────────
 function getCsrfToken() {
-  const match = document.cookie.split('; ').find(r => r.startsWith('fsb_csrf='));
+  const match = document.cookie.split('; ').find(r => r.startsWith('ak_csrf='));
   return match ? decodeURIComponent(match.split('=')[1]) : '';
 }
 
