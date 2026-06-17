@@ -215,6 +215,13 @@ func cmdAddCourse(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
+	// Channel madhe userbot admin/owner असेल tar sagle bots (main bot + worker
+	// bots) automatic admin karaychा प्रयत्न background madhe होतो. Userbot tya
+	// channel madhe admin nasel tar fakt channel ID log madhe print hoईल.
+	if SyncChannelAdmins != nil {
+		go SyncChannelAdmins(channelID)
+	}
+
 	reply(ctx, u, fmt.Sprintf(
 		"✅ Course created\n\nTitle: %s\nID: %s\nPrice: %s\nChannel: %d\n\nMake sure the bot is admin in that channel.\nThen use /syncchannel %s to index existing videos.",
 		course.Title, course.ID.Hex(), course.Price, course.ChannelID, course.ID.Hex(),
