@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/email"
 	"errors"
 	"fmt"
 	"net/http"
@@ -284,6 +286,15 @@ func DoRegister(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Admin la naveen registration cha mail - jo paryant admin "Special User"
+	// ON karat nahi, tya user la courses cha fakt buy-now page disel.
+	go func() {
+		if config.ValueOf.AdminEmail == "" {
+			return
+		}
+		_ = email.SendRegistrationRequest(config.ValueOf.AdminEmail, emailAddr, fullName, 0)
+	}()
 
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
