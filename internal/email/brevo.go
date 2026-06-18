@@ -619,6 +619,61 @@ func buildNewCourseEmail(appName, fullName, courseTitle, buyLink, price string) 
 </html>`, escapeHTML(appName), greet, escapeHTML(courseTitle), priceTag, buyBtn, escapeHTML(appName))
 }
 
+// ─── SendAccessGrantedEmail ────────────────────────────────────────────────────
+// User la (admin panel varun ki Telegram /grantaccess varun) course cha access
+// dilyavar - tya userच्या email var detail jaते.
+
+func SendAccessGrantedEmail(toEmail, fullName, courseTitle, expiryInfo, appName string) error {
+	if toEmail == "" {
+		return fmt.Errorf("smtp: user email not set, skipping access-granted mail")
+	}
+	if len(smtpProviders) == 0 {
+		return fmt.Errorf("smtp: no providers configured")
+	}
+	p := primaryProvider()
+	if appName == "" {
+		appName = p.fromName
+	}
+	subject := "✅ Course Access Granted — " + courseTitle
+	htmlBody := buildAccessGrantedEmail(appName, fullName, courseTitle, expiryInfo)
+	return sendMail(toEmail, subject, htmlBody)
+}
+
+func buildAccessGrantedEmail(appName, fullName, courseTitle, expiryInfo string) string {
+	greet := "Hi there"
+	if fullName != "" {
+		greet = "Hi " + escapeHTML(fullName)
+	}
+	expiryTag := ""
+	if expiryInfo != "" {
+		expiryTag = fmt.Sprintf(`<p style="color:#7a7d8e;font-size:13px;margin:10px 0 0;">%s</p>`, escapeHTML(expiryInfo))
+	}
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;margin:0;padding:40px 16px;">
+  <div style="max-width:500px;margin:0 auto;background:#1a1d27;border-radius:16px;border:1px solid #2a2d3a;overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#16a34a,#22c55e);padding:32px 28px;text-align:center;">
+      <div style="font-size:48px;margin-bottom:12px;">✅</div>
+      <h1 style="color:#fff;font-size:22px;font-weight:800;margin:0 0 6px;">Access Granted!</h1>
+      <p style="color:rgba(255,255,255,.85);font-size:14px;margin:0;">You can now watch this course</p>
+    </div>
+    <div style="padding:28px 32px;">
+      <p style="color:#c8cad8;font-size:15px;margin:0 0 20px;">%s,</p>
+      <div style="background:#12141c;border-radius:12px;padding:20px 22px;border:1px solid #2a2d3a;text-align:center;">
+        <p style="color:#7a7d8e;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;margin:0 0 10px;">Course Unlocked</p>
+        <p style="color:#e8e9f0;font-size:19px;font-weight:700;margin:0;">%s</p>
+        %s
+      </div>
+      <p style="color:#4a4d5e;font-size:11px;text-align:center;margin:24px 0 0;">
+        Login to your account on %s to start watching.
+      </p>
+    </div>
+  </div>
+</body>
+</html>`, greet, escapeHTML(courseTitle), expiryTag, escapeHTML(appName))
+}
+
 // ─── SendRegistrationRequest ──────────────────────────────────────────────────
 
 func SendRegistrationRequest(adminEmail, userIdentifier, userFullName string, telegramID int64) error {
