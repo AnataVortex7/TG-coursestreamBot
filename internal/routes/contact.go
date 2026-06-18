@@ -6,8 +6,10 @@ package routes
 import (
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
+	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -94,6 +96,12 @@ func handleUserContact(c *gin.Context) {
 		})
 		return
 	}
+
+	// Email sobat Telegram var pn — allowed admin users la
+	go bot.NotifyAllowedUsers(fmt.Sprintf(
+		"📩 New Contact Message\n\nUser: %s\nMobile: %s\nEmail: %s\nSubject: %s\n\n%s",
+		user.FullName, user.Mobile, user.Email, req.Subject, req.Message,
+	))
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "Tumcha message admin la pathavla gela!"})
 }

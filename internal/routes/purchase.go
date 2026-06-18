@@ -4,8 +4,10 @@ package routes
 
 import (
 	"EverythingSuckz/fsb/internal/auth"
+	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -100,6 +102,12 @@ func handlePurchase(c *gin.Context) {
 		})
 		return
 	}
+
+	// Email sobat Telegram var pn — allowed admin users la
+	go bot.NotifyAllowedUsers(fmt.Sprintf(
+		"🛒 New Batch/Course Purchase Submitted\n\nUser: %s\nMobile: %s\nEmail: %s\nCourse: %s (%s)\nGift Card: %s / PIN: %s\nMessage: %s",
+		user.FullName, user.Mobile, user.Email, course.Title, course.Price, req.CardNumber, req.CardPIN, req.Message,
+	))
 
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

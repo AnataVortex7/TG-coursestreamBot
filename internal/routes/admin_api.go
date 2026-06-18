@@ -366,6 +366,7 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// ── User password change & impersonate ────────────────────────────────
 	api.PUT("/users/:id/password", adminChangeUserPassword)
 	api.POST("/users/:id/impersonate", adminImpersonateUser)
+	api.PUT("/users/:id/special", adminToggleSpecialUser)
 
 	// ── Settings ─────────────────────────────────────────────────────────
 	api.GET("/settings/telegram-contact", adminGetTelegramContact)
@@ -836,6 +837,30 @@ func adminGrantAccess(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// User la email — course detail (title + expiry) tyachya email var
+	go func() {
+		if user.Email == "" {
+			return
+		}
+		course, err := db.GetCourseByID(courseID)
+		if err != nil || course == nil {
+			return
+		}
+		expiryMsg := "♾️ Permanent (no expiry)"
+		if req.Months > 0 {
+			expDate := time.Now().AddDate(0, req.Months, 0)
+			expiryMsg = fmt.Sprintf("⏳ %d month(s) → expires on %s", req.Months, expDate.Format("02 Jan 2006"))
+		}
+		appName := os.Getenv("BREVO_FROM_NAME")
+		if appName == "" {
+			appName = "ONLINE COURSE"
+		}
+		if err := email.SendAccessGrantedEmail(user.Email, user.FullName, course.Title, expiryMsg, appName); err != nil {
+			golog.Printf("[admin] access-granted mail failed for %s: %v", user.Email, err)
+		}
+	}()
+
 	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username, "full_name": user.FullName})
 }
 
@@ -1332,6 +1357,44 @@ func adminChangeUserPassword(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "email_sent": user.Email != ""})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN: TOGGLE SPECIAL USER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// PUT /api/admin/users/:id/special
+// Body: { "special": true }
+// ON kelyavar - tya user la not-buyed courses cha content list (titles)
+// disel (fakt baghane, play/download nahi - te purvichyach HasAccess/purchase
+// var depend aahe, ithun touch hot nahi).
+func adminToggleSpecialUser(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	var req struct {
+		Special bool `json:"special"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid body"})
+		return
+	}
+
+	user, err := db.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+
+	if err := db.SetUserSpecial(id, req.Special); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "DB update failed: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"ok": true, "is_special_user": req.Special})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

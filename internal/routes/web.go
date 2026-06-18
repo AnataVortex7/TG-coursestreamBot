@@ -200,13 +200,14 @@ type FolderGroup struct {
 // courseContentContext — एका course साठी सगळी loaded data (files, folders, helpers).
 // handleCourseDetail आणि handleFolderFiles दोन्ही हे वापरतात — duplicate code टाळण्यासाठी.
 type courseContentContext struct {
-	userID       primitive.ObjectID
-	courseIDHex  string
-	hasAccess    bool
-	sessionToken string
-	files        []db.CachedFile // dedup केलेले, sort_order नुसार sorted
-	folders      []db.CourseFolder
-	viewMap      map[int]struct {
+	userID        primitive.ObjectID
+	courseIDHex   string
+	hasAccess     bool
+	canSeeContent bool // hasAccess || user.IsSpecialUser — fakt list disnyasathi, play/download la nahi
+	sessionToken  string
+	files         []db.CachedFile // dedup केलेले, sort_order नुसार sorted
+	folders       []db.CourseFolder
+	viewMap       map[int]struct {
 		count        int
 		lastViewedAt string
 	}
@@ -217,6 +218,16 @@ func loadCourseContent(c *gin.Context, courseID primitive.ObjectID) (*courseCont
 	userID := auth.GetUserID(c)
 
 	hasAccess, _ := db.HasAccess(userID, courseID)
+
+	// Special user — hasAccess nasel tar pn content list (titles) baghu shakto,
+	// pan play/download HasAccess shivay milat nahi (te buildEntry madhe hasAccess
+	// var depend aahe, ithe touch kele nahiye).
+	canSeeContent := hasAccess
+	if !canSeeContent {
+		if u, err := db.GetUserByID(userID); err == nil && u != nil && u.IsSpecialUser {
+			canSeeContent = true
+		}
+	}
 
 	// सर्व files sort_order नुसार
 	files, err := db.FilesForCourse(courseID)
@@ -307,13 +318,14 @@ func loadCourseContent(c *gin.Context, courseID primitive.ObjectID) (*courseCont
 	}
 
 	return &courseContentContext{
-		userID:       userID,
-		courseIDHex:  courseID.Hex(),
-		hasAccess:    hasAccess,
-		sessionToken: sessionToken,
-		files:        files,
-		folders:      folders,
-		viewMap:      viewMap,
+		userID:        userID,
+		courseIDHex:   courseID.Hex(),
+		hasAccess:     hasAccess,
+		canSeeContent: canSeeContent,
+		sessionToken:  sessionToken,
+		files:         files,
+		folders:       folders,
+		viewMap:       viewMap,
 	}, nil
 }
 
@@ -394,6 +406,24 @@ func handleCourseDetail(c *gin.Context) {
 		return
 	}
 
+	// ── Access nahi ani special pn nahi → fakt Buy Now panel, content list
+	// (titles/folders) ajibat pathvat nahi ──────────────────────────────────
+	if !ctx.canSeeContent {
+		c.HTML(http.StatusOK, "course_detail.html", gin.H{
+			"username":      username,
+			"course":        course,
+			"playlist":      []VideoEntry{},
+			"folderGroups":  []FolderGroup{},
+			"hasFolders":    false,
+			"lazyLoad":      false,
+			"totalCount":    0,
+			"hasAccess":     false,
+			"contentLocked": true,
+			"botUsername":   config.ValueOf.BotUsername,
+		})
+		return
+	}
+
 	// ── Folders नसल्यास flat playlist (जसं आधी होतं — backward compat) ────────
 	// इथे मात्र performance साठी fix limit ठेवतोय: 200 पेक्षा जास्त files
 	// असल्यास सुद्धा "No Folder" नावाचा एकच lazy group बनवतो.
@@ -408,15 +438,16 @@ func handleCourseDetail(c *gin.Context) {
 				FileCount:   len(ctx.files),
 			}
 			c.HTML(http.StatusOK, "course_detail.html", gin.H{
-				"username":     username,
-				"course":       course,
-				"playlist":     []VideoEntry{},
-				"folderGroups": []FolderGroup{fg},
-				"hasFolders":   true,
-				"lazyLoad":     true,
-				"totalCount":   len(ctx.files),
-				"hasAccess":    ctx.hasAccess,
-				"botUsername":  config.ValueOf.BotUsername,
+				"username":      username,
+				"course":        course,
+				"playlist":      []VideoEntry{},
+				"folderGroups":  []FolderGroup{fg},
+				"hasFolders":    true,
+				"lazyLoad":      true,
+				"totalCount":    len(ctx.files),
+				"hasAccess":     ctx.hasAccess,
+				"contentLocked": false,
+				"botUsername":   config.ValueOf.BotUsername,
 			})
 			return
 		}
@@ -426,15 +457,16 @@ func handleCourseDetail(c *gin.Context) {
 			playlist = append(playlist, ctx.buildEntry(f))
 		}
 		c.HTML(http.StatusOK, "course_detail.html", gin.H{
-			"username":     username,
-			"course":       course,
-			"playlist":     playlist,
-			"folderGroups": []FolderGroup{},
-			"hasFolders":   false,
-			"lazyLoad":     false,
-			"totalCount":   len(playlist),
-			"hasAccess":    ctx.hasAccess,
-			"botUsername":  config.ValueOf.BotUsername,
+			"username":      username,
+			"course":        course,
+			"playlist":      playlist,
+			"folderGroups":  []FolderGroup{},
+			"hasFolders":    false,
+			"lazyLoad":      false,
+			"totalCount":    len(playlist),
+			"hasAccess":     ctx.hasAccess,
+			"contentLocked": false,
+			"botUsername":   config.ValueOf.BotUsername,
 		})
 		return
 	}
@@ -472,15 +504,16 @@ func handleCourseDetail(c *gin.Context) {
 	}
 
 	c.HTML(http.StatusOK, "course_detail.html", gin.H{
-		"username":     username,
-		"course":       course,
-		"playlist":     []VideoEntry{},
-		"folderGroups": result,
-		"hasFolders":   true,
-		"lazyLoad":     true,
-		"totalCount":   len(ctx.files),
-		"hasAccess":    ctx.hasAccess,
-		"botUsername":  config.ValueOf.BotUsername,
+		"username":      username,
+		"course":        course,
+		"playlist":      []VideoEntry{},
+		"folderGroups":  result,
+		"hasFolders":    true,
+		"lazyLoad":      true,
+		"totalCount":    len(ctx.files),
+		"hasAccess":     ctx.hasAccess,
+		"contentLocked": false,
+		"botUsername":   config.ValueOf.BotUsername,
 	})
 }
 
@@ -499,6 +532,12 @@ func handleFolderFiles(c *gin.Context) {
 	ctx, err := loadCourseContent(c, courseID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load content"})
+		return
+	}
+
+	// Access nahi ani special pn nahi → list direct API var pn nahi denar
+	if !ctx.canSeeContent {
+		c.JSON(http.StatusOK, gin.H{"files": []VideoEntry{}})
 		return
 	}
 
