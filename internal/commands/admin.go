@@ -4,9 +4,11 @@ import (
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/email"
 	"EverythingSuckz/fsb/internal/utils"
 	"EverythingSuckz/fsb/internal/wmqueue"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -383,6 +385,17 @@ func cmdGrantAccess(ctx *ext.Context, u *ext.Update) error {
 		expDate := time.Now().AddDate(0, months, 0)
 		expiryMsg = fmt.Sprintf("⏳ %d month(s) → expires on %s", months, expDate.Format("02 Jan 2006"))
 	}
+
+	go func() {
+		if user.Email == "" {
+			return
+		}
+		appName := os.Getenv("BREVO_FROM_NAME")
+		if appName == "" {
+			appName = "ONLINE COURSE"
+		}
+		_ = email.SendAccessGrantedEmail(user.Email, user.FullName, course.Title, expiryMsg, appName)
+	}()
 
 	reply(ctx, u, fmt.Sprintf(
 		"✅ Access granted\n\nUser: %s\nCourse: %s\nExpiry: %s",
