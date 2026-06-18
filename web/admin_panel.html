@@ -1026,6 +1026,9 @@ async function loadUsers() {
           ${u.email?`<button class="btn btn-sm" style="background:#4f46e5;color:#fff;margin-left:4px" onclick="openMsgModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email)}')">📩 Msg</button>`:''}
           <button class="btn btn-warning btn-sm" style="margin-left:4px" onclick="openChangePwdModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email||'')}')">🔑 Password</button>
           ${u.is_active?`<button class="btn btn-info btn-sm" style="margin-left:4px" onclick="loginAsUser('${u.id}','${esc(u.full_name||u.username)}')">👤 Login As</button>`:''}
+          ${u.is_special_user
+            ?`<button class="btn btn-sm" style="background:#f59e0b;color:#fff;margin-left:4px" onclick="toggleSpecialUser('${u.id}','${esc(u.full_name||u.username)}',false)">⭐ Special: ON</button>`
+            :`<button class="btn btn-sm" style="background:#888;color:#fff;margin-left:4px" onclick="toggleSpecialUser('${u.id}','${esc(u.full_name||u.username)}',true)">☆ Special: OFF</button>`}
         </td>
       </tr>`;
     });
@@ -1127,6 +1130,33 @@ function loginAsUser(userId, fullName) {
     },
     '👤 Pudhe Ja',   // confirmLabel
     'btn-info'        // confirmClass — blue instead of red
+  );
+}
+
+// ─── Special User toggle ───────────────────────────────────────────────────
+function toggleSpecialUser(userId, fullName, makeSpecial) {
+  const verb = makeSpecial ? 'ON' : 'OFF';
+  const desc = makeSpecial
+    ? 'Ata tyala not-buyed courses cha content list (lesson titles) baghta yeil — pan play/download nahi, te purchase/access shivay hoणार nahi.'
+    : 'Ata tyala parat fakt Buy Now page disel, course madhla content list disnar nahi.';
+  openModal(
+    (makeSpecial ? '⭐' : '☆') + ' Special User ' + verb + '?',
+    `"${fullName}" la Special User ${verb} karaycha? ${desc}`,
+    async () => {
+      try {
+        const res = await api('/users/' + userId + '/special', {
+          method: 'PUT',
+          body: JSON.stringify({ special: makeSpecial })
+        });
+        const d = await res.json();
+        if (res.ok) {
+          toast('✅ ' + fullName + ' — Special User ' + verb + ' kela');
+          loadUsers();
+        } else {
+          toast('❌ ' + (d.error || 'Error'), 'error');
+        }
+      } catch { toast('❌ Network error', 'error'); }
+    }
   );
 }
 

@@ -31,6 +31,18 @@
   .search-wrap input:focus{border-color:var(--accent)}
   .search-wrap .icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted)}
 
+  /* ── Locked / Buy-now panel (content list hidden) ─────────────────── */
+  .lock-wrap{max-width:520px;margin:48px auto;padding:0 20px}
+  .lock-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:36px 28px;text-align:center}
+  .lock-thumb{width:100%;max-height:200px;object-fit:cover;border-radius:var(--radius-sm);margin-bottom:18px}
+  .lock-emoji{font-size:2.4rem;margin-bottom:10px}
+  .lock-title{font-size:1.25rem;font-weight:700;color:var(--text);margin-bottom:8px}
+  .lock-desc{color:var(--muted);font-size:.88rem;line-height:1.5;margin-bottom:14px}
+  .lock-price{display:inline-block;font-size:1rem;font-weight:700;color:var(--green);margin-bottom:14px}
+  .lock-hint{color:var(--muted);font-size:.8rem;margin-bottom:22px}
+  .lock-buy-btn{background:var(--green);color:#fff;border:none;border-radius:var(--radius-sm);font-size:.9rem;font-weight:700;padding:.7rem 1.6rem;text-decoration:none;display:inline-flex;align-items:center;gap:8px;transition:background .15s}
+  .lock-buy-btn:hover{background:var(--green-h)}
+
   /* ── Folder grid ───────────────────────────────────────────────── */
   .folders-grid-wrap{max-width:1300px;margin:20px auto 0;padding:0 20px}
   .folders-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-bottom:8px}
@@ -132,6 +144,7 @@
 <!-- Course Announcements Banner -->
 <div id="course-announcements" style="display:none;margin:0 0 12px;padding:0 20px;max-width:1300px;margin-left:auto;margin-right:auto;margin-top:12px"></div>
 
+{{ if not .contentLocked }}
 <div class="page-info">
   Showing <strong id="visibleCount">{{ .totalCount }}</strong> of <strong>{{ .totalCount }}</strong> files
 </div>
@@ -144,6 +157,25 @@
   <button class="filter-btn" data-type="photo"    onclick="setFilter('photo',this)">🖼️ Photo</button>
   <button class="filter-btn" data-type="document" onclick="setFilter('document',this)">📦 Document</button>
 </div>
+{{ end }}
+
+{{ if .contentLocked }}
+
+<div class="lock-wrap">
+  <div class="lock-card">
+    {{ if .course.Thumbnail }}<img class="lock-thumb" src="{{ .course.Thumbnail }}" alt="{{ .course.Title }}"/>{{ end }}
+    <div class="lock-emoji">🔒</div>
+    <div class="lock-title">{{ .course.Title }}</div>
+    {{ if .course.Description }}<p class="lock-desc">{{ .course.Description }}</p>{{ end }}
+    {{ if .course.Price }}<div class="lock-price">₹ {{ .course.Price }}</div>{{ end }}
+    <p class="lock-hint">हा course buy केल्यावर सगळं content unlock होईल.</p>
+    {{ if .course.BuyLink }}
+    <a href="{{ .course.BuyLink }}" target="_blank" class="lock-buy-btn">🚀 Buy Now</a>
+    {{ end }}
+  </div>
+</div>
+
+{{ else }}
 
 <!-- ══════════════════════════════════════════════════════════════════
      FOLDERS MODE  (hasFolders = true)
@@ -314,6 +346,9 @@
 
 {{ end }}<!-- /if .hasFolders -->
 
+{{ end }}<!-- /if .contentLocked -->
+
+{{ if not .contentLocked }}
 <script>
   const HAS_FOLDERS = {{ .hasFolders }};
   const LAZY_LOAD   = {{ .lazyLoad }};
@@ -655,6 +690,7 @@
     setInterval(ping, 30000); // दर 30 सेकंदाला
   })();
 </script>
+{{ end }}<!-- /if not .contentLocked (script) -->
 
 
 
