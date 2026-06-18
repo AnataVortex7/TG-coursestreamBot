@@ -118,6 +118,20 @@ func SetUserActive(id primitive.ObjectID, active bool) error {
 	return err
 }
 
+// SetUserSpecial — admin panel cha "Special User" toggle. ON kelyavar user la
+// not-buyed courses cha content list (titles) disel, pan play/download tevha
+// pn HasAccess (purchase/admin grant) shivay milnar nahi.
+func SetUserSpecial(id primitive.ObjectID, special bool) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{"is_special_user": special}},
+	)
+	return err
+}
+
 func ListUsers() ([]User, error) {
 	ctx, cancel := Ctx()
 	defer cancel()

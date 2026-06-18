@@ -39,15 +39,16 @@ var (
 
 // User — website login user (self-registers or admin creates via bot)
 type User struct {
-	ID           primitive.ObjectID `bson:"_id,omitempty"       json:"id"`
-	Username     string             `bson:"username"            json:"username"`      // unique, auto-set to mobile or email if blank
-	FullName     string             `bson:"full_name"           json:"full_name"`
-	Mobile       string             `bson:"mobile"              json:"mobile"`        // e.g. "9876543210" (digits only, optional)
-	Email        string             `bson:"email"               json:"email"`         // optional
-	PasswordHash string             `bson:"password_hash"       json:"-"`
-	TelegramID   int64              `bson:"telegram_id"         json:"telegram_id"`   // linked Telegram user ID (0 = not linked)
-	CreatedAt    time.Time          `bson:"created_at"          json:"created_at"`
-	IsActive     bool               `bson:"is_active"           json:"is_active"`
+	ID            primitive.ObjectID `bson:"_id,omitempty"       json:"id"`
+	Username      string             `bson:"username"            json:"username"`      // unique, auto-set to mobile or email if blank
+	FullName      string             `bson:"full_name"           json:"full_name"`
+	Mobile        string             `bson:"mobile"              json:"mobile"`        // e.g. "9876543210" (digits only, optional)
+	Email         string             `bson:"email"               json:"email"`         // optional
+	PasswordHash  string             `bson:"password_hash"       json:"-"`
+	TelegramID    int64              `bson:"telegram_id"         json:"telegram_id"`   // linked Telegram user ID (0 = not linked)
+	CreatedAt     time.Time          `bson:"created_at"          json:"created_at"`
+	IsActive      bool               `bson:"is_active"           json:"is_active"`
+	IsSpecialUser bool               `bson:"is_special_user"     json:"is_special_user"` // admin ne ON kelyavar - not-buyed courses cha content list disto (play nahi, fakt baghane)
 }
 
 // Session — one active session per user (new login kills old)
