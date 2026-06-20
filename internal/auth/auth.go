@@ -2,7 +2,6 @@ package auth
 
 import (
 	"EverythingSuckz/fsb/config"
-	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
 	"errors"
@@ -21,6 +20,15 @@ import (
 // ─── JWT config ──────────────────────────────────────────────────────────────
 
 var jwtSecret []byte
+
+// NotifyAdmins — registration zalyavar Telegram var allowed admins la DM
+// pathavayla call hoto. bot package madhun run.go ne set kela jato (import
+// cycle टाळayla): bot already commands import karte, commands auth import
+// karte, mhanun auth ne bot direct import karu shakat nahi (cycle: bot →
+// commands → auth → bot). Same pattern jasं commands.SyncChannelAdmins var
+// vaaparla aahe. Nil असेल (server suru hotanach set nahi zala) tar caller ne
+// skip karaycha.
+var NotifyAdmins func(text string)
 
 func init() {
 	secret := os.Getenv("JWT_SECRET")
@@ -305,10 +313,12 @@ func DoRegister(c *gin.Context) {
 	}()
 
 	// Email sobat Telegram var pn — allowed admin users la
-	go bot.NotifyAllowedUsers(fmt.Sprintf(
-		"🆕 New User Registered\n\nName: %s\nMobile: %s\nEmail: %s\n\nJo paryant Special User ON karat nahi, tyala fakt buy-now page disel.",
-		fullName, mobile, emailAddr,
-	))
+	if NotifyAdmins != nil {
+		go NotifyAdmins(fmt.Sprintf(
+			"🆕 New User Registered\n\nName: %s\nMobile: %s\nEmail: %s\n\nJo paryant Special User ON karat nahi, tyala fakt buy-now page disel.",
+			fullName, mobile, emailAddr,
+		))
+	}
 
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
