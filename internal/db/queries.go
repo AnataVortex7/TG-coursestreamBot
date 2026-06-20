@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -555,6 +556,135 @@ func DeleteCachedFilesForCourse(courseID primitive.ObjectID) error {
 
 	_, err := ColChannelCache.DeleteMany(ctx, bson.M{"course_id": courseID})
 	return err
+}
+
+// caseInsensitiveReplaceAll — strings.ReplaceAll cha case-insensitive version,
+// match cha original casing replace hoто (text madhla rest tasach rahतो).
+func caseInsensitiveReplaceAll(s, find, replace string) (string, bool) {
+	if s == "" || find == "" {
+		return s, false
+	}
+	lowerS := strings.ToLower(s)
+	lowerFind := strings.ToLower(find)
+	if !strings.Contains(lowerS, lowerFind) {
+		return s, false
+	}
+	var sb strings.Builder
+	rest, lowerRest := s, lowerS
+	for {
+		idx := strings.Index(lowerRest, lowerFind)
+		if idx == -1 {
+			sb.WriteString(rest)
+			break
+		}
+		sb.WriteString(rest[:idx])
+		sb.WriteString(replace)
+		rest = rest[idx+len(find):]
+		lowerRest = lowerRest[idx+len(find):]
+	}
+	return sb.String(), true
+}
+
+// BulkReplaceInCachedFiles — course chya SAGLE cached files (title/caption/
+// file_name, jya fields specify kelya tya) madhe find->replace karto. EKACH
+// vели multiple files update hotat (round-robin/one-by-one navhe — sagle
+// matching files ekaच call madhe).
+//
+// dryRun=true asel tar kahihi DB madhe save hot nahi — fakt kiti files match
+// hotील ani 5 examples (before → after) return hotat, taki admin la apply
+// karण्याआधी preview disel.
+func BulkReplaceInCachedFiles(courseID primitive.ObjectID, find, replace string, fields []string, caseSensitive, dryRun bool) (matchedCount int, modifiedCount int, examples []string, err error) {
+	files, ferr := FilesForCourse(courseID)
+	if ferr != nil {
+		return 0, 0, nil, ferr
+	}
+
+	fieldSet := map[string]bool{}
+	for _, f := range fields {
+		fieldSet[f] = true
+	}
+
+	replaceFn := func(s string) (string, bool) {
+		if s == "" || find == "" {
+			return s, false
+		}
+		if caseSensitive {
+			if !strings.Contains(s, find) {
+				return s, false
+			}
+			return strings.ReplaceAll(s, find, replace), true
+		}
+		return caseInsensitiveReplaceAll(s, find, replace)
+	}
+
+	var writes []mongo.WriteModel
+	for _, f := range files {
+		newTitle, titleChanged := f.Title, false
+		newCaption, captionChanged := f.Caption, false
+		newFileName, fileNameChanged := f.FileName, false
+
+		if fieldSet["title"] {
+			if nt, ok := replaceFn(f.Title); ok {
+				newTitle, titleChanged = nt, true
+			}
+		}
+		if fieldSet["caption"] {
+			if nc, ok := replaceFn(f.Caption); ok {
+				newCaption, captionChanged = nc, true
+			}
+		}
+		if fieldSet["file_name"] {
+			if nf, ok := replaceFn(f.FileName); ok {
+				newFileName, fileNameChanged = nf, true
+			}
+		}
+
+		if !titleChanged && !captionChanged && !fileNameChanged {
+			continue
+		}
+		matchedCount++
+
+		if len(examples) < 5 {
+			before, after := f.Title, newTitle
+			if captionChanged {
+				before, after = f.Caption, newCaption
+			} else if fileNameChanged {
+				before, after = f.FileName, newFileName
+			}
+			examples = append(examples, before+"  →  "+after)
+		}
+
+		if dryRun {
+			continue
+		}
+
+		setFields := bson.M{}
+		if titleChanged {
+			setFields["title"] = newTitle
+		}
+		if captionChanged {
+			setFields["caption"] = newCaption
+		}
+		if fileNameChanged {
+			setFields["file_name"] = newFileName
+		}
+		writes = append(writes, mongo.NewUpdateOneModel().
+			SetFilter(bson.M{"_id": f.ID}).
+			SetUpdate(bson.M{"$set": setFields}),
+		)
+	}
+
+	if dryRun || len(writes) == 0 {
+		return matchedCount, 0, examples, nil
+	}
+
+	ctx, cancel := Ctx()
+	defer cancel()
+	result, werr := ColChannelCache.BulkWrite(ctx, writes)
+	if werr != nil {
+		return matchedCount, 0, examples, werr
+	}
+	return matchedCount, int(result.ModifiedCount), examples, nil
 }
 
 // HighestSortOrder returns the current max sort_order for a course.
