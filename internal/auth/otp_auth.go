@@ -200,7 +200,7 @@ func VerifyOTPHandler(c *gin.Context) {
 	}
 
 	// ── Device fingerprint check ───────────────────────────────────────────────
-	if CheckAndSetFingerprint(c, user, c.PostForm("fp_res"), c.PostForm("fp_tz")) {
+	if CheckAndSetFingerprint(c, user, c.PostForm("fp_res"), c.PostForm("fp_tz"), true) {
 		return // blocked — JSON redirect already sent
 	}
 
@@ -273,7 +273,7 @@ func DoPasswordLogin(c *gin.Context) {
 	db.ResetLoginAttempts(identifier)
 
 	// ── Device fingerprint check ───────────────────────────────────────────────
-	if CheckAndSetFingerprint(c, user, c.PostForm("fp_res"), c.PostForm("fp_tz")) {
+	if CheckAndSetFingerprint(c, user, c.PostForm("fp_res"), c.PostForm("fp_tz"), true) {
 		return // blocked — JSON redirect already sent
 	}
 

@@ -101,12 +101,17 @@ func ValidateDeviceChangeToken(tokenStr string) (primitive.ObjectID, bool) {
 	return id, true
 }
 
-// ─── CheckAndSetFingerprint ───────────────────────────────────────────────────
-// Credentials validated zhalyavar, JWT issue karnyaapurvi call kartat.
-// Returns true jar user blocked asel (response already sent).
+// CheckAndSetFingerprint — credentials validated zhalyavar, JWT issue
+// karnyaapurvi call kartat. Returns true jar user blocked asel (response
+// already sent).
 // resolution, timezone — c.PostForm("fp_res"), c.PostForm("fp_tz") varun yeto.
-
-func CheckAndSetFingerprint(c *gin.Context, user *db.User, resolution, timezone string) bool {
+// isAjax — true jar caller fetch()/XHR varun call hot असेल (JSON response
+// dyaycha, redirect nahi — fetch() Accept header automatically set karat
+// nahi, mhanun header-sniffing ऐवजी explicit param vaaparla, nahitar fetch()
+// 302 follow karto ani HTML page la JSON manun parse karayla jato → "Network
+// error"). DoLogin (legacy <form> POST) sathi false, VerifyOTPHandler ani
+// DoPasswordLogin (donhi fetch() based) sathi true.
+func CheckAndSetFingerprint(c *gin.Context, user *db.User, resolution, timezone string, isAjax bool) bool {
 	fp := computeFingerprint(c.GetHeader("User-Agent"), resolution, timezone)
 
 	// First login — save fingerprint, proceed
@@ -140,12 +145,7 @@ func CheckAndSetFingerprint(c *gin.Context, user *db.User, resolution, timezone 
 		)
 	}
 
-	// JSON-based handlers (OTP, password) need JSON redirect
-	accept := c.GetHeader("Accept")
-	isJSON := strings.Contains(accept, "application/json") ||
-		c.GetHeader("X-Requested-With") == "XMLHttpRequest"
-
-	if isJSON {
+	if isAjax {
 		c.JSON(403, gin.H{"blocked": true, "redirect": blockURL})
 	} else {
 		c.Redirect(302, blockURL)

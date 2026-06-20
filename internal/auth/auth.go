@@ -209,7 +209,7 @@ func DoLogin(c *gin.Context) {
 	// ── Device fingerprint check ───────────────────────────────────────────────
 	resolution := c.PostForm("fp_res")
 	timezone   := c.PostForm("fp_tz")
-	if CheckAndSetFingerprint(c, user, resolution, timezone) {
+	if CheckAndSetFingerprint(c, user, resolution, timezone, false) {
 		return // blocked — redirect already sent
 	}
 
