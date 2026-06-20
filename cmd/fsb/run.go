@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/cache"
 	"EverythingSuckz/fsb/internal/commands"
@@ -75,6 +76,8 @@ func runApp(cmd *cobra.Command, args []string) {
 	commands.MainUserbotClient = bot.UserBot.GetClient()
 	// Course channel admin-sync hook — cmdAddCourse use karto (import cycle टाळायला)
 	commands.SyncChannelAdmins = bot.UserBot.AddBotsAsAdminsForChannel
+	// Registration Telegram notification hook (import cycle टाळायला — auth ← bot direct import karu shakat nahi)
+	auth.NotifyAdmins = bot.NotifyAllowedUsers
 
 	// ── Init external worker pool (Koyeb workers) ─────────────────────────────
 	// workerreg.Init reads WORKER_URLS / WORKER_URL1..N from config,
@@ -152,7 +155,7 @@ func getRouter(log *zap.Logger) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
- 	   SkipPaths: []string{"/", "/courses", "/login", "/api/colab/poll","/api/worker/stream-check","/api/admin/stream/live","/api/watch/position","/api/presence/ping", "/api/colab/progress", "/ping"},
+ 	   SkipPaths: []string{"/", "/courses", "/login", "/api/colab/poll","/api/admin/stream/live", "/api/colab/progress", "/ping"},
 	}))
 	router.Use(gin.ErrorLogger())
 	router.Use(globalSecurityHeaders())
