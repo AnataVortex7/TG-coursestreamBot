@@ -817,6 +817,53 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="bulkRenameModal">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-title">🔤 Bulk Rename — Find &amp; Replace</div>
+    <input type="hidden" id="br-course-id" />
+    <p id="br-course-name" style="font-size:13px;color:#888;margin:4px 0 16px;"></p>
+
+    <div class="form-row">
+      <label>Find Text <span class="req">*</span></label>
+      <input type="text" id="br-find" placeholder="e.g. Lecture" />
+    </div>
+    <div class="form-row">
+      <label>Replace With</label>
+      <input type="text" id="br-replace" placeholder="e.g. Class (rikamं sodlं tar text delete hoईल)" />
+    </div>
+
+    <div class="form-row">
+      <label>Konthya fields madhe replace karaycha?</label>
+      <div style="display:flex;gap:16px;margin-top:6px;flex-wrap:wrap;">
+        <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:13px;cursor:pointer;">
+          <input type="checkbox" id="br-field-title" checked /> Title
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:13px;cursor:pointer;">
+          <input type="checkbox" id="br-field-caption" checked /> Caption
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-weight:400;font-size:13px;cursor:pointer;">
+          <input type="checkbox" id="br-field-filename" /> File Name
+        </label>
+      </div>
+      <div style="font-size:11px;color:#e65100;margin-top:4px;">⚠️ File Name madhe extension (.mp4, .pdf) chukून change karu naka — playback/download tutू shakто</div>
+    </div>
+
+    <div class="form-row">
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+        <input type="checkbox" id="br-case-sensitive" /> Case-sensitive match
+      </label>
+    </div>
+
+    <div id="br-preview-box" style="display:none;margin-top:10px;padding:12px 14px;background:#f5f5f5;border-radius:8px;font-size:12.5px;"></div>
+
+    <div class="modal-actions">
+      <button class="btn" onclick="closeBulkRenameModal()">Cancel</button>
+      <button class="btn" id="br-preview-btn" style="background:#888;color:#fff" onclick="execBulkRename(true)">👁️ Preview</button>
+      <button class="btn btn-primary" id="br-apply-btn" style="display:none" onclick="execBulkRename(false)">✅ Apply to All</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let cachedCourses = [];
@@ -1275,6 +1322,7 @@ async function loadCourses() {
           <button class="btn btn-warning btn-sm" onclick="toggleSync('${syncRowId}')">🔄 Sync</button>
           <button class="btn btn-info btn-sm" onclick="openFoldersForCourse('${c.id}','${esc(c.title)}')">📁 Folders</button>
           <button class="btn btn-sm" style="background:#6c63ff;color:#fff" onclick="openEditCourseModal('${c.id}')">✏️ Edit</button>
+          <button class="btn btn-sm" style="background:#0d9488;color:#fff" onclick="openBulkRenameModal('${c.id}','${esc(c.title)}')">🔤 Bulk Rename</button>
           <button class="btn btn-danger btn-sm" onclick="deleteCourse('${c.id}','${esc(c.title)}')">🗑 Delete</button>
         </td>
       </tr>
@@ -1360,6 +1408,82 @@ async function execEditCourse() {
     toast('❌ Network error', 'error');
   } finally {
     btn.disabled = false; btn.textContent = '✅ Save Changes';
+  }
+}
+
+// ─── Bulk Rename (Find & Replace) ───────────────────────────────────────────
+function openBulkRenameModal(courseId, courseTitle) {
+  document.getElementById('br-course-id').value = courseId;
+  document.getElementById('br-course-name').textContent = 'Course: ' + courseTitle;
+  document.getElementById('br-find').value = '';
+  document.getElementById('br-replace').value = '';
+  document.getElementById('br-field-title').checked = true;
+  document.getElementById('br-field-caption').checked = true;
+  document.getElementById('br-field-filename').checked = false;
+  document.getElementById('br-case-sensitive').checked = false;
+  document.getElementById('br-preview-box').style.display = 'none';
+  document.getElementById('br-apply-btn').style.display = 'none';
+  document.getElementById('br-preview-btn').style.display = '';
+  document.getElementById('bulkRenameModal').classList.add('open');
+}
+
+function closeBulkRenameModal() {
+  document.getElementById('bulkRenameModal').classList.remove('open');
+}
+
+async function execBulkRename(dryRun) {
+  const courseId = document.getElementById('br-course-id').value;
+  const find      = document.getElementById('br-find').value;
+  const replace   = document.getElementById('br-replace').value;
+  const caseSens  = document.getElementById('br-case-sensitive').checked;
+
+  if (!find.trim()) { toast('❌ Find text required aahe', 'error'); return; }
+
+  const fields = [];
+  if (document.getElementById('br-field-title').checked)    fields.push('title');
+  if (document.getElementById('br-field-caption').checked)  fields.push('caption');
+  if (document.getElementById('br-field-filename').checked) fields.push('file_name');
+  if (fields.length === 0) { toast('❌ Kamit kami ek field nivada (Title/Caption/File Name)', 'error'); return; }
+
+  const btn = dryRun ? document.getElementById('br-preview-btn') : document.getElementById('br-apply-btn');
+  const origText = btn.textContent;
+  btn.disabled = true; btn.textContent = dryRun ? '⏳ Checking...' : '⏳ Applying...';
+
+  try {
+    const res = await api('/courses/' + courseId + '/bulk-rename', {
+      method: 'POST',
+      body: JSON.stringify({ find, replace, fields, case_sensitive: caseSens, dry_run: dryRun })
+    });
+    const d = await res.json();
+    if (!res.ok) { toast('❌ ' + (d.error || 'Error'), 'error'); return; }
+
+    const box = document.getElementById('br-preview-box');
+    box.style.display = 'block';
+
+    if (dryRun) {
+      if (d.matched_count === 0) {
+        box.innerHTML = '⚠️ Kuthlाही file madhe "<b>' + esc(find) + '</b>" sapadla nahi.';
+        document.getElementById('br-apply-btn').style.display = 'none';
+      } else {
+        let html = '✅ <b>' + d.matched_count + ' file(s)</b> madhe match sapadla. Examples:<br><ul style="margin:6px 0 0 18px;padding:0;">';
+        (d.examples || []).forEach(ex => { html += '<li style="margin-bottom:3px;">' + esc(ex) + '</li>'; });
+        html += '</ul>';
+        if (d.matched_count > (d.examples || []).length) {
+          html += '<div style="margin-top:4px;color:#888;">...ani ' + (d.matched_count - d.examples.length) + ' file(s) ajun</div>';
+        }
+        box.innerHTML = html;
+        document.getElementById('br-apply-btn').style.display = '';
+      }
+    } else {
+      box.innerHTML = '✅ <b>' + d.modified_count + ' file(s)</b> update zale!';
+      document.getElementById('br-apply-btn').style.display = 'none';
+      document.getElementById('br-preview-btn').style.display = '';
+      toast('✅ Bulk rename complete: ' + d.modified_count + ' file(s) updated');
+    }
+  } catch (e) {
+    toast('❌ Network error', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = origText;
   }
 }
 
