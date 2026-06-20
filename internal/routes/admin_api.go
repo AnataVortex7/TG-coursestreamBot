@@ -857,6 +857,14 @@ func adminKillSession(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Token required"})
 		return
 	}
+
+	// Token cha owner shodhun device-lock fingerprint pn clear karto —
+	// nahitar session kill zali tari user navin device varun login karu
+	// shakat nahi (fingerprint vegla store hoto, session var depend nasto).
+	if sess, err := db.GetSessionByToken(req.Token); err == nil && sess != nil {
+		_ = db.ClearUserDevice(sess.UserID)
+	}
+
 	if err := db.DeleteSession(req.Token); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
