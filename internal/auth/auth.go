@@ -2,6 +2,7 @@ package auth
 
 import (
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
 	"errors"
@@ -197,6 +198,13 @@ func DoLogin(c *gin.Context) {
 	// ✓ Success — reset counter
 	db.ResetLoginAttempts(identifier)
 
+	// ── Device fingerprint check ───────────────────────────────────────────────
+	resolution := c.PostForm("fp_res")
+	timezone   := c.PostForm("fp_tz")
+	if CheckAndSetFingerprint(c, user, resolution, timezone) {
+		return // blocked — redirect already sent
+	}
+
 	// Issue JWT
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
@@ -295,6 +303,12 @@ func DoRegister(c *gin.Context) {
 		}
 		_ = email.SendRegistrationRequest(config.ValueOf.AdminEmail, emailAddr, fullName, 0)
 	}()
+
+	// Email sobat Telegram var pn — allowed admin users la
+	go bot.NotifyAllowedUsers(fmt.Sprintf(
+		"🆕 New User Registered\n\nName: %s\nMobile: %s\nEmail: %s\n\nJo paryant Special User ON karat nahi, tyala fakt buy-now page disel.",
+		fullName, mobile, emailAddr,
+	))
 
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {

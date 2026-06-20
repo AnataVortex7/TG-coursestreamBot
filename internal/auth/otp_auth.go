@@ -199,6 +199,11 @@ func VerifyOTPHandler(c *gin.Context) {
 		return
 	}
 
+	// ── Device fingerprint check ───────────────────────────────────────────────
+	if CheckAndSetFingerprint(c, user, c.PostForm("fp_res"), c.PostForm("fp_tz")) {
+		return // blocked — JSON redirect already sent
+	}
+
 	// Issue JWT
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
@@ -266,6 +271,11 @@ func DoPasswordLogin(c *gin.Context) {
 	}
 	// ✓ Success — reset counter
 	db.ResetLoginAttempts(identifier)
+
+	// ── Device fingerprint check ───────────────────────────────────────────────
+	if CheckAndSetFingerprint(c, user, c.PostForm("fp_res"), c.PostForm("fp_tz")) {
+		return // blocked — JSON redirect already sent
+	}
 
 	tokenStr, expiresAt, err := issueToken(user.ID, user.Username)
 	if err != nil {
