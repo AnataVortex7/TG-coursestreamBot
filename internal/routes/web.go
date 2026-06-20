@@ -73,6 +73,11 @@ func (e *allRoutes) LoadWeb(r *Route) {
 		c.Redirect(http.StatusFound, "/courses")
 	})
 
+	// ── Legal/Policy pages — public ────────────────────────────────────────────
+	r.Engine.GET("/terms",   func(c *gin.Context) { c.HTML(http.StatusOK, "terms.html", gin.H{}) })
+	r.Engine.GET("/privacy", func(c *gin.Context) { c.HTML(http.StatusOK, "privacy.html", gin.H{}) })
+	r.Engine.GET("/refund",  func(c *gin.Context) { c.HTML(http.StatusOK, "refund.html", gin.H{}) })
+
 	// ── Protected pages ────────────────────────────────────────────────────────
 	protected := r.Engine.Group("/", auth.RequireAuth)
 	{
