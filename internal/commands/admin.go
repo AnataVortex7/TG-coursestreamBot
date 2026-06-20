@@ -43,6 +43,7 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("addvideo", adminOnly(cmdAddVideo)))
 	d.AddHandler(handlers.NewCommand("syncchannel", adminOnly(cmdSyncChannel)))
 	d.AddHandler(handlers.NewCommand("sessions", adminOnly(cmdSessions)))
+	d.AddHandler(handlers.NewCommand("kill", adminOnly(cmdKillDevice)))
 	d.AddHandler(handlers.NewCommand("killsession", adminOnly(cmdKillSession)))
 	d.AddHandler(handlers.NewCommand("stats", adminOnly(cmdStats)))
 
@@ -748,6 +749,37 @@ func cmdKillSession(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	reply(ctx, u, fmt.Sprintf("✅ All sessions killed for user: %s\nThey will be logged out on next request.", user.Username))
+	return dispatcher.EndGroups
+}
+
+// cmdKillDevice — /kill <mobile>
+// Device-lock fingerprint clear karto + active session pn kill karto, jaymule
+// user kuthlyahi navin device varun fresh login karu shakto. (cmdKillSession
+// pasun veglं — te fakt session kill karte, fingerprint touch karat nahi.)
+func cmdKillDevice(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	if len(a) < 1 {
+		reply(ctx, u, "Usage: /kill <mobile_number>\n\nYa command ne user cha device-lock (fingerprint) + active session clear hoто, mhanun to navin device varun fresh login karu shakto.")
+		return dispatcher.EndGroups
+	}
+
+	mobile := strings.TrimSpace(a[0])
+	user, err := db.GetUserByMobileOrEmail(mobile)
+	if err != nil || user == nil {
+		reply(ctx, u, "❌ User not found with mobile: "+mobile)
+		return dispatcher.EndGroups
+	}
+
+	if err := db.ClearUserDevice(user.ID); err != nil {
+		reply(ctx, u, "❌ "+err.Error())
+		return dispatcher.EndGroups
+	}
+	_ = db.DeleteAllSessionsForUser(user.ID)
+
+	reply(ctx, u, fmt.Sprintf(
+		"✅ Device-lock cleared for %s (%s).\nUser navin device varun fresh login karu shakto.",
+		user.FullName, mobile,
+	))
 	return dispatcher.EndGroups
 }
 
