@@ -23,6 +23,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gotd/td/tg"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
@@ -325,6 +326,7 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// Courses
 	api.GET("/courses", adminListCourses)
 	api.POST("/courses", adminAddCourse)
+	api.PUT("/courses/:id", adminEditCourse)
 	api.DELETE("/courses/:id", adminDeleteCourse)
 
 	// Sync — background goroutine using bot's Telegram client
@@ -560,6 +562,71 @@ func adminAddCourse(c *gin.Context) {
 	}(course.Title, course.BuyLink, course.Price)
 
 	c.JSON(http.StatusOK, course)
+}
+
+// PUT /api/admin/courses/:id
+// Partial update — jevdhe fields body madhe pathavle teвdheच update hotat
+// (title, description, thumbnail, price, buy_link). channel_id ithun
+// badalता yet nahi (worker-bot admin sync shi tied aahe, course create
+// kelyavar fix raहायla pahije).
+func adminEditCourse(c *gin.Context) {
+	id, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	existing, err := db.GetCourseByID(id)
+	if err != nil || existing == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+
+	var req struct {
+		Title       *string `json:"title"`
+		Description *string `json:"description"`
+		Thumbnail   *string `json:"thumbnail"`
+		Price       *string `json:"price"`
+		BuyLink     *string `json:"buy_link"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	fields := bson.M{}
+	if req.Title != nil {
+		if strings.TrimSpace(*req.Title) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Title cannot be empty"})
+			return
+		}
+		fields["title"] = *req.Title
+	}
+	if req.Description != nil {
+		fields["description"] = *req.Description
+	}
+	if req.Thumbnail != nil {
+		fields["thumbnail"] = *req.Thumbnail
+	}
+	if req.Price != nil {
+		fields["price"] = *req.Price
+	}
+	if req.BuyLink != nil {
+		fields["buy_link"] = *req.BuyLink
+	}
+
+	if len(fields) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No fields to update"})
+		return
+	}
+
+	if err := db.UpdateCourse(id, fields); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	updated, _ := db.GetCourseByID(id)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "course": updated})
 }
 
 func adminDeleteCourse(c *gin.Context) {
