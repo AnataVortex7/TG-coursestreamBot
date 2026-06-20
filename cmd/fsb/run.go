@@ -78,6 +78,10 @@ func runApp(cmd *cobra.Command, args []string) {
 	commands.SyncChannelAdmins = bot.UserBot.AddBotsAsAdminsForChannel
 	// Registration Telegram notification hook (import cycle टाळायला — auth ← bot direct import karu shakat nahi)
 	auth.NotifyAdmins = bot.NotifyAllowedUsers
+	// Bot cha PeerStorage redeploy nantar empty asto (fsb.session ephemeral
+	// container madhe reset hoто) — LOG_CHANNEL members varun ALLOWED_USERS
+	// cha access_hash automatic warm karto, manual "ek message pathवा" lागत nahi.
+	bot.WarmAdminPeerCacheDelayed(log, 3*time.Second)
 
 	// ── Init external worker pool (Koyeb workers) ─────────────────────────────
 	// workerreg.Init reads WORKER_URLS / WORKER_URL1..N from config,
