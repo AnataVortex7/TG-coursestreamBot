@@ -327,6 +327,7 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	api.GET("/courses", adminListCourses)
 	api.POST("/courses", adminAddCourse)
 	api.PUT("/courses/:id", adminEditCourse)
+	api.POST("/courses/:id/bulk-rename", adminBulkRenameFiles)
 	api.DELETE("/courses/:id", adminDeleteCourse)
 
 	// Sync — background goroutine using bot's Telegram client
@@ -627,6 +628,62 @@ func adminEditCourse(c *gin.Context) {
 
 	updated, _ := db.GetCourseByID(id)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "course": updated})
+}
+
+// POST /api/admin/courses/:id/bulk-rename
+// Body: { "find": "...", "replace": "...", "fields": ["title","caption"], "case_sensitive": false, "dry_run": true }
+// dry_run=true -> kahihi save hot nahi, fakt kiti files match होतील ani 5
+// examples (before → after) return hotat (preview sathi). dry_run=false ->
+// prत्यक्ष update hoто, sagle matching files EKACH call madhe.
+func adminBulkRenameFiles(c *gin.Context) {
+	courseID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	var req struct {
+		Find          string   `json:"find"`
+		Replace       string   `json:"replace"`
+		Fields        []string `json:"fields"`
+		CaseSensitive bool     `json:"case_sensitive"`
+		DryRun        bool     `json:"dry_run"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.Find) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Find text required"})
+		return
+	}
+	validFields := map[string]bool{"title": true, "caption": true, "file_name": true}
+	for _, f := range req.Fields {
+		if !validFields[f] {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid field: " + f})
+			return
+		}
+	}
+	if len(req.Fields) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Select at least one field (title/caption/file_name)"})
+		return
+	}
+
+	matched, modified, examples, err := db.BulkReplaceInCachedFiles(
+		courseID, req.Find, req.Replace, req.Fields, req.CaseSensitive, req.DryRun,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"dry_run":        req.DryRun,
+		"matched_count":  matched,
+		"modified_count": modified,
+		"examples":       examples,
+	})
 }
 
 func adminDeleteCourse(c *gin.Context) {
