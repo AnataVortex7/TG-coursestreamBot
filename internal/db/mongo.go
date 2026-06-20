@@ -49,6 +49,13 @@ type User struct {
 	CreatedAt     time.Time          `bson:"created_at"          json:"created_at"`
 	IsActive      bool               `bson:"is_active"           json:"is_active"`
 	IsSpecialUser bool               `bson:"is_special_user"     json:"is_special_user"` // admin ne ON kelyavar - not-buyed courses cha content list disto (play nahi, fakt baghane)
+	// ─── Device lock ────────────────────────────────────────────────────────
+	// OS + screen resolution + timezone cha SHA-256 hash.
+	// First login var set hoto. Vegla device detect zhala tar blocked.
+	DeviceFingerprint string     `bson:"device_fingerprint"  json:"-"`
+	// Not nil jevha user ne "24h madhe session delete kara" request keli.
+	// Time pass zala ki next login la fingerprint reset hoто, nava device allow.
+	SessionDeleteAt   *time.Time `bson:"session_delete_at"   json:"-"`
 }
 
 // Session — one active session per user (new login kills old)

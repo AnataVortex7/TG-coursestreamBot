@@ -132,6 +132,50 @@ func SetUserSpecial(id primitive.ObjectID, special bool) error {
 	return err
 }
 
+// ─── Device Fingerprint ───────────────────────────────────────────────────────
+
+// SetUserFingerprint — successful login var first time kiwa 24h window pass
+// zali ki nava fingerprint save karto aani pending session-delete clear karto.
+func SetUserFingerprint(id primitive.ObjectID, fp string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{
+			"device_fingerprint": fp,
+			"session_delete_at":  nil,
+		}},
+	)
+	return err
+}
+
+// RequestSessionDelete — user ne "24 tasant session delete kara" button dabla.
+// at = time.Now().Add(24 * time.Hour).
+func RequestSessionDelete(id primitive.ObjectID, at time.Time) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{"session_delete_at": at}},
+	)
+	return err
+}
+
+// ClearUserDevice — admin /kill command. Fingerprint + pending delete turant
+// clear karto; tyanantar kuthlyahi device varun login allow hoto.
+func ClearUserDevice(id primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": id},
+		bson.M{"$set": bson.M{
+			"device_fingerprint": "",
+			"session_delete_at":  nil,
+		}},
+	)
+	return err
+}
+
 func ListUsers() ([]User, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
