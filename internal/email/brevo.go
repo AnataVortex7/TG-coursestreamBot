@@ -1,10 +1,22 @@
 // internal/email/brevo.go
-// Multi-SMTP fallback email sender.
-// Primary SMTP uses existing BREVO_* env vars.
-// Secondary and Tertiary use BREVO_*_2 and BREVO_*_3 env vars.
+// Fixed-assignment multi-SMTP email sender - ROUND ROBIN NAHI.
+// Pratyek recipient email la ekach SMTP provider PERMANENTLY assign hoto
+// (DB madhe save - internal/db madhle email_provider_map collection).
+// Index 0 (UNSUFFIXED env vars - BREVO_SMTP_USER, BREVO_FROM_EMAIL, no
+// numeric suffix) = DEDICATED OVERFLOW provider, unlimited capacity, FAKT
+// tevha vaaparla jato jevha sagle numbered providers (1..n-1, mhanje _2,
+// _3, _4...) full astil (pratyekala max 7 emails capacity). Navin numbered
+// SMTP (udaharan _4) konthyahi velī add kela tari overflow cha role index 0
+// kadech fixed rahato - "last configured one" var depend nahi.
+// Ekda assign zala ki to email kayam toच provider vaaparel - admin
+// sakat sagle recipients ya same logic madhe yetat, vegla path nahi.
+// Overflow provider (unsuffixed) sathi BREVO_SMTP_USER/BREVO_SMTP_PASS/
+// BREVO_FROM_EMAIL env vars vapra. Numbered capacity providers sathi
+// BREVO_SMTP_USER_2/_3/_4..., tyaच prakare PASS ani FROM_EMAIL.
 package email
 
 import (
+	"EverythingSuckz/fsb/internal/db"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -12,7 +24,6 @@ import (
 	"net/smtp"
 	"os"
 	"strings"
-	"sync/atomic"
 	"time"
 )
 
@@ -28,7 +39,6 @@ type smtpConfig struct {
 }
 
 var smtpProviders []smtpConfig
-var providerCounter uint64 // round-robin counter
 
 func init() {
 	for i := 1; ; i++ {
@@ -97,32 +107,93 @@ func dialAndAuth(p smtpConfig) bool {
 	return true
 }
 
-// ─── Core send — round-robin + fallback ───────────────────────────────────────
+// ─── Core send — FIXED assignment, NO round-robin, NO fallback ────────────────
+//
+// maxPerProvider — pratyek provider (last sodun) la max kiti emails permanently
+// assign karaycha, tyanantar पुढच्या provider kade jaते.
+const maxPerProvider = 7
 
-// sendMail — round-robin provider निवडतो, त्याच provider च्या credentials ने msg बनवतो आणि पाठवतो
-func sendMail(toEmail, subject, htmlBody string) error {
-	n := uint64(len(smtpProviders))
+// pickProviderForRecipient - email la aadhich provider assign asel tar toч
+// return karto. Nasel tar: numbered providers (BREVO_SMTP_USER_2, _3, ... -
+// indices 1..n-1) madhe (sequence ne) jyachi capacity (maxPerProvider) bharleli
+// nahi to provider nivadto. SAGLE numbered providers full astil tarach index 0
+// (unsuffixed BREVO_SMTP_USER/BREVO_FROM_EMAIL - DEDICATED OVERFLOW, unlimited)
+// vaaparla jail. Mag to assignment DB madhe PERMANENTLY save karto.
+func pickProviderForRecipient(email string) (int, error) {
+	n := len(smtpProviders)
 	if n == 0 {
+		return 0, fmt.Errorf("smtp: no providers configured")
+	}
+	if n == 1 {
+		return 0, nil // ekach provider aahe - overflow/capacity cha question nahi
+	}
+
+	// Aadhich permanently assign zalay ka check kar
+	if idx, found, err := db.GetEmailProviderAssignment(email); err == nil && found {
+		if idx >= 0 && idx < n {
+			return idx, nil
+		}
+		// Saved index aata valid providers range cha baher gela (providers
+		// kami zale astil) - overflow (index 0) var fallback.
+		return 0, nil
+	}
+
+	// Navin email - capacity-based assignment. Index 0 (unsuffixed
+	// BREVO_SMTP_USER / BREVO_FROM_EMAIL = DEDICATED OVERFLOW) sodun, numbered
+	// providers (1..n-1, mhanje _2, _3, _4...) madhe jaga aahe ka baghto
+	// (sequence ne: _2 pahile fill, mag _3, mag _4...). Navin numbered SMTP
+	// nantar add zala tari overflow cha role index 0 kadech fixed rahato -
+	// "last provider" var depend nahi.
+	chosen := 0 // default: overflow (index 0, unsuffixed - sagle numbered full astil tevhach vaaparla jail)
+	for i := 1; i < n; i++ {
+		count, err := db.CountEmailsForProvider(i)
+		if err != nil {
+			continue // DB issue - pudhcha provider try kar
+		}
+		if count < maxPerProvider {
+			chosen = i
+			break
+		}
+	}
+
+	if err := db.AssignEmailProvider(email, chosen); err != nil {
+		log.Printf("[SMTP] Warning: assignment save failed for %s: %v", email, err)
+	}
+
+	// Race-condition safety: don goroutines ekach navin email sathi ekach vele
+	// assignment karat astil tar, DB cha upsert (unique index) fakt EK record
+	// thevel. Authoritative value re-fetch karun tich vaapraychi, navhe to
+	// localpane compute kelela `chosen` (jo "loser" goroutine sathi chukicha
+	// asu shakto).
+	if idx, found, err := db.GetEmailProviderAssignment(email); err == nil && found {
+		return idx, nil
+	}
+	return chosen, nil
+}
+
+// sendMail — recipient cha permanently assigned provider shodhto (navin
+// asel tar capacity-based navin assignment karто) ani तोच provider vaaparून
+// pathvto. ROUND ROBIN NAHI. FALLBACK NAHI — assigned provider fail zala
+// tar error तसाच return hoто, dusra provider try hot nahi (jaणूनबुजून — ekach
+// SMTP cha credentials/reputation consistently त्याच users sathi rahaव).
+func sendMail(toEmail, subject, htmlBody string) error {
+	if len(smtpProviders) == 0 {
 		return fmt.Errorf("smtp: no providers configured")
 	}
 
-	start := atomic.AddUint64(&providerCounter, 1) % n
-
-	var lastErr error
-	for i := uint64(0); i < n; i++ {
-		idx := (start + i) % n
-		p := smtpProviders[idx]
-		// निवडलेल्या provider च्या fromEmail/fromName ने message बनवतो
-		msg := buildMsg(p, toEmail, subject, htmlBody)
-		err := sendViaProvider(p, toEmail, msg)
-		if err == nil {
-			log.Printf("[SMTP] Sent via provider #%d (%s)", idx+1, p.host)
-			return nil
-		}
-		log.Printf("[SMTP] Provider #%d (%s) failed: %v", idx+1, p.host, err)
-		lastErr = err
+	idx, err := pickProviderForRecipient(toEmail)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("smtp: all providers failed, last error: %w", lastErr)
+
+	p := smtpProviders[idx]
+	msg := buildMsg(p, toEmail, subject, htmlBody)
+	if err := sendViaProvider(p, toEmail, msg); err != nil {
+		log.Printf("[SMTP] Provider #%d (%s) failed for %s: %v", idx+1, p.host, toEmail, err)
+		return fmt.Errorf("smtp: send failed via assigned provider #%d: %w", idx+1, err)
+	}
+	log.Printf("[SMTP] Sent via permanently-assigned provider #%d (%s) → %s", idx+1, p.host, toEmail)
+	return nil
 }
 
 func sendViaProvider(p smtpConfig, toEmail string, msg []byte) error {
