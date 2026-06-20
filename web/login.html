@@ -357,15 +357,38 @@
         <label for="reg-confirm">Confirm Password *</label>
         <input id="reg-confirm" type="password" placeholder="Repeat password" autocomplete="new-password" />
       </div>
+
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:1rem;">
+        <input type="checkbox" id="reg-terms" style="margin-top:3px;accent-color:var(--accent);width:15px;height:15px;flex-shrink:0;cursor:pointer;" />
+        <label for="reg-terms" style="font-size:.8rem;color:var(--muted);line-height:1.5;cursor:pointer;">
+          I have read and agree to the
+          <a href="/terms" target="_blank" style="color:var(--accent);">Terms &amp; Conditions</a>,
+          <a href="/privacy" target="_blank" style="color:var(--accent);">Privacy Policy</a> and
+          <a href="/refund" target="_blank" style="color:var(--accent);">Refund Policy</a>.
+        </label>
+      </div>
+
       <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()">Create Account &#x2192;</button>
     </div>
 
     <p class="footer-note">Already have an account? <a href="#" onclick="switchTab('login');return false;">Sign in</a></p>
+
+    <div style="margin-top:1rem;padding-top:.8rem;border-top:1px solid var(--border);display:flex;gap:14px;flex-wrap:wrap;justify-content:center;">
+      <a href="/terms"   target="_blank" style="font-size:.75rem;color:var(--muted);text-decoration:none;">Terms</a>
+      <a href="/privacy" target="_blank" style="font-size:.75rem;color:var(--muted);text-decoration:none;">Privacy</a>
+      <a href="/refund"  target="_blank" style="font-size:.75rem;color:var(--muted);text-decoration:none;">Refund Policy</a>
+    </div>
   </div>
 </div>
 
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
+// ─── Device fingerprint fields (resolution + timezone) ────────────────────────
+// He server la pathavle jataat — OS server-side (User-Agent varun) kadhto.
+// Cache/cookies delete kelyavar pan he stable rahtaat.
+const FP_RES = Math.min(screen.width, screen.height) + 'x' + Math.max(screen.width, screen.height);
+const FP_TZ  = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+
 let emailAddr      = '';
 let resendInterval = null;
 
@@ -597,10 +620,16 @@ async function verifyOTP() {
     const fd = new FormData();
     fd.append('email', emailAddr);
     fd.append('otp', otp);
+    fd.append('fp_res', FP_RES);
+    fd.append('fp_tz', FP_TZ);
     const res  = await fetch('/login/otp/verify', { method: 'POST', body: fd });
     const data = await res.json();
 
     if (res.ok && data.redirect) {
+      window.location.href = data.redirect;
+      return;
+    }
+    if (res.status === 403 && data.blocked && data.redirect) {
       window.location.href = data.redirect;
       return;
     }
@@ -646,6 +675,10 @@ async function submitRegistration() {
   if (!email)    { showRegAlert('error', 'Email address is required.'); return; }
   if (password.length < 6) { showRegAlert('error', 'Password must be at least 6 characters.'); return; }
   if (password !== confirm) { showRegAlert('error', 'Passwords do not match.'); return; }
+  if (!document.getElementById('reg-terms').checked) {
+    showRegAlert('error', 'Please read and accept the Terms & Conditions, Privacy Policy and Refund Policy to continue.');
+    return;
+  }
 
   const btn = document.getElementById('btn-reg-submit');
   btn.disabled = true;
@@ -695,10 +728,16 @@ async function doPasswordLogin() {
     const fd = new FormData();
     fd.append('username', identifier);
     fd.append('password', password);
+    fd.append('fp_res', FP_RES);
+    fd.append('fp_tz', FP_TZ);
     const res  = await fetch('/login/password', { method: 'POST', body: fd });
     const data = await res.json();
 
     if (res.ok && data.redirect) {
+      window.location.href = data.redirect;
+      return;
+    }
+    if (res.status === 403 && data.blocked && data.redirect) {
       window.location.href = data.redirect;
       return;
     }

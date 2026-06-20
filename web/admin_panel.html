@@ -786,6 +786,37 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="editCourseModal">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-title">✏️ Course Edit Kara</div>
+    <input type="hidden" id="ec-id" />
+    <div class="form-row">
+      <label>Title <span class="req">*</span></label>
+      <input type="text" id="ec-title" placeholder="Course title" />
+    </div>
+    <div class="form-row">
+      <label>Description</label>
+      <textarea id="ec-desc" rows="4" placeholder="Course description…" style="width:100%;resize:vertical;font-family:inherit;padding:8px;border-radius:6px;border:1px solid #ddd;"></textarea>
+    </div>
+    <div class="form-row">
+      <label>Price</label>
+      <input type="text" id="ec-price" placeholder="e.g. ₹999" />
+    </div>
+    <div class="form-row">
+      <label>Buy Link</label>
+      <input type="text" id="ec-link" placeholder="Payment / WhatsApp link" />
+    </div>
+    <div class="form-row">
+      <label>Thumbnail URL</label>
+      <input type="text" id="ec-thumb" placeholder="Thumbnail image URL" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeEditCourseModal()">Cancel</button>
+      <button class="btn btn-primary" id="ec-save-btn" onclick="execEditCourse()">✅ Save Changes</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ─── State ────────────────────────────────────────────────────────────────────
 let cachedCourses = [];
@@ -1243,6 +1274,7 @@ async function loadCourses() {
         <td style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px">
           <button class="btn btn-warning btn-sm" onclick="toggleSync('${syncRowId}')">🔄 Sync</button>
           <button class="btn btn-info btn-sm" onclick="openFoldersForCourse('${c.id}','${esc(c.title)}')">📁 Folders</button>
+          <button class="btn btn-sm" style="background:#6c63ff;color:#fff" onclick="openEditCourseModal('${c.id}')">✏️ Edit</button>
           <button class="btn btn-danger btn-sm" onclick="deleteCourse('${c.id}','${esc(c.title)}')">🗑 Delete</button>
         </td>
       </tr>
@@ -1284,6 +1316,51 @@ async function execSync(courseId, title, idx) {
     toast('🔄 "'+title+'" sync background madhe chalu zali! (Range: '+start+'→'+end+')','info');
     setTimeout(()=>loadCourses(), 8000);
   } catch(e){ toast('❌ Network error','error'); }
+}
+
+// ─── Edit Course ────────────────────────────────────────────────────────────
+function openEditCourseModal(id) {
+  const c = cachedCourses.find(x => x.id === id);
+  if (!c) { toast('❌ Course data sapadla nahi, list refresh kara', 'error'); return; }
+  document.getElementById('ec-id').value    = c.id;
+  document.getElementById('ec-title').value = c.title || '';
+  document.getElementById('ec-desc').value  = c.description || '';
+  document.getElementById('ec-price').value = c.price || '';
+  document.getElementById('ec-link').value  = c.buy_link || '';
+  document.getElementById('ec-thumb').value = c.thumbnail || '';
+  document.getElementById('editCourseModal').classList.add('open');
+}
+
+function closeEditCourseModal() {
+  document.getElementById('editCourseModal').classList.remove('open');
+}
+
+async function execEditCourse() {
+  const id    = document.getElementById('ec-id').value;
+  const title = document.getElementById('ec-title').value.trim();
+  const desc  = document.getElementById('ec-desc').value.trim();
+  const price = document.getElementById('ec-price').value.trim();
+  const link  = document.getElementById('ec-link').value.trim();
+  const thumb = document.getElementById('ec-thumb').value.trim();
+  if (!title) { toast('❌ Title required aahe', 'error'); return; }
+
+  const btn = document.getElementById('ec-save-btn');
+  btn.disabled = true; btn.textContent = '⏳ Saving...';
+  try {
+    const res = await api('/courses/' + id, {
+      method: 'PUT',
+      body: JSON.stringify({ title, description: desc, price, buy_link: link, thumbnail: thumb })
+    });
+    const d = await res.json();
+    if (!res.ok) { toast('❌ ' + (d.error || 'Error'), 'error'); return; }
+    toast('✅ Course update zala: ' + title);
+    closeEditCourseModal();
+    loadCourses();
+  } catch (e) {
+    toast('❌ Network error', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '✅ Save Changes';
+  }
 }
 
 function populateCourseDropdowns() {

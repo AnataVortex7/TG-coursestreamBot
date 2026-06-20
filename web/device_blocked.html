@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="stylesheet" href="/static/base.css">
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Device Locked · Akshayclasses</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-primary);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 2.2rem 1.8rem;
+    width: 100%;
+    max-width: 440px;
+    text-align: center;
+  }
+
+  .icon { font-size: 2.6rem; margin-bottom: 10px; }
+  h1 { font-size: 1.25rem; font-weight: 700; margin-bottom: 10px; }
+  p  { font-size: .88rem; color: var(--muted); line-height: 1.6; margin-bottom: 1rem; }
+
+  .actions { display: flex; flex-direction: column; gap: 10px; margin-top: 1.4rem; }
+
+  button {
+    width: 100%;
+    padding: .75rem 1rem;
+    border-radius: var(--radius-sm);
+    font-size: .88rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: opacity .15s;
+  }
+  button:disabled { opacity: .6; cursor: not-allowed; }
+
+  .btn-notify { background: var(--accent); color: #fff; }
+  .btn-delete { background: transparent; color: var(--text); border: 1px solid var(--border) !important; }
+  .btn-back   { background: transparent; color: var(--muted); }
+
+  .status-box {
+    margin-top: 1rem;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    font-size: .82rem;
+    line-height: 1.5;
+    display: none;
+  }
+  .status-box.ok    { display: block; background: #dcfce7; color: #166534; }
+  .status-box.err   { display: block; background: #fee2e2; color: #991b1b; }
+  .status-box.pending{ display: block; background: #fef3c7; color: #78350f; }
+</style>
+</head>
+<body>
+<div class="card">
+
+  {{ if not .validToken }}
+    <div class="icon">⚠️</div>
+    <h1>Link Expired</h1>
+    <p>This link is no longer valid. Please try logging in again.</p>
+    <div class="actions">
+      <a href="/login" style="text-decoration:none;"><button class="btn-notify">Back to Login</button></a>
+    </div>
+  {{ else }}
+    <div class="icon">🔒</div>
+    <h1>Account Active on Another Device</h1>
+    <p>Your account is currently signed in on a different device. For your security, only one device can be logged in at a time.</p>
+    <p><strong>Please use your old/original device to continue</strong> — or use the options below if that device is no longer available.</p>
+
+    {{ if .pending }}
+    <div class="status-box pending">
+      ⏳ A session-delete request is already in progress. Your old session will be cleared on <strong>{{ .until }}</strong> — try logging in again after that.
+    </div>
+    {{ end }}
+
+    <div class="actions">
+      <button id="btn-notify" class="btn-notify" onclick="notifyAdmin()">📩 Notify Admin About This Issue</button>
+      {{ if not .pending }}
+      <button id="btn-delete" class="btn-delete" onclick="requestDelete()">🕐 Delete Old Session in 24 Hours</button>
+      {{ end }}
+      <a href="/login" style="text-decoration:none;"><button class="btn-back">Back to Login</button></a>
+    </div>
+
+    <div id="statusBox" class="status-box"></div>
+  {{ end }}
+
+</div>
+
+<script>
+const TOKEN = {{ if .token }}"{{ .token }}"{{ else }}""{{ end }};
+
+function showStatus(type, msg) {
+  const box = document.getElementById('statusBox');
+  box.className = 'status-box ' + type;
+  box.textContent = msg;
+}
+
+async function notifyAdmin() {
+  const btn = document.getElementById('btn-notify');
+  btn.disabled = true;
+  btn.textContent = 'Sending…';
+  try {
+    const res = await fetch('/api/device/notify-admin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: TOKEN })
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      showStatus('ok', '✅ Admin has been notified. They will reach out to resolve this shortly.');
+      btn.textContent = '📩 Admin Notified';
+    } else {
+      showStatus('err', data.error || 'Something went wrong. Please try again.');
+      btn.disabled = false;
+      btn.textContent = '📩 Notify Admin About This Issue';
+    }
+  } catch (_) {
+    showStatus('err', 'Network error. Please try again.');
+    btn.disabled = false;
+    btn.textContent = '📩 Notify Admin About This Issue';
+  }
+}
+
+async function requestDelete() {
+  const btn = document.getElementById('btn-delete');
+  if (!confirm('Your old device session will be cleared after 24 hours, after which you can log in from this new device. Continue?')) return;
+  btn.disabled = true;
+  btn.textContent = 'Submitting…';
+  try {
+    const res = await fetch('/api/device/request-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: TOKEN })
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      const until = new Date(data.until);
+      showStatus('ok', '✅ Request submitted. You can log in from this device after ' + until.toLocaleString() + '.');
+      btn.textContent = '✅ Request Submitted';
+    } else {
+      showStatus('err', data.error || 'Something went wrong. Please try again.');
+      btn.disabled = false;
+      btn.textContent = '🕐 Delete Old Session in 24 Hours';
+    }
+  } catch (_) {
+    showStatus('err', 'Network error. Please try again.');
+    btn.disabled = false;
+    btn.textContent = '🕐 Delete Old Session in 24 Hours';
+  }
+}
+</script>
+</body>
+</html>
