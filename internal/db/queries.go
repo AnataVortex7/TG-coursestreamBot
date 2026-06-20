@@ -1145,3 +1145,54 @@ func CreateImpersonateSession(userID primitive.ObjectID, token, ip, userAgent st
 	_, err := ColSessions.InsertOne(ctx, session)
 	return err
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMAIL PROVIDER ASSIGNMENT (permanent, no round-robin)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GetEmailProviderAssignment — email la aadhich kuthla provider assign zalay
+// te baghto. found=false mhanje pahilyandach email pathvत aahot, navin
+// assignment karaव lagel.
+func GetEmailProviderAssignment(email string) (providerIndex int, found bool, err error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var rec EmailProviderAssignment
+	dbErr := ColEmailProviderMap.FindOne(ctx, bson.M{"email": email}).Decode(&rec)
+	if dbErr != nil {
+		if errors.Is(dbErr, mongo.ErrNoDocuments) {
+			return 0, false, nil
+		}
+		return 0, false, dbErr
+	}
+	return rec.ProviderIndex, true, nil
+}
+
+// CountEmailsForProvider — ya provider la aadhich kiti emails permanently
+// assign zalet (capacity check sathi — max 7 per provider, last provider
+// vagळaता).
+func CountEmailsForProvider(providerIndex int) (int64, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	return ColEmailProviderMap.CountDocuments(ctx, bson.M{"provider_index": providerIndex})
+}
+
+// AssignEmailProvider — email la ek specific provider permanently assign
+// karto. Upsert vaaparla aahe — jar dusarya goroutine ने tyाच vele tyач
+// email sathi assignment kela asel (race condition), tar existing assignment
+// retain hoto, duplicate/overwrite hoत nahi (email var unique index aahe).
+func AssignEmailProvider(email string, providerIndex int) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColEmailProviderMap.UpdateOne(ctx,
+		bson.M{"email": email},
+		bson.M{"$setOnInsert": bson.M{
+			"email":          email,
+			"provider_index": providerIndex,
+			"assigned_at":    time.Now(),
+		}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}

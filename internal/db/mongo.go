@@ -19,20 +19,21 @@ var (
 	Client   *mongo.Client
 	Database *mongo.Database
 
-	ColUsers        *mongo.Collection
-	ColCourses      *mongo.Collection
-	ColAccess       *mongo.Collection
-	ColSessions     *mongo.Collection
-	ColChannelCache *mongo.Collection
-	ColStreamNonces *mongo.Collection // per-page-load stream nonces (anti-piracy)
-	ColWorkers      *mongo.Collection // external streaming workers
-	ColOTPs         *mongo.Collection // email OTP login records (TTL: 10 min)
-	ColPendingRegs  *mongo.Collection // unverified registration records (TTL: 10 min)
-	ColURLMonitors   *mongo.Collection // url monitor — persisted monitored URLs
-	ColWatchHistory  *mongo.Collection // user watch history + view counts
-	ColAnnouncements *mongo.Collection // admin broadcast announcements
-	ColFolders       *mongo.Collection // course folders (subject-wise grouping)
-	ColSettings      *mongo.Collection // key-value app settings (toggles etc.)
+	ColUsers            *mongo.Collection
+	ColCourses          *mongo.Collection
+	ColAccess           *mongo.Collection
+	ColSessions         *mongo.Collection
+	ColChannelCache     *mongo.Collection
+	ColStreamNonces     *mongo.Collection // per-page-load stream nonces (anti-piracy)
+	ColWorkers          *mongo.Collection // external streaming workers
+	ColOTPs             *mongo.Collection // email OTP login records (TTL: 10 min)
+	ColPendingRegs      *mongo.Collection // unverified registration records (TTL: 10 min)
+	ColURLMonitors      *mongo.Collection // url monitor — persisted monitored URLs
+	ColWatchHistory     *mongo.Collection // user watch history + view counts
+	ColAnnouncements    *mongo.Collection // admin broadcast announcements
+	ColFolders          *mongo.Collection // course folders (subject-wise grouping)
+	ColSettings         *mongo.Collection // key-value app settings (toggles etc.)
+	ColEmailProviderMap *mongo.Collection // email → SMTP provider permanent assignment (round-robin nahi, fixed)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -40,30 +41,30 @@ var (
 // User — website login user (self-registers or admin creates via bot)
 type User struct {
 	ID            primitive.ObjectID `bson:"_id,omitempty"       json:"id"`
-	Username      string             `bson:"username"            json:"username"`      // unique, auto-set to mobile or email if blank
+	Username      string             `bson:"username"            json:"username"` // unique, auto-set to mobile or email if blank
 	FullName      string             `bson:"full_name"           json:"full_name"`
-	Mobile        string             `bson:"mobile"              json:"mobile"`        // e.g. "9876543210" (digits only, optional)
-	Email         string             `bson:"email"               json:"email"`         // optional
+	Mobile        string             `bson:"mobile"              json:"mobile"` // e.g. "9876543210" (digits only, optional)
+	Email         string             `bson:"email"               json:"email"`  // optional
 	PasswordHash  string             `bson:"password_hash"       json:"-"`
-	TelegramID    int64              `bson:"telegram_id"         json:"telegram_id"`   // linked Telegram user ID (0 = not linked)
+	TelegramID    int64              `bson:"telegram_id"         json:"telegram_id"` // linked Telegram user ID (0 = not linked)
 	CreatedAt     time.Time          `bson:"created_at"          json:"created_at"`
 	IsActive      bool               `bson:"is_active"           json:"is_active"`
 	IsSpecialUser bool               `bson:"is_special_user"     json:"is_special_user"` // admin ne ON kelyavar - not-buyed courses cha content list disto (play nahi, fakt baghane)
 	// ─── Device lock ────────────────────────────────────────────────────────
 	// OS + screen resolution + timezone cha SHA-256 hash.
 	// First login var set hoto. Vegla device detect zhala tar blocked.
-	DeviceFingerprint string     `bson:"device_fingerprint"  json:"-"`
+	DeviceFingerprint string `bson:"device_fingerprint"  json:"-"`
 	// Not nil jevha user ne "24h madhe session delete kara" request keli.
 	// Time pass zala ki next login la fingerprint reset hoто, nava device allow.
-	SessionDeleteAt   *time.Time `bson:"session_delete_at"   json:"-"`
+	SessionDeleteAt *time.Time `bson:"session_delete_at"   json:"-"`
 }
 
 // Session — one active session per user (new login kills old)
 type Session struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty"`
 	UserID    primitive.ObjectID `bson:"user_id"`
-	Token     string             `bson:"token"`       // JWT token string (for fast lookup)
-	IP        string             `bson:"ip"`          // last known IP
+	Token     string             `bson:"token"` // JWT token string (for fast lookup)
+	IP        string             `bson:"ip"`    // last known IP
 	UserAgent string             `bson:"user_agent"`
 	CreatedAt time.Time          `bson:"created_at"`
 	ExpiresAt time.Time          `bson:"expires_at"`
@@ -71,26 +72,26 @@ type Session struct {
 
 // Course — a course admin creates via bot
 type Course struct {
-	ID          primitive.ObjectID `bson:"_id,omitempty"  json:"id"`
-	Title       string             `bson:"title"          json:"title"`
-	Description string             `bson:"description"    json:"description"`
-	Thumbnail   string             `bson:"thumbnail"      json:"thumbnail"`    // telegram file_id or URL
-	Price       string             `bson:"price"          json:"price"`        // display string e.g. "₹999"
-	BuyLink     string             `bson:"buy_link"       json:"buy_link"`     // payment / WhatsApp link
-	ChannelID     int64            `bson:"channel_id"     json:"channel_id"`   // dedicated Telegram channel for this course
-	IsActive      bool             `bson:"is_active"      json:"is_active"`
-	CreatedAt     time.Time        `bson:"created_at"     json:"created_at"`
-	DownloadLimit int              `bson:"download_limit" json:"download_limit"` // per-user daily offline download limit (0 = default 3)
+	ID            primitive.ObjectID `bson:"_id,omitempty"  json:"id"`
+	Title         string             `bson:"title"          json:"title"`
+	Description   string             `bson:"description"    json:"description"`
+	Thumbnail     string             `bson:"thumbnail"      json:"thumbnail"`  // telegram file_id or URL
+	Price         string             `bson:"price"          json:"price"`      // display string e.g. "₹999"
+	BuyLink       string             `bson:"buy_link"       json:"buy_link"`   // payment / WhatsApp link
+	ChannelID     int64              `bson:"channel_id"     json:"channel_id"` // dedicated Telegram channel for this course
+	IsActive      bool               `bson:"is_active"      json:"is_active"`
+	CreatedAt     time.Time          `bson:"created_at"     json:"created_at"`
+	DownloadLimit int                `bson:"download_limit" json:"download_limit"` // per-user daily offline download limit (0 = default 3)
 }
 
 // Access — which user can access which course (no expiry by design)
 type Access struct {
-	ID        primitive.ObjectID  `bson:"_id,omitempty"`
-	UserID    primitive.ObjectID  `bson:"user_id"`
-	CourseID  primitive.ObjectID  `bson:"course_id"`
-	GrantedAt time.Time           `bson:"granted_at"`
-	GrantedBy int64               `bson:"granted_by"`  // telegram admin user_id
-	ExpiresAt *time.Time          `bson:"expires_at"`  // nil = permanent
+	ID        primitive.ObjectID `bson:"_id,omitempty"`
+	UserID    primitive.ObjectID `bson:"user_id"`
+	CourseID  primitive.ObjectID `bson:"course_id"`
+	GrantedAt time.Time          `bson:"granted_at"`
+	GrantedBy int64              `bson:"granted_by"` // telegram admin user_id
+	ExpiresAt *time.Time         `bson:"expires_at"` // nil = permanent
 }
 
 // CachedFile — one Telegram message cached from channel
@@ -98,10 +99,10 @@ type Access struct {
 type CachedFile struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty"  json:"id"`
 	MessageID int                `bson:"message_id"     json:"message_id"`
-	ChannelID int64              `bson:"channel_id"     json:"channel_id"`   // which TG channel this message is from
+	ChannelID int64              `bson:"channel_id"     json:"channel_id"` // which TG channel this message is from
 	CourseID  primitive.ObjectID `bson:"course_id"      json:"course_id"`
-	Title     string             `bson:"title"          json:"title"`      // human-readable label (caption > filename)
-	Caption   string             `bson:"caption"        json:"caption"`    // raw Telegram message caption
+	Title     string             `bson:"title"          json:"title"`   // human-readable label (caption > filename)
+	Caption   string             `bson:"caption"        json:"caption"` // raw Telegram message caption
 	FileName  string             `bson:"file_name"      json:"file_name"`
 	MimeType  string             `bson:"mime_type"      json:"mime_type"`
 	FileSize  int64              `bson:"file_size"      json:"file_size"`
@@ -112,9 +113,9 @@ type CachedFile struct {
 // Worker — an external streaming worker instance registered with the main server.
 type Worker struct {
 	ID       primitive.ObjectID `bson:"_id"`
-	URL      string             `bson:"url"`       // "https://worker1.koyeb.app" (no trailing slash)
-	Status   string             `bson:"status"`    // "active" | "unhealthy" | "offline"
-	AddedBy  string             `bson:"added_by"`  // "env" | "admin"
+	URL      string             `bson:"url"`      // "https://worker1.koyeb.app" (no trailing slash)
+	Status   string             `bson:"status"`   // "active" | "unhealthy" | "offline"
+	AddedBy  string             `bson:"added_by"` // "env" | "admin"
 	LastSeen time.Time          `bson:"last_seen"`
 	AddedAt  time.Time          `bson:"added_at"`
 }
@@ -140,7 +141,7 @@ type Announcement struct {
 	ID        primitive.ObjectID  `bson:"_id,omitempty"  json:"id"`
 	Title     string              `bson:"title"          json:"title"`
 	Message   string              `bson:"message"        json:"message"`
-	CourseID  *primitive.ObjectID `bson:"course_id"      json:"course_id"`  // nil = global
+	CourseID  *primitive.ObjectID `bson:"course_id"      json:"course_id"` // nil = global
 	CreatedAt time.Time           `bson:"created_at"     json:"created_at"`
 	IsActive  bool                `bson:"is_active"      json:"is_active"`
 }
@@ -148,11 +149,11 @@ type Announcement struct {
 // StreamNonce — per-page-load nonce that ties a player page to its stream.
 type StreamNonce struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty"`
-	Nonce      string             `bson:"nonce"`       // random UUID — goes in ?n= query param
+	Nonce      string             `bson:"nonce"` // random UUID — goes in ?n= query param
 	UserID     primitive.ObjectID `bson:"user_id"`
 	WatchToken string             `bson:"watch_token"` // the /watch/:token value (for scoping)
 	CreatedAt  time.Time          `bson:"created_at"`
-	ExpiresAt  time.Time          `bson:"expires_at"`  // TTL index auto-deletes this
+	ExpiresAt  time.Time          `bson:"expires_at"` // TTL index auto-deletes this
 }
 
 // FolderRange — एका folder मधला एक number range (e.g. 1–26)
@@ -171,9 +172,20 @@ type CourseFolder struct {
 	CourseID  primitive.ObjectID `bson:"course_id"     json:"course_id"`
 	Name      string             `bson:"name"          json:"name"`
 	Ranges    []FolderRange      `bson:"ranges"        json:"ranges"`
-	Messages  []int              `bson:"messages"      json:"messages"`   // individual sort_order numbers (outside ranges)
-	Order     int                `bson:"order"         json:"order"`      // display order (1, 2, 3...)
+	Messages  []int              `bson:"messages"      json:"messages"` // individual sort_order numbers (outside ranges)
+	Order     int                `bson:"order"         json:"order"`    // display order (1, 2, 3...)
 	CreatedAt time.Time          `bson:"created_at"    json:"created_at"`
+}
+
+// EmailProviderAssignment — ek email permanently ekach SMTP provider la
+// fixed (round-robin nahi). ek velач assign zala ki kayam toच provider
+// vaaparla jato — first N providers la max 7-7 capacity, last provider
+// overflow (unlimited).
+type EmailProviderAssignment struct {
+	ID            primitive.ObjectID `bson:"_id,omitempty"      json:"id"`
+	Email         string             `bson:"email"              json:"email"`
+	ProviderIndex int                `bson:"provider_index"     json:"provider_index"` // 0-based index into smtpProviders
+	AssignedAt    time.Time          `bson:"assigned_at"        json:"assigned_at"`
 }
 
 // Connect reads MONGODB_URI from env, connects, creates collections + indexes.
@@ -207,20 +219,21 @@ func Connect() {
 	Database = client.Database(dbName)
 
 	// Assign collection handles
-	ColUsers        = Database.Collection("users")
-	ColCourses      = Database.Collection("courses")
-	ColAccess       = Database.Collection("access")
-	ColSessions     = Database.Collection("sessions")
+	ColUsers = Database.Collection("users")
+	ColCourses = Database.Collection("courses")
+	ColAccess = Database.Collection("access")
+	ColSessions = Database.Collection("sessions")
 	ColChannelCache = Database.Collection("channel_cache")
 	ColStreamNonces = Database.Collection("stream_nonces")
-	ColWorkers      = Database.Collection("workers")
-	ColOTPs         = Database.Collection("otp_records")             // ← OTP login records
-	ColPendingRegs  = Database.Collection("pending_registrations")   // ← unverified registrations
-	ColURLMonitors  = Database.Collection("url_monitors")            // ← URL monitor
-	ColWatchHistory  = Database.Collection("watch_history")           // ← watch history
-	ColAnnouncements = Database.Collection("announcements")           // ← broadcast announcements
-	ColFolders       = Database.Collection("course_folders")          // ← course folders
-	ColSettings      = Database.Collection("app_settings")            // ← key-value settings
+	ColWorkers = Database.Collection("workers")
+	ColOTPs = Database.Collection("otp_records")                    // ← OTP login records
+	ColPendingRegs = Database.Collection("pending_registrations")   // ← unverified registrations
+	ColURLMonitors = Database.Collection("url_monitors")            // ← URL monitor
+	ColWatchHistory = Database.Collection("watch_history")          // ← watch history
+	ColAnnouncements = Database.Collection("announcements")         // ← broadcast announcements
+	ColFolders = Database.Collection("course_folders")              // ← course folders
+	ColSettings = Database.Collection("app_settings")               // ← key-value settings
+	ColEmailProviderMap = Database.Collection("email_provider_map") // ← email → SMTP provider fixed assignment
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -321,6 +334,10 @@ func createIndexes() {
 	// course_folders: fast lookup by course_id, ordered by display order
 	ensureIndex(ctx, ColFolders, bson.D{{Key: "course_id", Value: 1}}, false)
 	ensureIndex(ctx, ColFolders, bson.D{{Key: "order", Value: 1}}, false)
+
+	// email_provider_map: ek email = ekach SMTP provider, permanently (round-robin nahi)
+	ensureIndex(ctx, ColEmailProviderMap, bson.D{{Key: "email", Value: 1}}, true)
+	ensureIndex(ctx, ColEmailProviderMap, bson.D{{Key: "provider_index", Value: 1}}, false)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
