@@ -269,14 +269,24 @@ const PublicStreamTokenTTL = 3 * time.Hour
 type PublicStreamPayload struct {
 	MessageID int64     `json:"mid"`
 	ExpiresAt time.Time `json:"exp"`
+	ChannelID int64     `json:"cid,omitempty"` // 0 = LOG_CHANNEL (default), non-zero = private channel (userbot stream)
 }
 
 // NewPublicToken creates a 3-hour encrypted token for open /stream/ links.
 // No user identity — anyone who has the URL can stream.
+// Streams from LOG_CHANNEL (ChannelID = 0).
 func NewPublicToken(messageID int) (string, error) {
+	return NewPublicTokenForChannel(messageID, 0)
+}
+
+// NewPublicTokenForChannel creates a token for a specific channel (private channels).
+// channelID = 0 → LOG_CHANNEL (same as NewPublicToken).
+// channelID != 0 → userbot ने tya private channel madhun stream karto.
+func NewPublicTokenForChannel(messageID int, channelID int64) (string, error) {
 	payload := PublicStreamPayload{
 		MessageID: int64(messageID),
 		ExpiresAt: time.Now().Add(PublicStreamTokenTTL),
+		ChannelID: channelID,
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -286,39 +296,46 @@ func NewPublicToken(messageID int) (string, error) {
 }
 
 // VerifyPublicToken decrypts and validates a public stream token.
-// Returns messageID on success.
+// Returns messageID on success (ChannelID=0 assumed — backward compat).
 func VerifyPublicToken(tokenStr string) (int, error) {
+	msgID, _, err := VerifyPublicTokenFull(tokenStr)
+	return msgID, err
+}
+
+// VerifyPublicTokenFull returns (messageID, channelID, error).
+// channelID = 0 → LOG_CHANNEL; channelID != 0 → private channel via userbot.
+func VerifyPublicTokenFull(tokenStr string) (int, int64, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(tokenStr)
 	if err != nil {
-		return 0, ErrTokenInvalid
+		return 0, 0, ErrTokenInvalid
 	}
 
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
-		return 0, ErrTokenInvalid
+		return 0, 0, ErrTokenInvalid
 	}
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		return 0, ErrTokenInvalid
+		return 0, 0, ErrTokenInvalid
 	}
 	nonceSize := gcm.NonceSize()
 	if len(raw) < nonceSize {
-		return 0, ErrTokenInvalid
+		return 0, 0, ErrTokenInvalid
 	}
 	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return 0, ErrTokenInvalid
+		return 0, 0, ErrTokenInvalid
 	}
 
 	var payload PublicStreamPayload
 	if err = json.Unmarshal(plaintext, &payload); err != nil {
-		return 0, ErrTokenInvalid
+		return 0, 0, ErrTokenInvalid
 	}
 	if time.Now().After(payload.ExpiresAt) {
-		return 0, ErrTokenExpired
+		return 0, 0, ErrTokenExpired
 	}
-	return int(payload.MessageID), nil
+	return int(payload.MessageID), payload.ChannelID, nil
 }
 
 // ─── IP helper (kept for logging only — not used in auth) ────────────────────
