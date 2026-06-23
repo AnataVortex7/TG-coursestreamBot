@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"path/filepath"
 	"strings"
@@ -1331,13 +1332,14 @@ func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 // parallel चालतात, म्हणून हे struct goroutines मध्ये pass केलं जातं.
 
 type preparedMessage struct {
-	textOnly     bool // true असेल तर Phase B ने काही करायची गरज नाही (Phase A ने सगळं केलं)
-	colabSent    bool // true असेल तर Colab ने already Telegram la pathavle — Phase B skip
-	tgMsg        *tg.Message
-	finalCaption string
-	file         *types.File
-	uploadedFile tg.InputFileClass
-	msgID        int
+	textOnly      bool // true असेल तर Phase B ने काही करायची गरज नाही (Phase A ने सगळं केलं)
+	colabSent     bool // true असेल तर Colab ने already Telegram la pathavle — Phase B skip
+	tgMsg         *tg.Message
+	finalCaption  string
+	file          *types.File
+	uploadedFile  tg.InputFileClass
+	msgID         int
+	tempVideoPath string // FFmpeg thumb fallback sathi — sendPreparedMessage use karto, nantar delete
 }
 
 // ── prepareMessage ───────────────────────────────────────────────────────────
@@ -1487,6 +1489,7 @@ func prepareMessage(
 
 	var uploadedFile tg.InputFileClass
 	var colabSent bool
+	var pm_tempPath string // non-watermark path sathi FFmpeg thumb fallback
 
 	if wmOk && isVideoFile(file) {
 		// Watermark path: download → Colab queue → upload
@@ -1531,7 +1534,8 @@ func prepareMessage(
 			finalCaptionForColab,
 		)
 	} else {
-		uploadedFile, err = downloadAndReupload(
+		var tmpPath string
+		uploadedFile, tmpPath, err = downloadAndReupload(
 			stallCtx,
 			upCtx,
 			userbotClient,
@@ -1540,11 +1544,20 @@ func prepareMessage(
 			onDownloadProgress,
 			onUploadProgress,
 		)
+		if tmpPath != "" {
+			// sendPreparedMessage thumbnail extract karayala use karto,
+			// nantar toch delete karnar (defer ethun karta yet nahi kaaran
+			// return zhalyavar tempVideoPath caller kade jato)
+			pm_tempPath = tmpPath
+		}
 	}
 
 	stallTimer.Stop()
 
 	if err != nil {
+		if pm_tempPath != "" {
+			os.Remove(pm_tempPath)
+		}
 		if stallCtx.Err() != nil && bgCtx.Err() == nil {
 			return nil, fmt.Errorf("download stalled (30min no progress) | Retry: /userbotdl %d %d", chatIDRaw, msgID)
 		}
@@ -1553,15 +1566,19 @@ func prepareMessage(
 
 	// Colab ne Telegram la already pathavle — Phase B la kahi karayachi garaj nahi
 	if colabSent {
+		if pm_tempPath != "" {
+			os.Remove(pm_tempPath)
+		}
 		return &preparedMessage{colabSent: true}, nil
 	}
 
 	return &preparedMessage{
-		tgMsg:        tgMsg,
-		finalCaption: finalCaption,
-		file:         file,
-		uploadedFile: uploadedFile,
-		msgID:        msgID,
+		tgMsg:         tgMsg,
+		finalCaption:  finalCaption,
+		file:          file,
+		uploadedFile:  uploadedFile,
+		msgID:         msgID,
+		tempVideoPath: pm_tempPath,
 	}, nil
 }
 
@@ -1658,6 +1675,43 @@ func sendPreparedMessage(
 				}
 			}
 		}
+
+		// Fallback 3: setthumbnail nahi, Telegram thumb nahi/fail →
+		// pm.tempVideoPath var FFmpeg ne video madhlach frame extract karto.
+		// Colab path la he hot nahi (Colab swatah extract karto + colabSent=true
+		// aslyamule ha block la reach hoch nahi).
+		if len(thumbSrc) == 0 && pm.tempVideoPath != "" {
+			thumbPath := pm.tempVideoPath + "_thumb.jpg"
+			// Video duration probe
+			durOut, _ := exec.Command("ffprobe", "-v", "error",
+				"-show_entries", "format=duration",
+				"-of", "default=noprint_wrappers=1:nokey=1",
+				pm.tempVideoPath).Output()
+			var seekSec int = 5
+			if d, err := strconv.ParseFloat(strings.TrimSpace(string(durOut)), 64); err == nil && d > 0 {
+				seekSec = int(d * 0.2)
+				if seekSec < 1 {
+					seekSec = 1
+				}
+			}
+			extractErr := exec.Command("ffmpeg",
+				"-ss", strconv.Itoa(seekSec),
+				"-i", pm.tempVideoPath,
+				"-vframes", "1",
+				"-q:v", "2",
+				"-y", thumbPath).Run()
+			if extractErr == nil {
+				if data, readErr := os.ReadFile(thumbPath); readErr == nil && len(data) > 0 {
+					thumbSrc = data
+				}
+				os.Remove(thumbPath)
+			}
+		}
+	}
+
+	// tempVideoPath — thumb extract zala (yashswi ki nahi) — cleanup
+	if pm.tempVideoPath != "" {
+		os.Remove(pm.tempVideoPath)
 	}
 
 	inputMedia := &tg.InputMediaUploadedDocument{
@@ -1965,14 +2019,15 @@ func downloadAndReupload(
 	file *types.File,
 	onDownloadProgress func(written, total int64),
 	onUploadProgress func(written, total int64),
-) (tg.InputFileClass, error) {
+) (tg.InputFileClass, string, error) {
 
 	tmpFile, err := os.CreateTemp("", "userbotdl-*.tmp")
 	if err != nil {
-		return nil, fmt.Errorf("temp file create failed: %w", err)
+		return nil, "", fmt.Errorf("temp file create failed: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	// delete caller karnar — thumb extract sathi lagel
+	// (defer os.Remove kadhun takla)
 
 	var dlWriter io.Writer = tmpFile
 	if onDownloadProgress != nil {
@@ -1987,18 +2042,21 @@ func downloadAndReupload(
 	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
-		return nil, fmt.Errorf("download failed: %w", err)
+		os.Remove(tmpPath)
+		return nil, "", fmt.Errorf("download failed: %w", err)
 	}
 
 	info, err := os.Stat(tmpPath)
 	if err != nil {
-		return nil, fmt.Errorf("temp file stat failed: %w", err)
+		os.Remove(tmpPath)
+		return nil, "", fmt.Errorf("temp file stat failed: %w", err)
 	}
 	totalSize := info.Size()
 
 	readFile, err := os.Open(tmpPath)
 	if err != nil {
-		return nil, fmt.Errorf("temp file reopen failed: %w", err)
+		os.Remove(tmpPath)
+		return nil, "", fmt.Errorf("temp file reopen failed: %w", err)
 	}
 	defer readFile.Close()
 
@@ -2014,10 +2072,11 @@ func downloadAndReupload(
 	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
 	uploadedFile, err := up.FromReader(upCtx, file.FileName, upReader)
 	if err != nil {
-		return nil, fmt.Errorf("upload failed: %w", err)
+		os.Remove(tmpPath)
+		return nil, "", fmt.Errorf("upload failed: %w", err)
 	}
 
-	return uploadedFile, nil
+	return uploadedFile, tmpPath, nil
 }
 
 // ── progressWriter ────────────────────────────────────────────────────────────
