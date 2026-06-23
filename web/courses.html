@@ -268,6 +268,10 @@
   </div>
   <div class="nav-right">
     <span class="nav-user">👤 {{ .username }}</span>
+    <button onclick="openMessagesModal()" style="position:relative;background:transparent;border:1px solid var(--border-dark);color:var(--text);padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px;">
+      📬 Messages
+      <span id="msg-unread-badge" style="display:none;position:absolute;top:-6px;right:-6px;background:#ff5c5c;color:#fff;font-size:10px;font-weight:700;min-width:18px;height:18px;border-radius:9px;display:flex;align-items:center;justify-content:center;padding:0 4px;">0</span>
+    </button>
     {{ if .telegramContactEnabled }}
     <a href="https://t.me/{{ .botUsername }}?start=ct_{{ .userIDHex }}" target="_blank"
        style="background:#229ED9;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px;text-decoration:none;display:inline-flex;align-items:center;gap:6px;">
@@ -551,6 +555,20 @@
   </div>
 </div>
 
+<div id="messages-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:999;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border-radius:16px;padding:28px;width:100%;max-width:520px;max-height:80vh;display:flex;flex-direction:column;border:1px solid var(--border);margin:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+      <h3 style="color:var(--text);margin:0;font-size:18px;">📬 Your Messages</h3>
+      <button onclick="closeMessagesModal()" style="background:transparent;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 16px;">Admin ne pathवलेले sagle messages.</p>
+
+    <div id="msg-list-body" style="overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:10px;min-height:80px;">
+      <div style="color:var(--muted);font-size:13px;text-align:center;padding:24px 0;">⏳ Loading...</div>
+    </div>
+  </div>
+</div>
+
 <script>
   function openContactModal() {
     document.getElementById('ct-subject').value = '';
@@ -565,6 +583,63 @@
   document.getElementById('contact-modal').addEventListener('click', function(e) {
     if (e.target === this) closeContactModal();
   });
+
+  // ─── Your Messages ──────────────────────────────────────────────────────────
+  function openMessagesModal() {
+    document.getElementById('messages-modal').style.display = 'flex';
+    loadMyMessages();
+  }
+  function closeMessagesModal() {
+    document.getElementById('messages-modal').style.display = 'none';
+  }
+  document.getElementById('messages-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeMessagesModal();
+  });
+
+  async function loadMyMessages() {
+    const body = document.getElementById('msg-list-body');
+    body.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px 0;">⏳ Loading...</div>';
+    try {
+      const res = await fetch('/api/my-messages');
+      const msgs = await res.json();
+      if (!Array.isArray(msgs) || msgs.length === 0) {
+        body.innerHTML = '<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px 0;">Kuthlाही message nahi aahe.</div>';
+      } else {
+        body.innerHTML = msgs.map(m => `
+          <div style="background:var(--input-bg);border:1px solid ${m.is_unread ? 'var(--accent)' : 'var(--border)'};border-radius:10px;padding:14px 16px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+              ${m.is_unread ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;"></span>' : ''}
+              <div style="font-weight:700;color:var(--text);font-size:14px;">${escHtml(m.subject)}</div>
+            </div>
+            <div style="color:#9097a5;font-size:13.5px;line-height:1.6;white-space:pre-line;">${escHtml(m.message)}</div>
+            <div style="color:#555;font-size:11px;margin-top:8px;">${escHtml(m.sent_at)}</div>
+          </div>`).join('');
+      }
+      // List ughadli — sagle unread "read" zale (server-side already mark zale,
+      // ata badge refresh karto)
+      refreshUnreadBadge();
+    } catch (e) {
+      body.innerHTML = '<div style="color:#ff5c5c;font-size:13px;text-align:center;padding:24px 0;">❌ Load karta ala nahi.</div>';
+    }
+  }
+
+  async function refreshUnreadBadge() {
+    try {
+      const res = await fetch('/api/my-messages/unread-count');
+      const data = await res.json();
+      const badge = document.getElementById('msg-unread-badge');
+      const count = data.unread_count || 0;
+      if (count > 0) {
+        badge.textContent = count > 9 ? '9+' : String(count);
+        badge.style.display = 'flex';
+      } else {
+        badge.style.display = 'none';
+      }
+    } catch (e) { /* silent */ }
+  }
+  refreshUnreadBadge();
+  setInterval(refreshUnreadBadge, 60000); // dar 1 minit la check
+
   async function submitContact() {
     const subject = document.getElementById('ct-subject').value.trim();
     const message = document.getElementById('ct-message').value.trim();
