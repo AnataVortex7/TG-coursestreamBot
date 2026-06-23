@@ -1,8 +1,9 @@
 package routes
 
 // /stream/:token — public streaming endpoint.
-// कोणत्याही login शिवाय access होतो.
-// Token 3 तासांसाठी valid असतो (bot generate करतो).
+// No login required. Token valid for 3 hours.
+// channelID = 0 → LOG_CHANNEL via worker bot (existing path)
+// channelID != 0 → private channel via userbot (new path)
 
 import (
 	"bytes"
@@ -16,6 +17,7 @@ import (
 	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/stream"
 	"EverythingSuckz/fsb/internal/token"
+	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
 	range_parser "github.com/quantumsheep/range-parser"
@@ -24,23 +26,19 @@ import (
 	"go.uber.org/zap"
 )
 
-// log is declared here — routes.go च्या Load() मध्ये assign होतो.
+// log — routes.go Load() madhe assign hoto.
 var log *zap.Logger
 
 func (e *allRoutes) LoadStream(r *Route) {
 	r.Engine.GET("/stream/:token", handlePublicStream)
 }
 
-// handlePublicStream — /stream/:token
-// Token verify करतो, file Telegram वरून stream करतो.
-// Auth नाही — URL असलेला कोणीही access करू शकतो.
 func handlePublicStream(c *gin.Context) {
 	w := c.Writer
 	req := c.Request
 
-	// 1. Token verify
 	tokenStr := c.Param("token")
-	messageID, err := token.VerifyPublicToken(tokenStr)
+	messageID, channelID, err := token.VerifyPublicTokenFull(tokenStr)
 	if err != nil {
 		switch err {
 		case token.ErrTokenExpired:
@@ -51,22 +49,55 @@ func handlePublicStream(c *gin.Context) {
 		return
 	}
 
-	// 2. Telegram वरून file info आण
-	worker := bot.GetNextWorker()
-	file, err := utils.FileFromMessage(c, worker.Client, messageID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not load file: %s", err.Error())})
+	var file *types.File
+
+	if channelID == 0 {
+		// Existing: worker bot + LOG_CHANNEL
+		worker := bot.GetNextWorker()
+		file, err = utils.FileFromMessage(c, worker.Client, messageID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not load file: %s", err.Error())})
+			return
+		}
+		servePublicStream(c, w, req, file, func(start, end int64) (io.ReadCloser, error) {
+			return stream.NewStreamPipe(c, worker.Client, file.Location, start, end, log)
+		})
 		return
 	}
 
-	// 3. Photo / small file (no size info — CDN download)
+	// Private channel: userbot
+	ubClient := bot.UserBot.GetClient()
+	if ubClient == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Userbot not running — private channel streaming unavailable."})
+		return
+	}
+	file, err = utils.FileFromMessageInChannel(c, ubClient, messageID, channelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not load file from private channel: %s", err.Error())})
+		return
+	}
+	servePublicStream(c, w, req, file, func(start, end int64) (io.ReadCloser, error) {
+		return stream.NewStreamPipe(c, ubClient, file.Location, start, end, log)
+	})
+}
+
+// servePublicStream — common HTTP range-aware streaming for both paths.
+func servePublicStream(
+	c *gin.Context,
+	w http.ResponseWriter,
+	req *http.Request,
+	file *types.File,
+	newPipe func(start, end int64) (io.ReadCloser, error),
+) {
+	// Photo / small file → CDN download
 	if file.FileSize == 0 {
+		worker := bot.GetNextWorker()
 		data, err := downloadPhotoChunked(c, worker.Client.API(), file.Location)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load photo."})
 			return
 		}
-		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", file.FileName))
+		c.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, file.FileName))
 		c.Header("Content-Length", strconv.Itoa(len(data)))
 		if req.Method != "HEAD" {
 			c.Data(http.StatusOK, file.MimeType, data)
@@ -74,11 +105,10 @@ func handlePublicStream(c *gin.Context) {
 		return
 	}
 
-	// 4. Range-aware streaming
 	mimeType := normalizePublicMime(file.MimeType, file.FileName)
 	c.Header("Accept-Ranges", "bytes")
 	c.Header("Content-Type", mimeType)
-	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", file.FileName))
+	c.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, file.FileName))
 
 	var start, end int64
 	rangeHeader := req.Header.Get("Range")
@@ -107,7 +137,7 @@ func handlePublicStream(c *gin.Context) {
 	}
 
 	contentLength := end - start + 1
-	pipe, err := stream.NewStreamPipe(c, worker.Client, file.Location, start, end, log)
+	pipe, err := newPipe(start, end)
 	if err != nil {
 		log.Sugar().Errorf("failed to create stream pipe: %v", err)
 		return
@@ -150,10 +180,9 @@ func normalizePublicMime(mime, fileName string) string {
 	}
 }
 
-// downloadPhotoChunked downloads a photo chunk by chunk,
-// handling both upload.file and upload.fileCdnRedirect responses.
+// downloadPhotoChunked downloads a photo chunk by chunk.
 func downloadPhotoChunked(ctx *gin.Context, api *tg.Client, location tg.InputFileLocationClass) ([]byte, error) {
-	const chunkSize = 512 * 1024 // 512 KB
+	const chunkSize = 512 * 1024
 	var buf bytes.Buffer
 	var offset int64
 
@@ -179,17 +208,14 @@ func downloadPhotoChunked(ctx *gin.Context, api *tg.Client, location tg.InputFil
 			if len(chunk) < chunkSize {
 				return buf.Bytes(), nil
 			}
-
 		case *tg.UploadFileCDNRedirect:
 			return downloadFromCDN(r)
-
 		default:
 			return nil, fmt.Errorf("unexpected UploadGetFile response type %T", res)
 		}
 	}
 }
 
-// downloadFromCDN fetches photo data from Telegram CDN.
 func downloadFromCDN(redirect *tg.UploadFileCDNRedirect) ([]byte, error) {
 	url := fmt.Sprintf("https://cdn%d.telegram.org/file/%s",
 		redirect.DCID,
@@ -200,11 +226,9 @@ func downloadFromCDN(redirect *tg.UploadFileCDNRedirect) ([]byte, error) {
 		return nil, fmt.Errorf("CDN fetch: %w", err)
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("CDN returned status %d", resp.StatusCode)
 	}
-
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("CDN read: %w", err)
