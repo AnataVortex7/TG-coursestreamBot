@@ -257,7 +257,13 @@ func ListActiveSessions() ([]Session, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
 
-	cursor, err := ColSessions.Find(ctx, bson.M{}, options.Find().SetSort(bson.M{"created_at": -1}))
+	// Fakt non-expired sessions (expired sessions TTL janitor kadhto, pan
+	// refresh interval madhe diste rahtat — tya exclude karto taki Kill
+	// button meaningful rahil).
+	cursor, err := ColSessions.Find(ctx,
+		bson.M{"expires_at": bson.M{"$gt": time.Now()}},
+		options.Find().SetSort(bson.M{"created_at": -1}),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -912,6 +918,99 @@ func GetWatchHistoryForCourse(userID, courseID primitive.ObjectID) ([]WatchHisto
 	return records, nil
 }
 
+// CourseWatchSummary — admin chya "User Detail" page var, user ne kuthल्या
+// courses madhe kiti lectures baghitले tyachi summary (drill-down list sathi).
+type CourseWatchSummary struct {
+	CourseID    primitive.ObjectID `json:"course_id"`
+	CourseTitle string             `json:"course_title"`
+	VideoCount  int                `json:"video_count"`
+}
+
+// GetUserWatchedCoursesSummary — user ne ज्या-ज्या courses madhe kahi baghitले
+// aahe, tyanchi list + pratyekat kiti vegळी lectures baghitली ते count.
+func GetUserWatchedCoursesSummary(userID primitive.ObjectID) ([]CourseWatchSummary, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	pipeline := mongo.Pipeline{
+		bson.D{{Key: "$match", Value: bson.M{"user_id": userID}}},
+		bson.D{{Key: "$group", Value: bson.M{
+			"_id":   "$course_id",
+			"count": bson.M{"$sum": 1},
+		}}},
+		bson.D{{Key: "$sort", Value: bson.M{"count": -1}}},
+	}
+	cursor, err := ColWatchHistory.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var rows []struct {
+		CourseID primitive.ObjectID `bson:"_id"`
+		Count    int                `bson:"count"`
+	}
+	if err = cursor.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+
+	result := make([]CourseWatchSummary, 0, len(rows))
+	for _, r := range rows {
+		title := "(deleted course)"
+		if course, _ := GetCourseByID(r.CourseID); course != nil {
+			title = course.Title
+		}
+		result = append(result, CourseWatchSummary{
+			CourseID:    r.CourseID,
+			CourseTitle: title,
+			VideoCount:  r.Count,
+		})
+	}
+	return result, nil
+}
+
+// CountDistinctVideosWatched — user ne aataparyant (sagle courses milun) kiti
+// vegळी lectures baghitली - admin users-list cha "Videos Watched" overview badge.
+func CountDistinctVideosWatched(userID primitive.ObjectID) (int64, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	return ColWatchHistory.CountDocuments(ctx, bson.M{"user_id": userID})
+}
+
+// CountDistinctVideosWatchedBulk — admin users-list sathi - EKACH aggregation
+// call madhe SAGLYA users cha count milvto (N+1 query टाळण्यासाठी).
+// Return: map[userIDHex]count
+func CountDistinctVideosWatchedBulk() (map[string]int64, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	pipeline := mongo.Pipeline{
+		bson.D{{Key: "$group", Value: bson.M{
+			"_id":   "$user_id",
+			"count": bson.M{"$sum": 1},
+		}}},
+	}
+	cursor, err := ColWatchHistory.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var rows []struct {
+		UserID primitive.ObjectID `bson:"_id"`
+		Count  int64              `bson:"count"`
+	}
+	if err = cursor.All(ctx, &rows); err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		result[r.UserID.Hex()] = r.Count
+	}
+	return result, nil
+}
+
 // GetFileViewCount returns the view_count and last_viewed_at for one specific file.
 // Returns (0, zero-time, nil) if the user has never viewed the file.
 func GetFileViewCount(userID primitive.ObjectID, messageID int, channelID int64) (int, time.Time, error) {
@@ -1055,15 +1154,12 @@ func GetUsersForCourse(courseID primitive.ObjectID) ([]User, error) {
 	return users, nil
 }
 
-// DeleteAnnouncement soft-deletes an announcement by ID.
+// DeleteAnnouncement permanently deletes an announcement from DB.
 func DeleteAnnouncement(id primitive.ObjectID) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 
-	_, err := ColAnnouncements.UpdateOne(ctx,
-		bson.M{"_id": id},
-		bson.M{"$set": bson.M{"is_active": false}},
-	)
+	_, err := ColAnnouncements.DeleteOne(ctx, bson.M{"_id": id})
 	return err
 }
 
@@ -1323,6 +1419,73 @@ func AssignEmailProvider(email string, providerIndex int) error {
 			"assigned_at":    time.Now(),
 		}},
 		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// USER MESSAGES (admin → user, in-app + email)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// CreateUserMessage — admin ने message pathवल्यावर (email सोबत) save karto,
+// taki user cha account madhe "Your Messages" tab madhe disel.
+func CreateUserMessage(userID primitive.ObjectID, subject, message string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColUserMessages.InsertOne(ctx, &UserMessage{
+		ID:      primitive.NewObjectID(),
+		UserID:  userID,
+		Subject: subject,
+		Message: message,
+		SentAt:  time.Now(),
+		ReadAt:  nil,
+	})
+	return err
+}
+
+// ListUserMessages — user chya sagle messages, newest first. User-facing
+// "Your Messages" tab आणि admin chya "User Detail" page donhikade vaaparla
+// jato.
+func ListUserMessages(userID primitive.ObjectID) ([]UserMessage, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColUserMessages.Find(ctx,
+		bson.M{"user_id": userID},
+		options.Find().SetSort(bson.M{"sent_at": -1}),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var msgs []UserMessage
+	if err = cursor.All(ctx, &msgs); err != nil {
+		return nil, err
+	}
+	return msgs, nil
+}
+
+// CountUnreadUserMessages — nav bar cha red badge sathi.
+func CountUnreadUserMessages(userID primitive.ObjectID) (int64, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	return ColUserMessages.CountDocuments(ctx, bson.M{
+		"user_id": userID,
+		"read_at": nil,
+	})
+}
+
+// MarkAllUserMessagesRead — user ne messages list ughadli ki sagle unread
+// messages "read" mhanun mark hotat (list ughadne = baghitले, simple rule).
+func MarkAllUserMessagesRead(userID primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColUserMessages.UpdateMany(ctx,
+		bson.M{"user_id": userID, "read_at": nil},
+		bson.M{"$set": bson.M{"read_at": time.Now()}},
 	)
 	return err
 }

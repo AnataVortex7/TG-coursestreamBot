@@ -34,6 +34,7 @@ var (
 	ColFolders          *mongo.Collection // course folders (subject-wise grouping)
 	ColSettings         *mongo.Collection // key-value app settings (toggles etc.)
 	ColEmailProviderMap *mongo.Collection // email → SMTP provider permanent assignment (round-robin nahi, fixed)
+	ColUserMessages     *mongo.Collection // admin → user in-app messages (email सोबत, read status sकट)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -132,6 +133,18 @@ type WatchHistory struct {
 	// Resume position — user ने video कुठे सोडला ते track करतो
 	WatchPosition          float64   `bson:"watch_position"            json:"watch_position"`
 	WatchPositionUpdatedAt time.Time `bson:"watch_position_updated_at" json:"watch_position_updated_at"`
+}
+
+// UserMessage — admin ne user la pathavlela ek message (email सोबत
+// in-app pn disto). ReadAt nil = unread, nahitar user ne messages list
+// kevha ughadli ti vel.
+type UserMessage struct {
+	ID      primitive.ObjectID `bson:"_id,omitempty"  json:"id"`
+	UserID  primitive.ObjectID `bson:"user_id"        json:"user_id"`
+	Subject string             `bson:"subject"        json:"subject"`
+	Message string             `bson:"message"        json:"message"`
+	SentAt  time.Time          `bson:"sent_at"        json:"sent_at"`
+	ReadAt  *time.Time         `bson:"read_at"        json:"read_at"`
 }
 
 // Announcement — admin broadcast message shown as popup (global) or course banner (course-specific).
@@ -234,6 +247,7 @@ func Connect() {
 	ColFolders = Database.Collection("course_folders")              // ← course folders
 	ColSettings = Database.Collection("app_settings")               // ← key-value settings
 	ColEmailProviderMap = Database.Collection("email_provider_map") // ← email → SMTP provider fixed assignment
+	ColUserMessages     = Database.Collection("user_messages")      // ← admin → user in-app messages
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -338,6 +352,10 @@ func createIndexes() {
 	// email_provider_map: ek email = ekach SMTP provider, permanently (round-robin nahi)
 	ensureIndex(ctx, ColEmailProviderMap, bson.D{{Key: "email", Value: 1}}, true)
 	ensureIndex(ctx, ColEmailProviderMap, bson.D{{Key: "provider_index", Value: 1}}, false)
+
+	// user_messages: user chya messages lavkar fetch karayla (newest first)
+	ensureIndex(ctx, ColUserMessages, bson.D{{Key: "user_id", Value: 1}}, false)
+	ensureIndex(ctx, ColUserMessages, bson.D{{Key: "sent_at", Value: -1}}, false)
 }
 
 func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique bool) {
