@@ -70,8 +70,8 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 	// asel tar → userbot cha MainUserbotClient vaaprun file fetch karto,
 	// log channel la forward na karta directly token banto (channelID pn store).
 	msg := u.EffectiveMessage
-	if msg.Media == nil && msg.Message != "" {
-		text := strings.TrimSpace(msg.Message)
+	if msg.Media == nil && msg.Text != "" {
+		text := strings.TrimSpace(msg.Text)
 
 		// Private channel: t.me/c/<channelID>/<msgID>
 		if m := reTgPrivate.FindStringSubmatch(text); len(m) == 3 {
