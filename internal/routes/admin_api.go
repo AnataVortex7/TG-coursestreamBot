@@ -63,9 +63,9 @@ func genAdminToken() string {
 // Per-IP: max 5 failed attempts in 15 min → 30 min lockout.
 
 type loginAttempt struct {
-	failures  int
-	lastFail  time.Time
-	lockedAt  time.Time
+	failures int
+	lastFail time.Time
+	lockedAt time.Time
 }
 
 var (
@@ -370,6 +370,9 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	api.PUT("/users/:id/password", adminChangeUserPassword)
 	api.POST("/users/:id/impersonate", adminImpersonateUser)
 	api.PUT("/users/:id/special", adminToggleSpecialUser)
+	api.GET("/users/:id/watch-summary", adminGetUserWatchSummary)
+	api.GET("/users/:id/watch-history/:course_id", adminGetUserWatchHistoryForCourse)
+	api.GET("/users/:id/messages", adminGetUserMessages)
 
 	// ── Settings ─────────────────────────────────────────────────────────
 	api.GET("/settings/telegram-contact", adminGetTelegramContact)
@@ -411,13 +414,119 @@ func adminStats(c *gin.Context) {
 // USERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// userWithStats — adminListUsers cha response, User struct + derived stats
+// (videos watched) — User struct la touch na karता.
+type userWithStats struct {
+	db.User
+	VideosWatched int64 `json:"videos_watched"`
+}
+
 func adminListUsers(c *gin.Context) {
 	users, err := db.ListUsers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, users)
+
+	// EKACH aggregation call madhe SAGLYA users cha watched-videos count
+	// (N+1 query टाळण्यासाठी — free-tier DB var efficient rahaव).
+	countMap, cErr := db.CountDistinctVideosWatchedBulk()
+	if cErr != nil {
+		countMap = map[string]int64{} // fail-soft — count 0 dakhवेल, list tutणार nahi
+	}
+
+	result := make([]userWithStats, 0, len(users))
+	for _, u := range users {
+		result = append(result, userWithStats{
+			User:          u,
+			VideosWatched: countMap[u.ID.Hex()],
+		})
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// GET /api/admin/users/:id/watch-summary
+// User ne ज्या-ज्या courses madhe kahi baghitले aahe, tyanchi list +
+// pratyekat kiti vegळी lectures (drill-down sathi pahila step).
+func adminGetUserWatchSummary(c *gin.Context) {
+	userID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	summary, err := db.GetUserWatchedCoursesSummary(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+// watchHistoryEntry — admin drill-down response, WatchHistory + lecture title
+// (CachedFile var join karून).
+type watchHistoryEntry struct {
+	Title        string    `json:"title"`
+	ViewCount    int       `json:"view_count"`
+	LastViewedAt time.Time `json:"last_viewed_at"`
+}
+
+// GET /api/admin/users/:id/watch-history/:course_id
+// User ne ya specific course madhe konte lectures kevha baghitले (last-viewed
+// vel, repeat-view count sकट).
+func adminGetUserWatchHistoryForCourse(c *gin.Context) {
+	userID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	courseID, err := primitive.ObjectIDFromHex(c.Param("course_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	history, err := db.GetWatchHistoryForCourse(userID, courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// message_id -> title lookup, ekaच query madhe (N+1 टाळण्यासाठी)
+	files, _ := db.FilesForCourse(courseID)
+	titleByMsgID := make(map[int]string, len(files))
+	for _, f := range files {
+		titleByMsgID[f.MessageID] = f.Title
+	}
+
+	result := make([]watchHistoryEntry, 0, len(history))
+	for _, h := range history {
+		title := titleByMsgID[h.MessageID]
+		if title == "" {
+			title = "(deleted file)"
+		}
+		result = append(result, watchHistoryEntry{
+			Title:        title,
+			ViewCount:    h.ViewCount,
+			LastViewedAt: h.LastViewedAt,
+		})
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+// GET /api/admin/users/:id/messages
+// Admin ne ya user la pathवलेले sagle messages + read status.
+func adminGetUserMessages(c *gin.Context) {
+	userID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	msgs, err := db.ListUserMessages(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, msgs)
 }
 
 func adminAddUser(c *gin.Context) {
@@ -1161,25 +1270,35 @@ func adminSendMessageToUser(c *gin.Context) {
 		return
 	}
 
-	if user.Email == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Ya user kade email address nahi, message pathavta yet nahi"})
+	// In-app message — user chya "Your Messages" tab madhe disel. He core
+	// delivery aahe, email asो va nasो — nehmi save karto.
+	if err := db.CreateUserMessage(userID, req.Subject, req.Message); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Message save karta ala nahi: " + err.Error()})
 		return
 	}
 
-	appName := os.Getenv("BREVO_FROM_NAME")
-	if appName == "" {
-		appName = "ONLINE COURSE"
-	}
-
-	if err := email.SendAdminToUserMessage(user.Email, user.FullName, req.Subject, req.Message, appName); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Email pathavta ala nahi: " + err.Error()})
-		return
+	// Email — best-effort, fakt user kade email asel tarच. Email fail zali
+	// tarी in-app message already save zaला aahe, request fail karत nahi.
+	emailSent := false
+	emailErr := ""
+	if user.Email != "" {
+		appName := os.Getenv("BREVO_FROM_NAME")
+		if appName == "" {
+			appName = "ONLINE COURSE"
+		}
+		if err := email.SendAdminToUserMessage(user.Email, user.FullName, req.Subject, req.Message, appName); err != nil {
+			emailErr = err.Error()
+		} else {
+			emailSent = true
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":       true,
-		"username": user.Username,
-		"email":    user.Email,
+		"ok":          true,
+		"username":    user.Username,
+		"email":       user.Email,
+		"email_sent":  emailSent,
+		"email_error": emailErr,
 	})
 }
 
