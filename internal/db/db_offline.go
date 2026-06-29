@@ -117,15 +117,10 @@ type RedeemResult struct {
 }
 
 // RedeemOfflineToken — token validate करतो, course-specific daily limit enforce करतो.
-// courseLimit = 0 म्हणजे default (3) वापरतो.
+// courseLimit parameter ignored — limit आता DB मधून course वरून automatically fetch होतो.
 func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID, courseLimit int) (*RedeemResult, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
-
-	limit := courseLimit
-	if limit <= 0 {
-		limit = defaultDailyLimit
-	}
 
 	// 1. Token शोधतो
 	var tok OfflineToken
@@ -140,6 +135,13 @@ func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID, courseLimit 
 	// 2. Ownership check
 	if tok.UserID != userID {
 		return nil, ErrTokenWrongUser
+	}
+
+	// 3. Course DB मधून actual limit fetch करतो (बाहेरून pass केलेला courseLimit वापरत नाही)
+	limit := defaultDailyLimit
+	course, err := GetCourseByID(tok.CourseID)
+	if err == nil && course != nil && course.DownloadLimit > 0 {
+		limit = course.DownloadLimit
 	}
 
 	// 3. Per-course daily usage atomically increment
