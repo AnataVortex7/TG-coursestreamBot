@@ -336,6 +336,11 @@ func createIndexes() {
 		true,
 	)
 
+	// relay_map: forwarded_msg_id → user_telegram_id (7 दिवस TTL)
+	ensureIndex(ctx, Database.Collection("relay_map"),
+		bson.D{{Key: "forwarded_msg_id", Value: 1}}, true)
+	ensureTTLIndex(ctx, Database.Collection("relay_map"), "expires_at")
+
 	// pending_deletes: messages scheduled for auto-delete after 48h
 	ensureIndex(ctx, Database.Collection("pending_deletes"), bson.D{{Key: "delete_at", Value: 1}}, false)
 	ensureIndex(ctx, Database.Collection("pending_deletes"), bson.D{{Key: "deleted", Value: 1}}, false)
