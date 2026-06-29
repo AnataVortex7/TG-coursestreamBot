@@ -82,6 +82,7 @@ func runApp(cmd *cobra.Command, args []string) {
 	// container madhe reset hoто) — LOG_CHANNEL members varun ALLOWED_USERS
 	// cha access_hash automatic warm karto, manual "ek message pathवा" lागत nahi.
 	bot.WarmAdminPeerCacheDelayed(log, 3*time.Second)
+	bot.WarmUserPeerCacheDelayed(log, 5*time.Second) // सगळ्या linked users चा peer cache warm करतो
 
 	// ── Init external worker pool (Koyeb workers) ─────────────────────────────
 	// workerreg.Init reads WORKER_URLS / WORKER_URL1..N from config,
