@@ -330,9 +330,9 @@ func createIndexes() {
 	ensureIndex(ctx, Database.Collection("offline_tokens"), bson.D{{Key: "user_id", Value: 1}}, false)
 	ensureTTLIndex(ctx, Database.Collection("offline_tokens"), "expires_at")
 
-	// offline_daily_usage: unique (user_id, date_key) — one counter per user per day
+	// offline_daily_usage: unique (user_id, course_id, date_key) — one counter per user per course per day
 	ensureCompoundIndex(ctx, Database.Collection("offline_daily_usage"),
-		bson.D{{Key: "user_id", Value: 1}, {Key: "date_key", Value: 1}},
+		bson.D{{Key: "user_id", Value: 1}, {Key: "course_id", Value: 1}, {Key: "date_key", Value: 1}},
 		true,
 	)
 
