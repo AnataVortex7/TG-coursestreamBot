@@ -117,10 +117,15 @@ type RedeemResult struct {
 }
 
 // RedeemOfflineToken — token validate करतो, course-specific daily limit enforce करतो.
-// courseLimit parameter ignored — limit आता DB मधून course वरून automatically fetch होतो.
+// courseLimit = 0 म्हणजे default (3) वापरतो.
 func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID, courseLimit int) (*RedeemResult, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
+
+	limit := courseLimit
+	if limit <= 0 {
+		limit = defaultDailyLimit
+	}
 
 	// 1. Token शोधतो
 	var tok OfflineToken
@@ -135,13 +140,6 @@ func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID, courseLimit 
 	// 2. Ownership check
 	if tok.UserID != userID {
 		return nil, ErrTokenWrongUser
-	}
-
-	// 3. Course DB मधून actual limit fetch करतो (बाहेरून pass केलेला courseLimit वापरत नाही)
-	limit := defaultDailyLimit
-	course, err := GetCourseByID(tok.CourseID)
-	if err == nil && course != nil && course.DownloadLimit > 0 {
-		limit = course.DownloadLimit
 	}
 
 	// 3. Per-course daily usage atomically increment
@@ -185,6 +183,25 @@ func RedeemOfflineToken(tokenStr string, userID primitive.ObjectID, courseLimit 
 		UsedToday:   usage.Count,
 		CourseLimit: limit,
 	}, nil
+}
+
+// ─── GetOfflineToken ─────────────────────────────────────────────────────────
+
+// GetOfflineToken — token string वरून OfflineToken record मिळवतो.
+// Token linked user कोण आहे ते बघायला (Telegram link नसताना notify साठी).
+func GetOfflineToken(tokenStr string) (*OfflineToken, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var tok OfflineToken
+	err := colOffTok().FindOne(ctx, bson.M{"token": tokenStr}).Decode(&tok)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &tok, nil
 }
 
 // ─── GetDailyUsageCount ───────────────────────────────────────────────────────
