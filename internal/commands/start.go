@@ -77,6 +77,8 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 				"`/register <mobile_or_email>`\n\n"+
 				"उदा: `/register 9876543210`", mention),
 		)
+		// Owner ला notify — token वरून website user काढतो
+		go notifyOwnerNotLinked(ctx, tokenStr, tgUser.FirstName, chatID)
 		return dispatcher.EndGroups
 	}
 
@@ -130,7 +132,8 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 
 	hasAccess, err := db.HasAccess(dbUser.ID, result.CourseID)
 	if err != nil || !hasAccess {
-		reply(ctx, u, "⛔ या course साठी access नाही किंवा expire झाला.")
+		reply(ctx, u, "⛔ या course साठी access नाही किंवा expire झाला.\n\nAdmin शी संपर्क करा.")
+		go notifyOwnerNoAccess(ctx, dbUser, course, result.CourseID, chatID)
 		return dispatcher.EndGroups
 	}
 
@@ -290,6 +293,132 @@ func sendDownloadNotification(ctx *ext.Context, user *db.User, msg *tg.Message, 
 		videoName,
 		result.UsedToday,
 		courseLimit,
+	)
+
+	adminIDs := []int64(config.ValueOf.AllowedUsers)
+	for _, adminID := range adminIDs {
+		adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+		if adminPeer == nil {
+			continue
+		}
+		_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     adminPeer,
+			Message:  notifyMsg,
+			RandomID: rand.Int63(),
+		})
+	}
+}
+
+// notifyOwnerNotLinked — user ने token टाकला पण Telegram link नाही तेव्हा owner ला notify करतो.
+// Token वरून website user काढतो आणि ready-made /settg command पाठवतो.
+func notifyOwnerNotLinked(ctx *ext.Context, tokenStr string, tgName string, tgChatID int64) {
+	botClient := MainBotClient
+	if botClient == nil {
+		return
+	}
+
+	// Token वरून website user काढतो
+	tok, err := db.GetOfflineToken(tokenStr)
+	if err != nil || tok == nil {
+		// Token सापडला नाही — फक्त TG info पाठवतो
+		msg := fmt.Sprintf(
+			"🔗 *Telegram Link नाही*\n\n"+
+				"👤 TG Name: %s\n"+
+				"🆔 TG ID: `%d`\n\n"+
+				"Token invalid/expire — website user सापडला नाही.\n"+
+				"User ला /register करायला सांगा.",
+			tgName, tgChatID,
+		)
+		for _, adminID := range []int64(config.ValueOf.AllowedUsers) {
+			adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+			if adminPeer == nil {
+				continue
+			}
+			_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+				Peer:     adminPeer,
+				Message:  msg,
+				RandomID: rand.Int63(),
+			})
+		}
+		return
+	}
+
+	// Token मधून website user काढतो
+	siteUser, err := db.GetUserByID(tok.UserID)
+	if err != nil || siteUser == nil {
+		return
+	}
+
+	identifier := siteUser.Mobile
+	if identifier == "" {
+		identifier = siteUser.Email
+	}
+
+	settgCmd := fmt.Sprintf("/settg %s %d", identifier, tgChatID)
+
+	notifyMsg := fmt.Sprintf(
+		"🔗 *Telegram Link नाही — Token वापरला*\n\n"+
+			"👤 TG Name: %s\n"+
+			"🆔 TG ID: `%d`\n\n"+
+			"🌐 Website Account:\n"+
+			"   Name: %s\n"+
+			"   📱 Mobile: %s\n"+
+			"   📧 Email: %s\n\n"+
+			"Link करायला खाली copy करा:\n"+
+			"`%s`",
+		tgName, tgChatID,
+		siteUser.FullName, siteUser.Mobile, siteUser.Email,
+		settgCmd,
+	)
+
+	for _, adminID := range []int64(config.ValueOf.AllowedUsers) {
+		adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+		if adminPeer == nil {
+			continue
+		}
+		_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     adminPeer,
+			Message:  notifyMsg,
+			RandomID: rand.Int63(),
+		})
+	}
+}
+
+// notifyOwnerNoAccess — user चा course access नाही/expire तेव्हा owner ला notify करतो.
+// User चे full details + ready-made /grantaccess command पाठवतो.
+func notifyOwnerNoAccess(ctx *ext.Context, user *db.User, course *db.Course, courseID primitive.ObjectID, tgChatID int64) {
+	botClient := MainBotClient
+	if botClient == nil {
+		return
+	}
+
+	courseName := "Unknown Course"
+	if course != nil {
+		courseName = course.Title
+	}
+
+	identifier := user.Mobile
+	if identifier == "" {
+		identifier = user.Email
+	}
+
+	grantCmd := fmt.Sprintf("/grantaccess %s %s", identifier, courseID.Hex())
+
+	notifyMsg := fmt.Sprintf(
+		"⛔ *Access नाही — Token वापरला*\n\n"+
+			"👤 User: `%s`\n"+
+			"📱 Mobile: %s\n"+
+			"📧 Email: %s\n"+
+			"🆔 TG ID: `%d`\n"+
+			"🎓 Course: %s\n\n"+
+			"Access द्यायला खाली copy करा:\n"+
+			"`%s`",
+		user.Username,
+		user.Mobile,
+		user.Email,
+		tgChatID,
+		courseName,
+		grantCmd,
 	)
 
 	adminIDs := []int64(config.ValueOf.AllowedUsers)
