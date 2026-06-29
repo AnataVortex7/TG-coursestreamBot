@@ -55,7 +55,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 			"📥 Offline Video Download साठी:\n"+
 			"Website वर जा → Course उघडा → 📥 Offline button दाबा → Link click करा!\n\n"+
 			"⚙️ पहिल्यांदा:\n"+
-			"   /register 9876543210\n\n"+
+			"   /register registered mobile no.\n\n"+
 			"❓ Telegram ID: /myid",
 	), nil)
 	return dispatcher.EndGroups
