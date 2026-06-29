@@ -28,6 +28,7 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	log := m.log.Named("admin")
 	defer log.Sugar().Info("Loaded admin commands")
 
+	d.AddHandler(handlers.NewCommand("cmd", adminOnly(cmdHelp)))
 	d.AddHandler(handlers.NewCommand("adduser", adminOnly(cmdAddUser)))
 	d.AddHandler(handlers.NewCommand("deluser", adminOnly(cmdDelUser)))
 	d.AddHandler(handlers.NewCommand("listusers", adminOnly(cmdListUsers)))
@@ -926,3 +927,52 @@ func stripExt(name string) string {
 
 // unused import guard
 var _ = strconv.Itoa
+
+// ── /cmd ──────────────────────────────────────────────────────────────────────
+// सर्व admin commands एका जागी दाखवतो.
+
+func cmdHelp(ctx *ext.Context, u *ext.Update) error {
+	msg := `👑 *Admin Commands*
+
+👤 *Users*
+/adduser \<mobile\> \<email\> \<name\> — नवीन user add करा
+/deluser \<mobile\_or\_email\> — user delete करा
+/listusers — सर्व users list
+/userinfo \<mobile\_or\_email\> — user चा पूर्ण info
+/settg \<mobile\_or\_email\> \<telegram\_id\> — Telegram ID link करा
+/blockuser \<identifier\> \<days\> \<reason\> — user block करा
+/unblockuser \<identifier\> — user unblock करा
+/suspicious — suspicious users list
+
+📚 *Courses*
+/addcourse \<channel\_id\> \<title\> — नवीन course add करा
+/delcourse \<course\_id\> — course delete करा
+/listcourses — सर्व courses व त्यांचे IDs
+/setdlimit \<course\_id\> \<limit\> — daily download limit set करा \(0 \= default 3\)
+
+🔑 *Access*
+/grantaccess \<identifier\> \<course\_id\> \[months\] — user ला access द्या
+/revokeaccess \<identifier\> \<course\_id\> — access काढा
+
+🎬 *Videos / Channel*
+/addvideo — reply to forwarded msg — video manually add करा
+/syncchannel \<channel\_id\> — channel चे सर्व videos sync करा
+
+📱 *Sessions / Devices*
+/sessions — active sessions list
+/kill \<device\_id\> — device kill करा
+/killsession \<session\_id\> — session kill करा
+
+☁️ *Colab*
+/colabstart — Colab worker start करा
+/colabstop — Colab worker stop करा
+/colabstatus — Colab status बघा
+
+📊 *Info*
+/stats — bot stats \(users, courses, downloads\)
+/myid — तुमचा Telegram ID
+/cmd — हे menu`
+
+	reply(ctx, u, msg)
+	return dispatcher.EndGroups
+}
