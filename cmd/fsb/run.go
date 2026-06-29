@@ -18,6 +18,8 @@ import (
 	"os"
 	"time"
 
+	"strings"
+
 	"github.com/spf13/cobra"
 
 	"github.com/gin-gonic/gin"
@@ -159,15 +161,30 @@ func getRouter(log *zap.Logger) *gin.Engine {
 
 	router := gin.New()
 	router.Use(gin.Recovery())
+	// Prefix-aware logger — exact + prefix dono skip karto
+	skipPrefixes := []string{
+		"/api/watch/position/",
+		"/api/worker/stream-check",
+		"/api/presence/ping",
+		"/api/colab/poll",
+		"/api/colab/progress",
+		"/api/admin/stream/live",
+	}
+	skipExact := map[string]bool{
+		"/": true, "/courses": true, "/login": true, "/ping": true,
+	}
 	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		SkipPaths: []string{
-			"/", "/courses", "/login", "/ping",
-			"/api/colab/poll", "/api/colab/progress",
-			"/api/admin/stream/live",
-			// Polling routes — log madhe noise karat astat
-			"/api/worker/stream-check",
-			"/api/watch/position",
-			"/api/presence/ping",
+		SkipFunc: func(c *gin.Context) bool {
+			p := c.Request.URL.Path
+			if skipExact[p] {
+				return true
+			}
+			for _, prefix := range skipPrefixes {
+				if strings.HasPrefix(p, prefix) {
+					return true
+				}
+			}
+			return false
 		},
 	}))
 	router.Use(gin.ErrorLogger())
