@@ -130,6 +130,63 @@
   ::-webkit-scrollbar-track{background:var(--bg)}
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
   @media(max-width:480px){.grid{padding:12px 12px 16px;gap:12px}header h1{font-size:1.3rem}.folder-section{padding:0 10px}}
+
+  /* ── Virtual scroll container ─────────────────────────────────── */
+  .vscroll-wrap {
+    position: relative;
+  }
+  .vscroll-spacer-top,
+  .vscroll-spacer-bottom {
+    width: 100%;
+    pointer-events: none;
+  }
+  /* Folder file count pill inside header */
+  .folder-body-count {
+    font-size: .74rem;
+    color: var(--muted);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    padding: 2px 9px;
+    font-weight: 600;
+  }
+  /* "Jump to file" quick bar */
+  .vscroll-jump {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px 4px;
+    font-size: .78rem;
+    color: var(--muted);
+  }
+  .vscroll-jump input {
+    width: 72px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: .78rem;
+    background: var(--surface);
+    color: var(--text);
+    outline: none;
+  }
+  .vscroll-jump input:focus { border-color: var(--accent); }
+  .vscroll-jump button {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: .78rem;
+    cursor: pointer;
+    min-height: 30px;
+  }
+  .vscroll-jump button:active { opacity: .7; }
+  .vscroll-info {
+    font-size: .75rem;
+    color: var(--muted);
+    padding: 4px 16px 0;
+  }
+
 </style>
 </head>
 <body>
@@ -220,6 +277,7 @@
   <div class="folder-body" id="folder-body-{{ $fi }}" data-folder-id="{{ $folder.FolderID }}" data-loaded="{{ if $.lazyLoad }}false{{ else }}true{{ end }}">
     <div class="folder-body-header">
       <span class="folder-body-title">{{ if $folder.IsUngrouped }}📄{{ else }}📁{{ end }} {{ $folder.Name }}</span>
+      <span class="folder-body-count">{{ $folder.FileCount }} files</span>
       <button class="folder-body-close" onclick="toggleFolder({{ $fi }})">✕</button>
     </div>
     {{ if $.lazyLoad }}
@@ -433,24 +491,154 @@
     </div>`;
   }
 
-  // ── Folder lazy fetch ─────────────────────────────────────────────────────
+  // ── Virtual scroll state per folder ────────────────────────────────────────
+  // vs[idx] = { all: [], filtered: [], rowH: 0, cols: 1, rendered: {start,end} }
+  const vs = {};
+  const VS_BUFFER   = 3;   // extra rows above/below viewport to pre-render
+  const VS_ROW_H    = 200; // estimated card height px (recalculated after first render)
+
+  function vsColCount(gridEl) {
+    // Read actual CSS grid columns from computed style
+    const cols = getComputedStyle(gridEl).gridTemplateColumns.split(' ').length;
+    return Math.max(1, cols);
+  }
+
+  function vsEnsure(idx) {
+    if (!vs[idx]) vs[idx] = { all: [], filtered: [], rowH: VS_ROW_H, cols: 1, rendered: { start: -1, end: -1 } };
+    return vs[idx];
+  }
+
+  function vsRender(idx, forceFrom) {
+    const state   = vs[idx];
+    const gridEl  = document.getElementById('folder-grid-' + idx);
+    if (!gridEl || !state.filtered.length) return;
+
+    const cols    = vsColCount(gridEl);
+    state.cols    = cols;
+    const rowH    = state.rowH;
+    const items   = state.filtered;
+    const total   = items.length;
+    const rows    = Math.ceil(total / cols);
+
+    // Determine visible row range from scroll position
+    const wrap    = gridEl.closest('.folder-body');
+    // Use window scroll since folder-body itself doesn't scroll
+    const scrollY   = window.scrollY;
+    const wrapTop   = wrap ? wrap.getBoundingClientRect().top + scrollY : 0;
+    const vpH       = window.innerHeight;
+    const relTop    = Math.max(0, scrollY - wrapTop);
+    const startRow  = Math.max(0, Math.floor(relTop / rowH) - VS_BUFFER);
+    const endRow    = Math.min(rows - 1, Math.ceil((relTop + vpH) / rowH) + VS_BUFFER);
+
+    // Skip re-render if same window
+    if (forceFrom === undefined && state.rendered.start === startRow && state.rendered.end === endRow) return;
+    state.rendered = { start: startRow, end: endRow };
+
+    const startIdx = startRow * cols;
+    const endIdx   = Math.min(total, (endRow + 1) * cols);
+
+    // Spacers
+    let topSpace    = startRow * rowH;
+    let bottomSpace = Math.max(0, (rows - endRow - 1) * rowH);
+
+    // Build HTML: spacer-top + visible cards + spacer-bottom
+    let html = `<div class="vscroll-spacer-top" style="height:${topSpace}px"></div>`;
+    for (let i = startIdx; i < endIdx; i++) {
+      html += buildCardHTML(items[i]);
+    }
+    html += `<div class="vscroll-spacer-bottom" style="height:${bottomSpace}px"></div>`;
+    gridEl.innerHTML = html;
+
+    // After first render, measure actual card height and recalibrate
+    requestAnimationFrame(() => {
+      const firstCard = gridEl.querySelector('.card');
+      if (firstCard) {
+        const measured = firstCard.offsetHeight + parseInt(getComputedStyle(gridEl).gap || '16');
+        if (measured > 60 && Math.abs(measured - state.rowH) > 10) {
+          state.rowH = measured;
+          vsRender(idx, startRow); // re-render with correct height
+        }
+      }
+    });
+  }
+
+  // Scroll listener — shared, throttled
+  let vsScrollTimer = null;
+  function vsOnScroll() {
+    if (vsScrollTimer) return;
+    vsScrollTimer = requestAnimationFrame(() => {
+      vsScrollTimer = null;
+      // Render all open folders
+      document.querySelectorAll('.folder-body.open').forEach(body => {
+        const idx = body.id.replace('folder-body-', '');
+        if (vs[idx]) vsRender(parseInt(idx));
+      });
+    });
+  }
+  window.addEventListener('scroll', vsOnScroll, { passive: true });
+
+  // Jump-to-file: scroll so that item #N is visible
+  function vsJumpTo(idx, fileNum) {
+    const state = vs[idx];
+    if (!state || !state.all.length) return;
+    const pos = state.all.findIndex(f => f.index == fileNum);
+    if (pos < 0) { alert('File #' + fileNum + ' not found'); return; }
+    // Make sure it's in filtered list
+    const fpos = state.filtered.findIndex(f => f.index == fileNum);
+    if (fpos < 0) { alert('File #' + fileNum + ' is hidden by current filter'); return; }
+    const row   = Math.floor(fpos / (state.cols || 1));
+    const body  = document.getElementById('folder-body-' + idx);
+    const grid  = document.getElementById('folder-grid-' + idx);
+    if (!body || !grid) return;
+    const wrapTop = body.getBoundingClientRect().top + window.scrollY;
+    const target  = wrapTop + row * state.rowH - 60; // 60px offset for sticky header
+    window.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  }
+
+  // ── Folder lazy fetch (with virtual scroll) ──────────────────────────────
   const folderFetchInFlight = {};
   async function loadFolderFiles(idx) {
     const body = document.getElementById('folder-body-' + idx);
     if (!body || body.dataset.loaded === 'true' || folderFetchInFlight[idx]) return;
-    const folderId = body.dataset.folderId;
-    const gridEl   = document.getElementById('folder-grid-' + idx);
+    const folderId  = body.dataset.folderId;
+    const gridEl    = document.getElementById('folder-grid-' + idx);
     const loadingEl = document.getElementById('folder-loading-' + idx);
     folderFetchInFlight[idx] = true;
     try {
-      const res = await fetch('/api/course/' + COURSE_ID + '/folder/' + folderId + '/files');
+      const res  = await fetch('/api/course/' + COURSE_ID + '/folder/' + folderId + '/files');
       if (!res.ok) throw new Error('Failed: ' + res.status);
-      const data = await res.json();
+      const data  = await res.json();
       const files = data.files || [];
+
+      const state = vsEnsure(idx);
+      state.all      = files;
+      state.filtered = files;
+
       if (files.length === 0) {
         gridEl.innerHTML = '<div class="folder-empty">📭 या folder मध्ये अजून files नाहीत.</div>';
       } else {
-        gridEl.innerHTML = files.map(buildCardHTML).join('');
+        // Add jump bar + count pill
+        const countEl = body.querySelector('.folder-body-count');
+        if (countEl) countEl.textContent = files.length + ' files';
+
+        // Insert jump bar before the grid
+        if (!document.getElementById('vscroll-jump-' + idx)) {
+          const jumpBar = document.createElement('div');
+          jumpBar.className = 'vscroll-jump';
+          jumpBar.id = 'vscroll-jump-' + idx;
+          jumpBar.innerHTML =
+            `<span class="vscroll-info">${files.length} files</span>` +
+            `<span style="flex:1"></span>` +
+            `<span>Jump to #</span>` +
+            `<input type="number" id="vj-input-${idx}" min="1" placeholder="#" ` +
+            `onkeydown="if(event.key==='Enter') vsJumpTo(${idx}, document.getElementById('vj-input-${idx}').value)">` +
+            `<button onclick="vsJumpTo(${idx}, document.getElementById('vj-input-${idx}').value)">Go</button>`;
+          gridEl.parentNode.insertBefore(jumpBar, gridEl);
+        }
+
+        // Wrap grid for virtual scroll
+        gridEl.classList.add('vscroll-wrap');
+        vsRender(idx, 0);
       }
       body.dataset.loaded = 'true';
       applyFilters();
@@ -506,29 +694,39 @@
       // Folder mode: filter/search across all folder bodies
       const q = document.getElementById('searchInput').value.toLowerCase().trim();
       let visible = 0;
-      document.querySelectorAll('.folder-body .card').forEach(card => {
-        const typeMatch  = currentFilter === 'all' || card.dataset.type === currentFilter;
-        const n = (card.dataset.name  || '').toLowerCase();
-        const t = (card.dataset.title || '').toLowerCase();
-        const searchMatch = !q || n.includes(q) || t.includes(q);
-        const show = typeMatch && searchMatch;
-        card.style.display = show ? '' : 'none';
-        if (show) visible++;
+      // Virtual scroll: filter state.all → state.filtered, re-render
+      Object.keys(vs).forEach(idx => {
+        const state = vs[idx];
+        if (!state || !state.all.length) return;
+        state.filtered = state.all.filter(f => {
+          const typeMatch   = currentFilter === 'all' || f.mediaType === currentFilter;
+          const n = (f.fileName || '').toLowerCase();
+          const t = (f.title    || '').toLowerCase();
+          const searchMatch = !q || n.includes(q) || t.includes(q);
+          return typeMatch && searchMatch;
+        });
+        visible += state.filtered.length;
+        // Re-render virtual list
+        const gridEl = document.getElementById('folder-grid-' + idx);
+        if (gridEl) {
+          if (state.filtered.length === 0) {
+            gridEl.innerHTML = '<div class="folder-empty">🔍 कोणताही result नाही.</div>';
+          } else {
+            vsRender(parseInt(idx), 0);
+          }
+        }
+        // Auto-open folder if search/filter has matches
+        if ((q || currentFilter !== 'all') && state.filtered.length > 0) {
+          const body = document.getElementById('folder-body-' + idx);
+          const card = document.querySelector('.folder-card[data-folder-idx="' + idx + '"]');
+          if (body && !body.classList.contains('open')) {
+            body.classList.add('open');
+            if (card) card.classList.add('active');
+            if (body.dataset.loaded !== 'true') loadFolderFiles(parseInt(idx));
+          }
+        }
       });
       document.getElementById('visibleCount').textContent = visible;
-
-      // Auto-open folders that have visible cards when searching
-      if (q || currentFilter !== 'all') {
-        document.querySelectorAll('.folder-section').forEach((section, idx) => {
-          const hasVisible = [...section.querySelectorAll('.card')].some(c => c.style.display !== 'none');
-          const header = section.querySelector('.folder-header');
-          const body   = document.getElementById('folder-body-' + idx);
-          if (header && body) {
-            body.classList.toggle('open', hasVisible);
-            header.classList.toggle('open', hasVisible);
-          }
-        });
-      }
       return;
     }
 

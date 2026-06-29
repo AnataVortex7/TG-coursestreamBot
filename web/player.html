@@ -74,6 +74,9 @@
     background: rgba(255,255,255,0.2);
     border-radius: 4px;
     cursor: pointer;
+    /* Expand touch area above/below the 4px bar */
+    padding: 8px 0;
+    margin: -8px 0;
   }
   #progress-wrap:hover { height: 6px; }
   #progress-fill {
@@ -97,22 +100,26 @@
   #btn-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 16px;
   }
   .ctrl-btn {
     background: none;
     border: none;
     color: #fff;
     cursor: pointer;
-    padding: 4px;
+    padding: 8px;
     display: flex;
     align-items: center;
-    font-size: 18px;
+    justify-content: center;
+    font-size: 20px;
+    min-width: 44px;
+    min-height: 44px;
     opacity: 0.9;
     transition: opacity 0.15s, transform 0.1s;
     flex-shrink: 0;
   }
   .ctrl-btn:hover { opacity: 1; transform: scale(1.1); }
+  .ctrl-btn:active { opacity: 0.7; transform: scale(0.95); }
 
   #time-display {
     font-size: 12px;
@@ -139,6 +146,10 @@
     border-radius: 50%;
     background: #fff;
     cursor: pointer;
+  }
+  /* Mobile: volume API blocked — hide slider */
+  @media (max-width: 600px) {
+    #vol-wrap { display: none; }
   }
 
   /* Speed */
@@ -174,6 +185,19 @@
     text-overflow: ellipsis;
   }
   #player-wrap.show-controls #title-bar { opacity: 1; }
+
+  /* Mobile info section safe area */
+  #info-panel, .info-section, .next-files {
+    padding-bottom: env(safe-area-inset-bottom, 16px);
+  }
+
+  /* Mobile: slightly bigger controls */
+  @media (max-width: 600px) {
+    #controls { padding: 20px 12px 10px; gap: 6px; }
+    #btn-row { gap: 12px; }
+    #speed-btn { font-size: 11px; padding: 4px 7px; }
+    #time-display { font-size: 11px; }
+  }
 
   /* Loading spinner */
   #spinner {

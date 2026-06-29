@@ -88,7 +88,7 @@
     border: 1px solid var(--border);
     border-radius: 8px;
     color: var(--text);
-    font-size: 0.95rem;
+    font-size: 16px;
     padding: 0.65rem 0.9rem;
     outline: none;
     transition: border-color 0.15s;
@@ -228,6 +228,33 @@
     vertical-align: middle; margin-right: 6px;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Mobile overrides ── */
+  @media (max-width: 540px) {
+    .login-wrap {
+      padding: 1.25rem 1rem !important;
+      border-radius: 12px !important;
+    }
+    body > div, .page-wrap {
+      padding: 1rem !important;
+    }
+    h2 { font-size: 1.1rem; }
+    .subtitle { font-size: 0.82rem; margin-bottom: 1.2rem; }
+    /* OTP boxes bigger on mobile */
+    .otp-boxes { gap: 10px; justify-content: center; }
+    .otp-box { width: 58px; height: 62px; font-size: 1.8rem; }
+    /* Primary buttons full height */
+    .btn-primary { min-height: 48px; font-size: 1rem; }
+    /* Method toggle buttons */
+    .method-btn { padding: 10px 8px; font-size: 12px; min-height: 44px; }
+    /* Inputs */
+    input[type="text"], input[type="email"],
+    input[type="password"], input[type="tel"] {
+      font-size: 16px !important;
+      min-height: 48px;
+      padding: 0.75rem 0.9rem;
+    }
+  }
 </style>
 </head>
 <body>
