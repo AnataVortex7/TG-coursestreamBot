@@ -1502,9 +1502,10 @@ func prepareMessage(
 		botToken := os.Getenv("BOT_TOKEN")
 		var colabSendChatID int64
 		if sendChannelPeer != nil {
-			colabSendChatID = -(sendChannelPeer.ChannelID + 1000000000000)
+			idStr := fmt.Sprintf("-100%d", sendChannelPeer.ChannelID)
+    		colabSendChatID, _ = strconv.ParseInt(idStr, 10, 64)
 		} else {
-			colabSendChatID = adminChatID
+ 		   colabSendChatID = adminChatID
 		}
 
 		finalCaptionForColab := finalCaption
