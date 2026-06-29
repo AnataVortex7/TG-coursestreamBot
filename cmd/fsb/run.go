@@ -161,32 +161,7 @@ func getRouter(log *zap.Logger) *gin.Engine {
 
 	router := gin.New()
 	router.Use(gin.Recovery())
-	// Prefix-aware logger — exact + prefix dono skip karto
-	skipPrefixes := []string{
-		"/api/watch/position/",
-		"/api/worker/stream-check",
-		"/api/presence/ping",
-		"/api/colab/poll",
-		"/api/colab/progress",
-		"/api/admin/stream/live",
-	}
-	skipExact := map[string]bool{
-		"/": true, "/courses": true, "/login": true, "/ping": true,
-	}
-	router.Use(gin.LoggerWithConfig(gin.LoggerConfig{
-		SkipFunc: func(c *gin.Context) bool {
-			p := c.Request.URL.Path
-			if skipExact[p] {
-				return true
-			}
-			for _, prefix := range skipPrefixes {
-				if strings.HasPrefix(p, prefix) {
-					return true
-				}
-			}
-			return false
-		},
-	}))
+	router.Use(prefixAwareLogger())
 	router.Use(gin.ErrorLogger())
 	router.Use(globalSecurityHeaders())
 
@@ -207,4 +182,36 @@ func getRouter(log *zap.Logger) *gin.Engine {
 	routes.Load(log, router)
 
 	return router
+}
+
+// prefixAwareLogger — Gin v1.9 compatible custom logger middleware.
+// SkipPaths exact match करतो, पण /api/watch/position/<token> सारखे
+// dynamic paths skip करायला prefix check लागतो.
+func prefixAwareLogger() gin.HandlerFunc {
+	skipExact := map[string]bool{
+		"/": true, "/courses": true, "/login": true, "/ping": true,
+	}
+	skipPrefixes := []string{
+		"/api/watch/position/",
+		"/api/worker/stream-check",
+		"/api/presence/ping",
+		"/api/colab/poll",
+		"/api/colab/progress",
+		"/api/admin/stream/live",
+	}
+	logger := gin.LoggerWithConfig(gin.LoggerConfig{})
+	return func(c *gin.Context) {
+		p := c.Request.URL.Path
+		if skipExact[p] {
+			c.Next()
+			return
+		}
+		for _, prefix := range skipPrefixes {
+			if strings.HasPrefix(p, prefix) {
+				c.Next()
+				return
+			}
+		}
+		logger(c)
+	}
 }
