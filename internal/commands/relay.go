@@ -19,9 +19,9 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
-	"sync"
 
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
 
 	"github.com/celestix/gotgproto/dispatcher"
@@ -30,9 +30,6 @@ import (
 	"github.com/celestix/gotgproto/storage"
 	"github.com/gotd/td/tg"
 )
-
-// relayMap: admin side message ID → original user's Telegram ID
-var relayMap sync.Map // map[int]int64
 
 func (m *command) LoadZRelay(d dispatcher.Dispatcher) {
 	log := m.log.Named("relay")
@@ -78,9 +75,9 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 		replyTo, ok := msg.ReplyTo.(*tg.MessageReplyHeader)
 		if ok {
 			repliedMsgID := replyTo.ReplyToMsgID
-			if targetUserID, found := relayMap.Load(repliedMsgID); found {
-				uid := targetUserID.(int64)
-				sendReplyToUser(ctx, u, uid, msg.Message)
+			uid, _ := db.GetRelayEntry(repliedMsgID)
+			if uid != 0 {
+				sendReplyToUser(ctx, u, uid, msg)
 				return dispatcher.EndGroups
 			}
 		}
@@ -150,7 +147,7 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 			for _, upd := range updates.Updates {
 				if newMsg, ok2 := upd.(*tg.UpdateNewMessage); ok2 {
 					if m, ok3 := newMsg.Message.(*tg.Message); ok3 {
-						relayMap.Store(m.ID, senderID)
+						_ = db.SaveRelayEntry(m.ID, senderID)
 					}
 				}
 			}
@@ -169,9 +166,13 @@ func sendReplyToUser(ctx *ext.Context, u *ext.Update, userID int64, msg *tg.Mess
 		return
 	}
 
+	// ctx.PeerStorage try करतो, नाही मिळाला तर Bot.PeerStorage fallback
 	userPeer := ctx.PeerStorage.GetInputPeerById(userID)
+	if userPeer == nil && botClient.PeerStorage != nil {
+		userPeer = botClient.PeerStorage.GetInputPeerById(userID)
+	}
 	if userPeer == nil {
-		ctx.Reply(u, ext.ReplyTextString("❌ User peer सापडला नाही."), nil)
+		ctx.Reply(u, ext.ReplyTextString("❌ User peer सापडला नाही. User ने एकदा bot ला message करायला सांगा."), nil)
 		return
 	}
 
