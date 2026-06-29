@@ -98,15 +98,15 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
-	// ── Course limit fetch (token मधून courseID मिळवतो) ──────────────────────
-	// Token redeem होण्याआधी course limit जाणून घ्यायला
-	// token DB मध्ये आहे, तिथून courseID → course → limit
-	courseLimit := 0 // RedeemOfflineToken आत default handle होतो
-	// (token valid असेल तर courseID मिळेल, नसेल तर redeem fail होईल)
-	// Optional: token वरून course fetch करून limit pass करता येतो
-	// पण RedeemOfflineToken स्वतः course limit accept करत नाही token stage ला
-	// म्हणून इथे 0 पाठवतो — course-specific limit offline.go route मध्ये enforce होतो
-	// Token already generate झाला म्हणजे limit check route ने केला आहे
+	// ── Course limit fetch (token मधून courseID → course → limit) ──────────
+	// Token DB मधून courseID काढतो, मग course चा actual DownloadLimit वापरतो.
+	// हे नसेल तर RedeemOfflineToken हमेशा default 3 वापरतो — /setdlimit काम करत नाही.
+	courseLimit := 3 // safe default
+	if offTok, tokErr := db.GetOfflineToken(tokenStr); tokErr == nil && offTok != nil {
+		if c, cErr := db.GetCourseByID(offTok.CourseID); cErr == nil && c != nil && c.DownloadLimit > 0 {
+			courseLimit = c.DownloadLimit
+		}
+	}
 
 	result, err := db.RedeemOfflineToken(tokenStr, dbUser.ID, courseLimit)
 	if err != nil {
