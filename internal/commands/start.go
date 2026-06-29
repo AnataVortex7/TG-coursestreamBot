@@ -55,7 +55,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 			"📥 Offline Video Download साठी:\n"+
 			"Website वर जा → Course उघडा → 📥 Offline button दाबा → Link click करा!\n\n"+
 			"⚙️ पहिल्यांदा:\n"+
-			"   /register registered mobile no.\n\n"+
+			"   /register 9876543210\n\n"+
 			"❓ Telegram ID: /myid",
 	), nil)
 	return dispatcher.EndGroups
@@ -69,10 +69,13 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 
 	dbUser, err := db.GetUserByTelegramID(chatID)
 	if err != nil || dbUser == nil {
+		tgUser := u.EffectiveUser()
+		mention := fmt.Sprintf("[%s](tg://user?id=%d)", tgUser.FirstName, chatID)
 		reply(ctx, u,
-			"❌ तुमचा Telegram account link केलेला नाही.\n\n"+
+			fmt.Sprintf("❌ %s, तुमचा Telegram account link केलेला नाही.\n\n"+
 				"एकदा register करा:\n"+
-				"`/register <mobile_or_email> "+fmt.Sprintf("%d", chatID)+"`",
+				"`/register <mobile_or_email>`\n\n"+
+				"उदा: `/register 9876543210`", mention),
 		)
 		return dispatcher.EndGroups
 	}
@@ -225,11 +228,82 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		go sendAdminAlert(ctx, dbUser, score)
 	}
 
+	// ── Owner ला download notification पाठवतो ────────────────────────────────
+	go sendDownloadNotification(ctx, dbUser, msg, course, result, courseLimit)
+
 	if sentMsg != nil {
 		_ = ctx.DeleteMessages(chatID, []int{sentMsg.ID})
 	}
 
 	return dispatcher.EndGroups
+}
+
+// sendDownloadNotification — user ने video download केल्यावर owner ला notify करतो.
+// User details + video name + course + कोटा पाठवतो.
+func sendDownloadNotification(ctx *ext.Context, user *db.User, msg *tg.Message, course *db.Course, result *db.RedeemResult, courseLimit int) {
+	botClient := MainBotClient
+	if botClient == nil {
+		return
+	}
+
+	// Video name — Document attributes मधून filename काढतो
+	videoName := "Unknown"
+	if msg.Message != "" {
+		videoName = msg.Message // original caption असेल तर तो वापरतो
+	}
+	if mediaDoc, ok := msg.Media.(*tg.MessageMediaDocument); ok {
+		if doc, ok := mediaDoc.Document.(*tg.Document); ok {
+			for _, attr := range doc.Attributes {
+				if fn, ok := attr.(*tg.DocumentAttributeFilename); ok {
+					videoName = fn.FileName
+					break
+				}
+				if video, ok := attr.(*tg.DocumentAttributeVideo); ok {
+					_ = video // video attribute आहे हे confirm
+				}
+			}
+		}
+	}
+
+	courseName := "Unknown Course"
+	if course != nil {
+		courseName = course.Title
+	}
+
+	identifier := user.Mobile
+	if identifier == "" {
+		identifier = user.Email
+	}
+
+	notifyMsg := fmt.Sprintf(
+		"📥 *Video Downloaded*\n\n"+
+			"👤 User: `%s`\n"+
+			"📱 Mobile: %s\n"+
+			"📧 Email: %s\n"+
+			"🎓 Course: %s\n"+
+			"🎬 Video: `%s`\n"+
+			"📊 Downloads Today: %d/%d",
+		user.Username,
+		user.Mobile,
+		user.Email,
+		courseName,
+		videoName,
+		result.UsedToday,
+		courseLimit,
+	)
+
+	adminIDs := []int64(config.ValueOf.AllowedUsers)
+	for _, adminID := range adminIDs {
+		adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+		if adminPeer == nil {
+			continue
+		}
+		_, _ = botClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     adminPeer,
+			Message:  notifyMsg,
+			RandomID: rand.Int63(),
+		})
+	}
 }
 
 // handleContactDeepLink — /start ct_<userIDHex>
