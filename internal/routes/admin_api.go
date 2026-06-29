@@ -4,6 +4,7 @@ package routes
 import (
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
+	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/commands"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/email"
@@ -1293,12 +1294,29 @@ func adminSendMessageToUser(c *gin.Context) {
 		}
 	}
 
+	// Telegram — best-effort, fakt user cha TelegramID linked asel tarच.
+	// Peer cache aagodarच WarmUserPeerCache ne warm kelela aste (startup +
+	// periodic), tyamule user la punha bot la message karaychi garaj nahi.
+	telegramSent := false
+	telegramErr := ""
+	if user.TelegramID != 0 {
+		tgText := fmt.Sprintf("📩 %s\n\n%s", req.Subject, req.Message)
+		if err := bot.SendTelegramDM(user.TelegramID, tgText); err != nil {
+			telegramErr = err.Error()
+			golog.Printf("[AdminMessage] Telegram DM to user %s (tg:%d) failed: %v", user.Username, user.TelegramID, err)
+		} else {
+			telegramSent = true
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"ok":          true,
-		"username":    user.Username,
-		"email":       user.Email,
-		"email_sent":  emailSent,
-		"email_error": emailErr,
+		"ok":             true,
+		"username":       user.Username,
+		"email":          user.Email,
+		"email_sent":     emailSent,
+		"email_error":    emailErr,
+		"telegram_sent":  telegramSent,
+		"telegram_error": telegramErr,
 	})
 }
 
@@ -1355,30 +1373,44 @@ func adminBroadcast(c *gin.Context) {
 			return
 		}
 
-		// Count email-eligible users before launching goroutine
+		// Count email + telegram eligible users before launching goroutine
 		emailCount := 0
+		telegramCount := 0
 		for _, u := range users {
 			if u.Email != "" {
 				emailCount++
 			}
+			if u.TelegramID != 0 {
+				telegramCount++
+			}
 		}
 
-		// Fire-and-forget: send each email independently — don't wait
+		// Fire-and-forget: send each email + telegram DM independently — don't wait
 		go func(users []db.User, subject, message, title, app string) {
 			sent, failed, skipped := 0, 0, 0
+			tgSent, tgFailed := 0, 0
+			tgText := fmt.Sprintf("📢 %s\n\n%s", title, message)
 			for _, u := range users {
 				if u.Email == "" {
 					skipped++
-					continue
-				}
-				if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
+				} else if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
 					golog.Printf("[Broadcast/All] Email to %s failed: %v", u.Email, err)
 					failed++
 				} else {
 					sent++
 				}
+
+				if u.TelegramID != 0 {
+					if err := bot.SendTelegramDM(u.TelegramID, tgText); err != nil {
+						golog.Printf("[Broadcast/All] Telegram DM to %s (tg:%d) failed: %v", u.Username, u.TelegramID, err)
+						tgFailed++
+					} else {
+						tgSent++
+					}
+				}
 			}
-			golog.Printf("[Broadcast/All] '%s' — sent: %d, failed: %d, skipped(no email): %d", title, sent, failed, skipped)
+			golog.Printf("[Broadcast/All] '%s' — email sent: %d, failed: %d, skipped(no email): %d | telegram sent: %d, failed: %d",
+				title, sent, failed, skipped, tgSent, tgFailed)
 		}(users, req.Subject, req.Message, req.Title, appName)
 
 		c.JSON(http.StatusOK, gin.H{
@@ -1386,7 +1418,8 @@ func adminBroadcast(c *gin.Context) {
 			"announcement_id": announcement.ID.Hex(),
 			"target":          "all",
 			"email_queued":    emailCount,
-			"message":         "Broadcast suru zala — emails background madhe jaat aahet",
+			"telegram_queued": telegramCount,
+			"message":         "Broadcast suru zala — emails + telegram DMs background madhe jaat aahet",
 		})
 		return
 	}
@@ -1419,28 +1452,42 @@ func adminBroadcast(c *gin.Context) {
 	}
 
 	emailCount := 0
+	telegramCount := 0
 	for _, u := range users {
 		if u.Email != "" {
 			emailCount++
 		}
+		if u.TelegramID != 0 {
+			telegramCount++
+		}
 	}
 
-	// Fire-and-forget per email
+	// Fire-and-forget per user — email + telegram DM
 	go func(users []db.User, subject, message, title, courseName, app string) {
 		sent, failed, skipped := 0, 0, 0
+		tgSent, tgFailed := 0, 0
+		tgText := fmt.Sprintf("📢 %s\n\n%s", title, message)
 		for _, u := range users {
 			if u.Email == "" {
 				skipped++
-				continue
-			}
-			if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
+			} else if err := email.SendAdminToUserMessage(u.Email, u.FullName, subject, message, app); err != nil {
 				golog.Printf("[Broadcast/Course:%s] Email to %s failed: %v", courseName, u.Email, err)
 				failed++
 			} else {
 				sent++
 			}
+
+			if u.TelegramID != 0 {
+				if err := bot.SendTelegramDM(u.TelegramID, tgText); err != nil {
+					golog.Printf("[Broadcast/Course:%s] Telegram DM to %s (tg:%d) failed: %v", courseName, u.Username, u.TelegramID, err)
+					tgFailed++
+				} else {
+					tgSent++
+				}
+			}
 		}
-		golog.Printf("[Broadcast/Course:%s] '%s' — sent: %d, failed: %d, skipped: %d", courseName, title, sent, failed, skipped)
+		golog.Printf("[Broadcast/Course:%s] '%s' — email sent: %d, failed: %d, skipped: %d | telegram sent: %d, failed: %d",
+			courseName, title, sent, failed, skipped, tgSent, tgFailed)
 	}(users, req.Subject, req.Message, req.Title, course.Title, appName)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1449,7 +1496,8 @@ func adminBroadcast(c *gin.Context) {
 		"target":          "course",
 		"course":          course.Title,
 		"email_queued":    emailCount,
-		"message":         "Course broadcast suru zala — emails background madhe jaat aahet",
+		"telegram_queued": telegramCount,
+		"message":         "Course broadcast suru zala — emails + telegram DMs background madhe jaat aahet",
 	})
 }
 
