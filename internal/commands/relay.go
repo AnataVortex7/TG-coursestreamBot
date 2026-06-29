@@ -77,7 +77,7 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 			repliedMsgID := replyTo.ReplyToMsgID
 			uid, _ := db.GetRelayEntry(repliedMsgID)
 			if uid != 0 {
-				sendReplyToUser(ctx, u, uid, msg)
+				sendReplyToUser(ctx, u, uid, msg.Message)
 				return dispatcher.EndGroups
 			}
 		}
