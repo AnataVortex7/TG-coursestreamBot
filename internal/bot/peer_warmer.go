@@ -153,8 +153,8 @@ func WarmUserPeerCache(log *zap.Logger) {
 		}
 
 		for _, u := range result {
-			if usr, ok := u.(*tg.User); ok && !usr.AccessHash.Zero() {
-				Bot.PeerStorage.AddPeer(usr.ID, usr.AccessHash.Value, storage.TypeUser, usr.Username)
+			if usr, ok := u.(*tg.User); ok && usr.AccessHash != 0 {
+				Bot.PeerStorage.AddPeer(usr.ID, usr.AccessHash, storage.TypeUser, usr.Username)
 				warmed++
 			}
 		}
