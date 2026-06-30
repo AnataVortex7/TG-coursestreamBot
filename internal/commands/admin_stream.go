@@ -1,3 +1,4 @@
+
 // internal/commands/admin_stream.go
 package commands
 
@@ -610,9 +611,6 @@ func applyReplaces(caption string) string {
 	})
 	return caption
 }
-
-// ── /adminstream <messageID> ──────────────────────────────────────────────────
-// ── /adminstream <messageID> ──────────────────────────────────────────────────
 
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
@@ -1494,11 +1492,17 @@ func prepareMessage(
 	var colabSent bool
 	var pm_tempPath string // non-watermark path sathi FFmpeg thumb fallback
 
-	if wmOk && isVideoFile(file) {
-		// Watermark path: download → Colab queue → upload
+	koyebURLCheck := os.Getenv("KOYEB_URL")
+	if koyebURLCheck != "" && isVideoFile(file) {
+		// Sarv videos Colab kade jातात — watermark असो वा नसो.
+		// Main server फक्त pipe सर्व्हर म्हणून काम करतो, free राहतो.
+		statusLabel := "Downloading for watermark..."
+		if !wmOk {
+			statusLabel = "Downloading (Colab processing)..."
+		}
 		editProgress(fmt.Sprintf(
-			"📥 Downloading for watermark...\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
-			file.FileName, formatSize(file.FileSize), msgID,
+			"📥 %s\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
+			statusLabel, file.FileName, formatSize(file.FileSize), msgID,
 		))
 
 		// Bot token + Colab job saathi send target
@@ -1511,6 +1515,20 @@ func prepareMessage(
 			colabSendAccessHash = sendChannelPeer.AccessHash
 		} else {
 			colabSendChatID = adminChatID
+		}
+
+		// LOG_CHANNEL backup — jujha aadhi pratyek file la hoti
+		var colabLogChatID int64
+		var colabLogAccessHash int64
+		if logCh, logErr := utils.GetLogChannelPeer(stallCtx, botClient.API(), botClient.PeerStorage); logErr == nil && logCh != nil {
+			logIDStr := fmt.Sprintf("-100%d", logCh.ChannelID)
+			colabLogChatID, _ = strconv.ParseInt(logIDStr, 10, 64)
+			colabLogAccessHash = logCh.AccessHash
+			utils.Logger.Info("Colab job: log channel resolved",
+				zap.Int64("logChatID", colabLogChatID))
+		} else {
+			utils.Logger.Warn("Colab job: log channel peer FAILED — backup skip होईल",
+				zap.Error(logErr))
 		}
 
 		finalCaptionForColab := finalCaption
@@ -1538,6 +1556,8 @@ func prepareMessage(
 			colabSendChatID,
 			colabSendAccessHash,
 			topicID,
+			colabLogChatID,
+			colabLogAccessHash,
 			finalCaptionForColab,
 		)
 	} else {
@@ -1875,6 +1895,8 @@ func downloadWatermarkAndReupload(
 	sendToChatID int64,
 	sendToAccessHash int64,
 	sendToTopicID int,
+	logChatID int64,
+	logAccessHash int64,
 	caption string,
 ) (tg.InputFileClass, bool, error) {
 
@@ -1923,6 +1945,8 @@ func downloadWatermarkAndReupload(
 			sendToChatID,
 			sendToAccessHash,
 			sendToTopicID,
+			logChatID,
+			logAccessHash,
 			caption,
 			msgID,
 		)
