@@ -259,11 +259,11 @@
         </div>
         <div class="card-actions">
           {{ if .HasMedia }}
-            {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-watch">▶ Watch</a>
-            {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-listen">🎵 Listen</a>
-            {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-view">📄 View PDF</a>
-            {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-photo">🖼️ View Photo</a>
-            {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
+            {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" class="btn btn-watch">▶ Watch</a>
+            {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" class="btn btn-listen">🎵 Listen</a>
+            {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" class="btn btn-view">📄 View PDF</a>
+            {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" class="btn btn-photo">🖼️ View Photo</a>
+            {{ else }}<a href="{{ .StreamURL }}" class="btn btn-open">📂 Open</a>{{ end }}
             {{ if or (eq .MediaType "video") (eq .MediaType "audio") }}
             <button class="btn btn-offline"
               onclick="getOfflineToken('{{.CourseIDHex}}', '{{.FileKey}}', this)"
@@ -323,11 +323,11 @@
   </div>
   <div class="card-actions">
     {{ if .HasMedia }}
-      {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-watch">▶ Watch</a>
-      {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-listen">🎵 Listen</a>
-      {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-view">📄 View PDF</a>
-      {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-photo">🖼️ View Photo</a>
-      {{ else }}<a href="{{ .StreamURL }}" target="_blank" class="btn btn-open">📂 Open</a>{{ end }}
+      {{ if eq .MediaType "video" }}<a href="{{ .StreamURL }}" class="btn btn-watch">▶ Watch</a>
+      {{ else if eq .MediaType "audio" }}<a href="{{ .StreamURL }}" class="btn btn-listen">🎵 Listen</a>
+      {{ else if eq .MediaType "pdf" }}<a href="{{ .StreamURL }}" class="btn btn-view">📄 View PDF</a>
+      {{ else if eq .MediaType "photo" }}<a href="{{ .StreamURL }}" class="btn btn-photo">🖼️ View Photo</a>
+      {{ else }}<a href="{{ .StreamURL }}" class="btn btn-open">📂 Open</a>{{ end }}
       {{ if or (eq .MediaType "video") (eq .MediaType "audio") }}
       <button class="btn btn-offline"
         onclick="getOfflineToken('{{.CourseIDHex}}', '{{.FileKey}}', this)"
@@ -400,7 +400,7 @@
         : f.mediaType === 'audio' ? 'btn-listen'
         : f.mediaType === 'pdf' ? 'btn-view'
         : f.mediaType === 'photo' ? 'btn-photo' : 'btn-open';
-      actions += `<a href="${esc(f.streamURL)}" target="_blank" class="btn ${watchClass}">${watchLabel}</a>`;
+      actions += `<a href="${esc(f.streamURL)}" class="btn ${watchClass}">${watchLabel}</a>`;
       if (f.mediaType === 'video' || f.mediaType === 'audio') {
         actions += `<button class="btn btn-offline" onclick="getOfflineToken('${esc(f.courseIDHex)}','${esc(f.fileKey)}', this)" title="Telegram मध्ये offline download साठी token generate करा">📥 Offline</button>`;
       }
