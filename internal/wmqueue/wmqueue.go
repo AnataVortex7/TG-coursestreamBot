@@ -47,6 +47,8 @@ type WatermarkJob struct {
 	SendToChatID     int64     `json:"send_to_chat_id"`
 	SendToAccessHash int64     `json:"send_to_access_hash,omitempty"`
 	SendToTopicID    int       `json:"send_to_topic_id,omitempty"`
+	LogChatID        int64     `json:"log_chat_id,omitempty"`
+	LogAccessHash    int64     `json:"log_access_hash,omitempty"`
 	Caption       string    `json:"caption"`
 	CreatedAt     time.Time `json:"created_at"`
 	Status        string    `json:"status"`
@@ -490,6 +492,8 @@ func SubmitJob(
 	sendToChatID int64,
 	sendToAccessHash int64,
 	sendToTopicID int,
+	logChatID int64,
+	logAccessHash int64,
 	caption string,
 	srcMsgID int,
 ) (string, error) {
@@ -507,6 +511,8 @@ func SubmitJob(
 		SendToChatID:     sendToChatID,
 		SendToAccessHash: sendToAccessHash,
 		SendToTopicID:    sendToTopicID,
+		LogChatID:        logChatID,
+		LogAccessHash:    logAccessHash,
 		Caption:          caption,
 	}
 	Default.Enqueue(job)
@@ -656,8 +662,6 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 	return result.Result.MessageID
 }
 
-// sendTgMessagePlain — Markdown parse fail झाल्यास plain text ने retry (escape issue मुळे
-// message कधीच न पाठवलं जाण्याचा bug टाळण्यासाठी — त्यामुळे delete सुद्धा कधी होणार नाही).
 // sendTgMessagePlain — Markdown parse fail झाल्यास plain text ने retry (escape issue मुळे
 // message कधीच न पाठवलं जाण्याचा bug टाळण्यासाठी — त्यामुळे delete सुद्धा कधी होणार नाही).
 func sendTgMessagePlain(botToken string, chatID int64, text string) int64 {
