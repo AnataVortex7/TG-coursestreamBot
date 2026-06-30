@@ -613,6 +613,7 @@ func applyReplaces(caption string) string {
 
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
+
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
 
@@ -1535,6 +1536,7 @@ func prepareMessage(
 			adminChatID,
 			sentMsgID,
 			colabSendChatID,
+			colabSendAccessHash,
 			topicID,
 			finalCaptionForColab,
 		)
@@ -1871,6 +1873,7 @@ func downloadWatermarkAndReupload(
 	adminChatID int64,
 	progressMsgID int,
 	sendToChatID int64,
+	sendToAccessHash int64,
 	sendToTopicID int,
 	caption string,
 ) (tg.InputFileClass, bool, error) {
@@ -1917,8 +1920,8 @@ func downloadWatermarkAndReupload(
 			botToken,
 			adminChatID,
 			progressMsgID,
-			colabSendChatID,
-			colabSendAccessHash,
+			sendToChatID,
+			sendToAccessHash,
 			sendToTopicID,
 			caption,
 			msgID,
