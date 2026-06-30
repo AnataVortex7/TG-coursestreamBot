@@ -44,8 +44,9 @@ type WatermarkJob struct {
 	ChatID        int64     `json:"chat_id"`
 	MsgID         int       `json:"msg_id"`
 	ProgressMsgID int       `json:"progress_msg_id"`
-	SendToChatID  int64     `json:"send_to_chat_id"`
-	SendToTopicID int       `json:"send_to_topic_id,omitempty"`
+	SendToChatID     int64     `json:"send_to_chat_id"`
+	SendToAccessHash int64     `json:"send_to_access_hash,omitempty"`
+	SendToTopicID    int       `json:"send_to_topic_id,omitempty"`
 	Caption       string    `json:"caption"`
 	CreatedAt     time.Time `json:"created_at"`
 	Status        string    `json:"status"`
@@ -487,24 +488,26 @@ func SubmitJob(
 	adminChatID int64,
 	progressMsgID int,
 	sendToChatID int64,
+	sendToAccessHash int64,
 	sendToTopicID int,
 	caption string,
 	srcMsgID int,
 ) (string, error) {
 	jobID := fmt.Sprintf("wm-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
 	job := &WatermarkJob{
-		JobID:         jobID,
-		FileURL:       fileURL,
-		FileName:      fileName,
-		FileSize:      fileSize,
-		WatermarkText: wmText,
-		BotToken:      botToken,
-		ChatID:        adminChatID,
-		MsgID:         srcMsgID,
-		ProgressMsgID: progressMsgID,
-		SendToChatID:  sendToChatID,
-		SendToTopicID: sendToTopicID,
-		Caption:       caption,
+		JobID:            jobID,
+		FileURL:          fileURL,
+		FileName:         fileName,
+		FileSize:         fileSize,
+		WatermarkText:    wmText,
+		BotToken:         botToken,
+		ChatID:           adminChatID,
+		MsgID:            srcMsgID,
+		ProgressMsgID:    progressMsgID,
+		SendToChatID:     sendToChatID,
+		SendToAccessHash: sendToAccessHash,
+		SendToTopicID:    sendToTopicID,
+		Caption:          caption,
 	}
 	Default.Enqueue(job)
 	return jobID, nil
@@ -653,6 +656,8 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 	return result.Result.MessageID
 }
 
+// sendTgMessagePlain — Markdown parse fail झाल्यास plain text ने retry (escape issue मुळे
+// message कधीच न पाठवलं जाण्याचा bug टाळण्यासाठी — त्यामुळे delete सुद्धा कधी होणार नाही).
 // sendTgMessagePlain — Markdown parse fail झाल्यास plain text ने retry (escape issue मुळे
 // message कधीच न पाठवलं जाण्याचा bug टाळण्यासाठी — त्यामुळे delete सुद्धा कधी होणार नाही).
 func sendTgMessagePlain(botToken string, chatID int64, text string) int64 {
