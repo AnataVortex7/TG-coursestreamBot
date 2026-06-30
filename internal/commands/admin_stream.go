@@ -613,6 +613,8 @@ func applyReplaces(caption string) string {
 
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
+// ── /adminstream <messageID> ──────────────────────────────────────────────────
+// ── /adminstream <messageID> ──────────────────────────────────────────────────
 
 func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
@@ -1501,11 +1503,13 @@ func prepareMessage(
 		// Bot token + Colab job saathi send target
 		botToken := os.Getenv("BOT_TOKEN")
 		var colabSendChatID int64
+		var colabSendAccessHash int64
 		if sendChannelPeer != nil {
 			idStr := fmt.Sprintf("-100%d", sendChannelPeer.ChannelID)
-    		colabSendChatID, _ = strconv.ParseInt(idStr, 10, 64)
+			colabSendChatID, _ = strconv.ParseInt(idStr, 10, 64)
+			colabSendAccessHash = sendChannelPeer.AccessHash
 		} else {
- 		   colabSendChatID = adminChatID
+			colabSendChatID = adminChatID
 		}
 
 		finalCaptionForColab := finalCaption
@@ -1913,7 +1917,8 @@ func downloadWatermarkAndReupload(
 			botToken,
 			adminChatID,
 			progressMsgID,
-			sendToChatID,
+			colabSendChatID,
+			colabSendAccessHash,
 			sendToTopicID,
 			caption,
 			msgID,
