@@ -32,18 +32,16 @@ func (e *allRoutes) LoadWeb(r *Route) {
 	// Logout
 	r.Engine.POST("/logout", auth.RequireAuth, auth.DoLogout)
 
-	// ── OTP login routes ───────────────────────────────────────────────────────
+	// ── OTP login routes (Telegram-based — email OTP काढून टाकला आहे) ──────────
 
-	// GET  /login/check-service  → {"up": true/false}  (Brevo health probe)
-	r.Engine.GET("/login/check-service", auth.CheckEmailService)
-
-	// POST /login/otp/send       → send 4-digit OTP to email
+	// POST /login/otp/send       → OTP पाठवतो: linked असेल तर थेट Telegram वर,
+	//                              नसेल तर deep-link token देतो ({"need_telegram_link":true}).
 	r.Engine.POST("/login/otp/send", auth.SendOTPHandler)
 
 	// POST /login/otp/verify     → verify OTP → set cookie → {"redirect":"/courses"}
 	r.Engine.POST("/login/otp/verify", auth.VerifyOTPHandler)
 
-	// POST /login/password       → fallback password login (only when Brevo is down)
+	// POST /login/password       → alternate login (Telegram OTP न मिळाल्यास fallback)
 	r.Engine.POST("/login/password", auth.DoPasswordLogin)
 
 	// ── Admin Panel ────────────────────────────────────────────────────────────

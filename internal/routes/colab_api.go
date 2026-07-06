@@ -135,8 +135,9 @@ func handleColabDone(c *gin.Context) {
 		return
 	}
 	var req struct {
-		JobID    string `json:"job_id"`
-		WorkerID string `json:"worker_id"`
+		JobID         string `json:"job_id"`
+		WorkerID      string `json:"worker_id"`
+		SentMessageID int    `json:"sent_message_id"` // ← नवीन, optional — जुना Colab script पाठवत नसेल तर 0
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
@@ -153,6 +154,9 @@ func handleColabDone(c *gin.Context) {
 	}
 	wmqueue.RecordPoll(workerID)
 
+	if req.SentMessageID > 0 {
+		wmqueue.Default.SetSentMessageID(req.JobID, req.SentMessageID)
+	}
 	wmqueue.Default.UpdateStatus(req.JobID, wmqueue.StatusDone, "")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

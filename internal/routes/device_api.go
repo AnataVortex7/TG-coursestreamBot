@@ -2,8 +2,8 @@
 //
 // User ekach device varun login karu shakto (fingerprint-based, internal/auth/device.go
 // madhe). Vegla device detect zhala tar /device-blocked page var pathavla jato.
-// Tya page var 2 options: Admin la Telegram/email notify kara, kiwa "24 tasat
-// session delete kara" request submit kara (24h nantar nava device automatically allow).
+// Tya page var 2 options: Admin la Telegram/email notify kara, kiwa "5 divsat
+// session delete kara" request submit kara (5 din nantar nava device automatically allow).
 package routes
 
 import (
@@ -48,7 +48,7 @@ func showDeviceBlocked(c *gin.Context) {
 }
 
 // POST /api/device/request-delete  Body: { "token": "..." }
-// User cha pending 24h delete window suru karto.
+// User cha pending 5-day delete window suru karto.
 func handleRequestDeviceDelete(c *gin.Context) {
 	var req struct {
 		Token string `json:"token"`
@@ -79,7 +79,7 @@ func handleRequestDeviceDelete(c *gin.Context) {
 		return
 	}
 
-	deleteAt := time.Now().Add(24 * time.Hour)
+	deleteAt := time.Now().Add(5 * 24 * time.Hour)
 	if err := db.RequestSessionDelete(userID, deleteAt); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error. Try again."})
 		return
