@@ -61,6 +61,7 @@ func runApp(cmd *cobra.Command, args []string) {
 		log.Sugar().Fatalf("Failed to start main bot: %v", err)
 	}
 	commands.MainBotClient = mainBot
+	auth.SendTelegramOTP = bot.SendOTPToTelegram // OTP-via-telegram wiring (import cycle टाळण्यासाठी DI)
 	cache.InitCache(log)
 
 	// ── Start background janitor (auto-delete + cleanup) ──────────────────────
@@ -78,6 +79,20 @@ func runApp(cmd *cobra.Command, args []string) {
 	commands.MainUserbotClient = bot.UserBot.GetClient()
 	// Course channel admin-sync hook — cmdAddCourse use karto (import cycle टाळायला)
 	commands.SyncChannelAdmins = bot.UserBot.AddBotsAsAdminsForChannel
+	// Userbot login/logout/status hooks — menu.go (button menu) वापरतो
+	// (import cycle टाळायला: commands ← bot आधीच import करतो).
+	commands.UserbotStatus = func() (bool, string, string, string, string, int64) {
+		info := bot.UserBot.Status()
+		return info.Running, info.FirstName, info.LastName, info.Username, info.Phone, info.UserID
+	}
+	commands.UserbotSendCode = bot.UserBot.SendCode
+	commands.UserbotVerifyCode = func(phone, phoneHash, code, password string) (string, string, string, string, string, int64, error) {
+		sessionStr, info, err := bot.UserBot.VerifyCode(phone, phoneHash, code, password)
+		return sessionStr, info.FirstName, info.LastName, info.Username, info.Phone, info.UserID, err
+	}
+	commands.UserbotStop = bot.UserBot.Stop
+	commands.UserbotStartFromSession = bot.UserBot.StartFromSession
+	commands.GetLiveUserbotClient = bot.UserBot.GetClient
 	// Registration Telegram notification hook (import cycle टाळायला — auth ← bot direct import karu shakat nahi)
 	auth.NotifyAdmins = bot.NotifyAllowedUsers
 	// Bot cha PeerStorage redeploy nantar empty asto (fsb.session ephemeral
@@ -85,6 +100,15 @@ func runApp(cmd *cobra.Command, args []string) {
 	// cha access_hash automatic warm karto, manual "ek message pathवा" lागत nahi.
 	bot.WarmAdminPeerCacheDelayed(log, 3*time.Second)
 	bot.WarmUserPeerCacheDelayed(log, 5*time.Second) // सगळ्या linked users चा peer cache warm करतो
+
+	// नवीन deploy असेल तरच (versionString बदलला असेल तरच) सर्व admins + linked
+	// users ला "bug fixed, services working" announcement — crash-restart वर
+	// परत परत spam होऊ नये म्हणून version-gate. Peer cache warm व्हायला वेळ
+	// द्यायला 12 सेकंद उशिरा (वरच्या दोन्ही warm-calls नंतर).
+	go func() {
+		time.Sleep(12 * time.Second)
+		announceDeployIfNewVersion(mainBot, log)
+	}()
 
 	// ── Init external worker pool (Koyeb workers) ─────────────────────────────
 	// workerreg.Init reads WORKER_URLS / WORKER_URL1..N from config,
