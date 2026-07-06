@@ -49,12 +49,24 @@ type WatermarkJob struct {
 	SendToTopicID    int       `json:"send_to_topic_id,omitempty"`
 	LogChatID        int64     `json:"log_chat_id,omitempty"`
 	LogAccessHash    int64     `json:"log_access_hash,omitempty"`
+	// ProtectContent — true असेल तरच Colab worker पाठवलेल्या video वर
+	// forward/save block (protect_content) लावतो. Offline course student
+	// watermark delivery साठी true, /userbotdl admin uploads साठी false —
+	// त्यामुळे same WatermarkJob / same worker code वापरूनही दोन्ही cases
+	// वेगळं वागतात.
+	ProtectContent bool      `json:"protect_content,omitempty"`
 	Caption       string    `json:"caption"`
 	CreatedAt     time.Time `json:"created_at"`
 	Status        string    `json:"status"`
 	Error         string    `json:"error,omitempty"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	WorkerID      string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
+
+	// SentMessageID — Colab ने प्रत्यक्ष पाठवलेल्या message चा ID (student
+	// offline-download साठी 48hr auto-delete schedule करायला लागतो). Colab
+	// script "/api/colab/done" call करताना हे पाठवतो (नसेल तर 0 राहतो —
+	// जुना Colab script अजूनही काम करत राहील, फक्त auto-delete मिळणार नाही).
+	SentMessageID int `json:"-"`
 
 	// ── Progress ordering ──────────────────────────────────────────────────
 	// LastProgressSeq — आता पर्यंत apply झालेला सर्वात मोठा sequence number.
@@ -231,6 +243,16 @@ func (q *Queue) UpdateStatus(jobID, status, errMsg string) {
 		job.Status = status
 		job.Error = errMsg
 		job.UpdatedAt = time.Now()
+	}
+}
+
+// SetSentMessageID — Colab ने प्रत्यक्ष पाठवलेल्या message चा ID साठवतो (student
+// offline-download flow साठी 48hr auto-delete schedule करायला हा लागतो).
+func (q *Queue) SetSentMessageID(jobID string, msgID int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if job, ok := q.jobs[jobID]; ok {
+		job.SentMessageID = msgID
 	}
 }
 
@@ -496,6 +518,7 @@ func SubmitJob(
 	logAccessHash int64,
 	caption string,
 	srcMsgID int,
+	protectContent bool,
 ) (string, error) {
 	jobID := fmt.Sprintf("wm-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
 	job := &WatermarkJob{
@@ -514,6 +537,7 @@ func SubmitJob(
 		LogChatID:        logChatID,
 		LogAccessHash:    logAccessHash,
 		Caption:          caption,
+		ProtectContent:   protectContent,
 	}
 	Default.Enqueue(job)
 	return jobID, nil
@@ -524,23 +548,23 @@ func SubmitJob(
 // processed file pathvतो. Koyeb फक्त job चा final status (done/failed) wait
 // karto — output file Koyeb kade kadhich yet nahi.
 
-func WaitForDone(ctx context.Context, jobID string) (bool, string) {
+func WaitForDone(ctx context.Context, jobID string) (success bool, errMsg string, sentMessageID int) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return false, "context cancelled"
+			return false, "context cancelled", 0
 		case <-ticker.C:
 			job, ok := Default.Get(jobID)
 			if !ok {
-				return false, "job not found in queue"
+				return false, "job not found in queue", 0
 			}
 			switch job.Status {
 			case StatusDone:
-				return true, ""
+				return true, "", job.SentMessageID
 			case StatusFailed:
-				return false, job.Error
+				return false, job.Error, 0
 			}
 		}
 	}
