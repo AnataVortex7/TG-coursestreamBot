@@ -245,12 +245,30 @@ func ShowRegister(c *gin.Context) {
 			}
 		}
 	}
-	c.HTML(http.StatusOK, "login.html", gin.H{"tab": "register", "error": ""})
+	c.HTML(http.StatusOK, "login.html", gin.H{
+		"tab":               "register",
+		"error":             "",
+		"registration_open": db.GetSettingBool(db.SettingRegistrationOpen, true),
+	})
 }
 
 // DoRegister — POST /register
 // Validate form, create user directly, auto-login (no OTP step).
 func DoRegister(c *gin.Context) {
+	// ── Registration open/close gate ───────────────────────────────────────────
+	// Ha check sagळ्याच्या aadhi — form parse honya, validation honya, ki DB
+	// query honya AADHI. Admin ne registration OFF kelela asel tar koणीही
+	// (UI bypass karun direct POST /register hit kela tarihi, curl/Postman
+	// varun access kela tarihi) navin account create karu shaknar nahi.
+	// Frontend cha "Registration Closed" banner ha फक्त UX साठी आहे —
+	// khara enforcement fakt ithech, server-side, honar.
+	if !db.GetSettingBool(db.SettingRegistrationOpen, true) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "New registrations are currently closed. Please try again later.",
+		})
+		return
+	}
+
 	fullName  := strings.TrimSpace(c.PostForm("full_name"))
 	mobile    := strings.TrimSpace(c.PostForm("mobile"))
 	emailAddr := strings.ToLower(strings.TrimSpace(c.PostForm("email")))

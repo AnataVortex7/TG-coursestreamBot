@@ -1,11 +1,12 @@
 // internal/auth/otp_auth.go
-// OTP-based email login handlers + password fallback.
+// OTP-based Telegram login handlers + password fallback.
+// OTP आता फक्त Telegram वरून पाठवला जातो — email OTP पूर्ण काढून टाकला आहे.
 // These sit alongside the existing auth.go handlers in the same package.
 package auth
 
 import (
+	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/db"
-	"EverythingSuckz/fsb/internal/email"
 	"crypto/rand"
 	"fmt"
 	"log"
@@ -21,36 +22,36 @@ const maxOTPAttempts = 3
 
 var ist = time.FixedZone("IST", 5*60*60+30*60)
 
-// ─── Service health ───────────────────────────────────────────────────────────
-
-// CheckEmailService — GET /login/check-service
-// Returns JSON {"up": true/false} so the frontend can decide which login mode to show.
-func CheckEmailService(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"up": email.IsServiceUp()})
-}
+// SendTelegramOTP — bot ला telegram msg पाठवण्याचं actual काम करतो.
+// इथून थेट "internal/bot" import केलं तर import cycle होतो
+// (bot → commands → auth), म्हणून dependency injection वापरलं आहे —
+// run.go मध्ये startup ला `auth.SendTelegramOTP = bot.SendOTPToTelegram` असं set होतं.
+var SendTelegramOTP func(telegramID int64, otpPlain string) error
 
 // ─── Send OTP ─────────────────────────────────────────────────────────────────
 
 // SendOTPHandler — POST /login/otp/send
-// Body (form): email=user@example.com
+// Body (form): email=<mobile_or_email identifier>
+//
+// OTP आता फक्त Telegram वर पाठवला जातो, कधीच email वर नाही:
+//   - Telegram आधीच linked (TelegramID != 0) असेल → OTP थेट त्या chat वर.
+//   - Linked नसेल → एक deep-link token देतो, frontend "Telegram उघडा" बटण दाखवतो.
+//     User bot मध्ये /start दाबताच auto-link होतो आणि लगेच OTP telegram वर जातो.
 //
 // Security notes:
-//   - Returns the same success message whether email exists or not (prevents user enumeration).
-//   - Rate-limited: 1 OTP per 60 seconds per email address.
-//   - OTP is stored as a bcrypt hash — never plain text.
-//   - Blocked emails (cumulative lockout) cannot request new OTPs either.
+//   - Identifier registered नसेल तरी generic success response (user enumeration टाळण्यासाठी).
+//   - Rate-limited: 1 OTP / 60s (linked) किंवा 1 deep-link / 30s (not linked).
+//   - OTP bcrypt hash म्हणूनच store होतो, कधीच plain text नाही.
 func SendOTPHandler(c *gin.Context) {
-	emailAddr := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
+	identifier := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
 
-	if emailAddr == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Email address is required."})
+	if identifier == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Mobile number or email is required."})
 		return
 	}
 
 	// ── Cumulative lockout check ──────────────────────────────────────────────
-	// Email locked असल्यास new OTP request पण block करतो.
-	// हे "3 tries × many resets" bypass रोखतो.
-	if locked, until := db.CheckOTPLock(emailAddr); locked {
+	if locked, until := db.CheckOTPLock(identifier); locked {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf(
 				"Too many wrong OTP attempts. Try again after %s.",
@@ -61,10 +62,10 @@ func SendOTPHandler(c *gin.Context) {
 	}
 
 	// Verify user exists and is active (but don't reveal which is the case to caller)
-	user, err := db.GetUserByMobileOrEmail(emailAddr)
+	user, err := db.GetUserByMobileOrEmail(identifier)
 	if err != nil || user == nil {
 		// Generic response — don't reveal non-existence
-		c.JSON(http.StatusOK, gin.H{"message": "If this email is registered, you will receive an OTP shortly."})
+		c.JSON(http.StatusOK, gin.H{"message": "If this account is registered, you will receive an OTP on Telegram shortly."})
 		return
 	}
 	if !user.IsActive {
@@ -72,44 +73,72 @@ func SendOTPHandler(c *gin.Context) {
 		return
 	}
 
-	// Rate limit: 60 seconds between OTPs
-	if !db.CanSendOTP(emailAddr) {
-		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error": "Please wait 60 seconds before requesting a new OTP.",
+	// ── Case A: Telegram आधीच linked ──────────────────────────────────────────
+	if user.TelegramID != 0 {
+		if !db.CanSendOTP(identifier) {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": "Please wait 60 seconds before requesting a new OTP.",
+			})
+			return
+		}
+
+		otpPlain := generateOTP()
+		otpHash, err := HashPassword(otpPlain)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error. Try again."})
+			return
+		}
+		if err := db.CreateOTP(identifier, otpHash); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error. Try again."})
+			return
+		}
+
+		if SendTelegramOTP == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Server misconfigured. Contact admin."})
+			return
+		}
+		if err := SendTelegramOTP(user.TelegramID, otpPlain); err != nil {
+			log.Printf("[OTP] Telegram send FAILED for %s (tg:%d): %v", identifier, user.TelegramID, err)
+			// रेट-लिमिट block होऊ नये म्हणून record काढून टाकतो, user लगेच retry करू शकेल.
+			_ = db.DeleteOTP(identifier)
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "Failed to send OTP on Telegram. Please open the bot once and try again.",
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"message": "OTP sent to your Telegram account.",
+			"channel": "telegram",
 		})
 		return
 	}
 
-	// Generate 4-digit OTP
-	otpPlain := generateOTP()
+	// ── Case B: Telegram अजून linked नाही → deep-link token ───────────────────
+	if !db.CanCreateTGLoginToken(user.ID) {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": "Please wait a bit before requesting a new Telegram link.",
+		})
+		return
+	}
+	if config.ValueOf.BotUsername == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server misconfigured (BOT_USERNAME not set). Contact admin."})
+		return
+	}
 
-	// Hash before storing (bcrypt — same helper as passwords)
-	otpHash, err := HashPassword(otpPlain)
+	token, err := db.CreateTGLoginToken(user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error. Try again."})
 		return
 	}
 
-	if err := db.CreateOTP(emailAddr, otpHash); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Server error. Try again."})
-		return
-	}
+	deepLink := fmt.Sprintf("https://t.me/%s?start=totp_%s", config.ValueOf.BotUsername, token)
 
-	// Send via Brevo SMTP
-	if err := email.SendOTP(emailAddr, otpPlain); err != nil {
-		log.Printf("[OTP] SendOTP FAILED for %s: %v", emailAddr, err)
-
-		// Delete the OTP record so the 60-second rate limit does NOT block
-		// the user from retrying immediately after a failed send.
-		_ = db.DeleteOTP(emailAddr)
-
-		c.JSON(http.StatusServiceUnavailable, gin.H{
-			"error": "Failed to send OTP email. Please try again or use password login.",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "If this email is registered, you will receive an OTP shortly."})
+	c.JSON(http.StatusOK, gin.H{
+		"need_telegram_link": true,
+		"deep_link":          deepLink,
+		"message":            "Open Telegram and press Start — your OTP will arrive there instantly.",
+	})
 }
 
 // ─── Verify OTP ───────────────────────────────────────────────────────────────
@@ -124,7 +153,7 @@ func VerifyOTPHandler(c *gin.Context) {
 	otpCode   := strings.TrimSpace(c.PostForm("otp"))
 
 	if emailAddr == "" || otpCode == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Email and OTP are required."})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Mobile/email and OTP are required."})
 		return
 	}
 	if len(otpCode) != 4 {
@@ -226,7 +255,8 @@ func VerifyOTPHandler(c *gin.Context) {
 // ─── Password fallback ────────────────────────────────────────────────────────
 
 // DoPasswordLogin — POST /login/password
-// Fallback login used ONLY when Brevo email service is down.
+// Alternate login method — useful when Telegram OTP is not reachable
+// (bot down, user hasn't opened Telegram, etc).
 // Returns JSON so the frontend JS can handle the response uniformly.
 func DoPasswordLogin(c *gin.Context) {
 	identifier := strings.TrimSpace(c.PostForm("username"))

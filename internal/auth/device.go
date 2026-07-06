@@ -8,7 +8,7 @@ package auth
 //   - Server tyanchya + User-Agent varun SHA-256 fingerprint kadhto.
 //   - First login → fingerprint DB madhe save.
 //   - Next login → same fingerprint → allow; vegla fingerprint → blocked page.
-//   - User "24h madhe delete" request karu shakto; 24h nantar nava device allow.
+//   - User "5 din madhe delete" request karu shakto; 5 din nantar nava device allow.
 //   - Admin /kill <mobile> → turant ClearUserDevice.
 
 import (
@@ -125,7 +125,7 @@ func CheckAndSetFingerprint(c *gin.Context, user *db.User, resolution, timezone 
 		return false
 	}
 
-	// Different device — check if 24h delete window passed
+	// Different device — check if 5-day delete window passed
 	if user.SessionDeleteAt != nil && time.Now().After(*user.SessionDeleteAt) {
 		_ = db.SetUserFingerprint(user.ID, fp)
 		return false // allow new device
