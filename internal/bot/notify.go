@@ -65,3 +65,17 @@ func SendTelegramDM(userID int64, text string) error {
 	})
 	return err
 }
+
+// SendOTPToTelegram — website login OTP थेट user च्या Telegram chat वर पाठवतो.
+// email ऐवजी हाच एकमेव OTP delivery channel आहे. Peer cache आधीच WarmUserPeerCache
+// ने warm केलेला असतो (linked users साठी), त्यामुळे redeploy नंतरही लगेच काम करतो.
+func SendOTPToTelegram(telegramID int64, otpPlain string) error {
+	text := fmt.Sprintf(
+		"🔐 *Login OTP*\n\n"+
+			"तुमचा code: `%s`\n\n"+
+			"⏳ 10 मिनिटांत expire होईल.\n"+
+			"🚫 हा OTP कुणालाही (agent/admin सकट) share करू नका.",
+		otpPlain,
+	)
+	return SendTelegramDM(telegramID, text)
+}
