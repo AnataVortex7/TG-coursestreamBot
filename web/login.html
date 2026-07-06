@@ -251,7 +251,7 @@
 
     <!-- Login method toggle -->
     <div style="display:flex;gap:8px;margin-bottom:1.2rem;">
-      <button id="btn-method-otp" class="method-btn active" onclick="setLoginMethod('otp')">📧 OTP Login</button>
+      <button id="btn-method-otp" class="method-btn active" onclick="setLoginMethod('otp')">📲 Telegram OTP</button>
       <button id="btn-method-pwd" class="method-btn" onclick="setLoginMethod('password')">🔑 Password Login</button>
     </div>
 
@@ -266,19 +266,29 @@
     <!-- JS-driven alert box -->
     <div id="login-alert" class="alert" style="display:none;"></div>
 
-    <!-- ── STEP 1 : Email input ── -->
+    <!-- ── STEP 1 : identifier input ── -->
     <div id="step-email" class="step active">
       <div class="field">
-        <label for="otp-email">Email Address</label>
-        <input id="otp-email" type="email" placeholder="you@example.com" autocomplete="email" autofocus />
+        <label for="otp-email">Mobile Number or Email</label>
+        <input id="otp-email" type="text" placeholder="9876543210 or you@example.com" autocomplete="username" autofocus />
       </div>
-      <button id="btn-send-otp" class="btn-primary" onclick="sendOTP()">Send OTP →</button>
+      <button id="btn-send-otp" class="btn-primary" onclick="sendOTP()">Continue →</button>
+    </div>
+
+    <!-- ── STEP 1b : Telegram link needed ── -->
+    <div id="step-tglink" class="step">
+      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.6rem;">तुमचा Telegram account अजून link नाहीये. खालचं बटण दाबून bot उघडा आणि <strong>Start</strong> दाबा — OTP लगेच तिथे येईल.</p>
+      <a id="btn-open-telegram" class="btn-primary" style="display:block;text-align:center;text-decoration:none;" href="#" target="_blank" rel="noopener">Open Telegram →</a>
+      <button id="btn-tglink-continue" class="btn-primary" style="margin-top:0.6rem;background:transparent;border:1px solid var(--accent);color:var(--accent);" onclick="sendOTP()">I've linked — Send OTP</button>
+      <div style="margin-top:0.9rem;text-align:center;">
+        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToEmail()">← Change mobile/email</button>
+      </div>
     </div>
 
     <!-- ── STEP 2 : OTP entry ── -->
     <div id="step-otp" class="step">
-      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent to <strong id="otp-email-display" style="color:var(--text);"></strong></p>
-      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your email</p>
+      <p style="font-size:0.85rem;color:var(--muted);margin-bottom:0.3rem;">OTP sent on Telegram to <strong id="otp-email-display" style="color:var(--text);"></strong></p>
+      <p style="font-size:0.78rem;color:var(--muted);margin-bottom:0;">Enter the 4-digit code from your Telegram bot chat</p>
 
       <div class="otp-boxes">
         <input class="otp-box" id="d0" type="text" inputmode="numeric" maxlength="1" pattern="[0-9]" autocomplete="one-time-code" />
@@ -295,7 +305,7 @@
       </div>
 
       <div style="margin-top:0.9rem;text-align:center;">
-        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToEmail()">← Change email</button>
+        <button class="btn-link" style="font-size:0.8rem;color:var(--muted);" onclick="goBackToEmail()">← Change mobile/email</button>
       </div>
     </div>
 
@@ -336,6 +346,13 @@
       </div>
       {{ end }}{{ end }}
 
+      {{ if not .registration_open }}
+      <div class="alert alert-error">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        New registrations are currently closed. Please check back later.
+      </div>
+      {{ end }}
+
       <div class="field">
         <label for="reg-name">Full Name *</label>
         <input id="reg-name" type="text" placeholder="Rahul Sharma" value="{{ .full_name }}" />
@@ -368,7 +385,7 @@
         </label>
       </div>
 
-      <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()">Create Account &#x2192;</button>
+      <button id="btn-reg-submit" class="btn-primary" onclick="submitRegistration()" {{ if not .registration_open }}disabled{{ end }}>Create Account &#x2192;</button>
     </div>
 
     <p class="footer-note">Already have an account? <a href="#" onclick="switchTab('login');return false;">Sign in</a></p>
@@ -422,7 +439,7 @@ function setLoginMethod(method) {
 
 // ─── Step manager ─────────────────────────────────────────────────────────────
 function showStep(name) {
-  ['email', 'otp', 'password'].forEach(s => {
+  ['email', 'tglink', 'otp', 'password'].forEach(s => {
     document.getElementById('step-' + s).classList.toggle('active', s === name);
   });
   clearAlert();
@@ -448,15 +465,17 @@ function clearAlert() {
 async function sendOTP(isResend = false) {
   clearAlert();
   const emailInput = document.getElementById('otp-email');
-  emailAddr = (emailInput ? emailInput.value.trim() : emailAddr);
+  emailAddr = (emailInput && emailInput.value.trim()) ? emailInput.value.trim() : emailAddr;
 
-  if (!emailAddr || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailAddr)) {
-    showAlert('error', 'Please enter a valid email address.');
+  if (!emailAddr) {
+    showAlert('error', 'Please enter your mobile number or email.');
     return;
   }
 
   const btn = document.getElementById('btn-send-otp');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Sending…'; }
+  const tgBtn = document.getElementById('btn-tglink-continue');
+  const activeBtn = btn || tgBtn;
+  if (activeBtn) { activeBtn.disabled = true; activeBtn.innerHTML = '<span class="spinner"></span>Sending…'; }
 
   try {
     const fd = new FormData();
@@ -465,42 +484,57 @@ async function sendOTP(isResend = false) {
     const data = await res.json();
 
     if (!res.ok) {
-      // 429 = rate-limited: a valid OTP was already sent to this address.
-      // Transition to OTP entry step so the user can enter the code they received.
+      // 429 = rate-limited: a valid OTP was already sent.
       if (res.status === 429) {
         document.getElementById('otp-email-display').textContent = emailAddr;
         showStep('otp');
         clearOTPBoxes();
         document.getElementById('d0').focus();
         startResendTimer();
-        showAlert('warn', 'OTP was already sent to ' + emailAddr + '. Enter it below. Resend available after 60s.');
-        if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
+        showAlert('warn', 'OTP was already sent. Enter it below. Resend available after some time.');
+        resetSendBtn();
         return;
       }
-      // AFTER — email fail झाली तर password step वर जा
       if (data.error && data.error.toLowerCase().includes('failed to send')) {
-        showAlert('warn', 'Email service unavailable. Please sign in with your password.');
+        showAlert('warn', 'Telegram delivery unavailable right now. Please sign in with your password.');
         showStep('password');
       } else {
         showAlert('error', data.error || 'Failed to send OTP.');
       }
-      if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
+      resetSendBtn();
       return;
     }
 
-    // Move to OTP step
+    // ── Telegram अजून link नाहीये → deep-link दाखवा ──────────────────────────
+    if (data.need_telegram_link && data.deep_link) {
+      const openBtn = document.getElementById('btn-open-telegram');
+      if (openBtn) openBtn.href = data.deep_link;
+      showStep('tglink');
+      window.open(data.deep_link, '_blank');
+      resetSendBtn();
+      return;
+    }
+
+    // ── OTP थेट Telegram वर पाठवला गेला ──────────────────────────────────────
     document.getElementById('otp-email-display').textContent = emailAddr;
     showStep('otp');
     clearOTPBoxes();
     document.getElementById('d0').focus();
     startResendTimer();
 
-    if (isResend) showAlert('success', 'New OTP sent to ' + emailAddr);
+    if (isResend) showAlert('success', 'New OTP sent on Telegram.');
 
   } catch (_) {
     showAlert('error', 'Network error. Please try again.');
-    if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
+    resetSendBtn();
   }
+}
+
+function resetSendBtn() {
+  const btn = document.getElementById('btn-send-otp');
+  const tgBtn = document.getElementById('btn-tglink-continue');
+  if (btn) { btn.disabled = false; btn.textContent = 'Continue →'; }
+  if (tgBtn) { tgBtn.disabled = false; tgBtn.textContent = "I've linked — Send OTP"; }
 }
 
 // ─── OTP: Resend timer ────────────────────────────────────────────────────────
@@ -599,8 +633,7 @@ function goBackToEmail() {
   if (resendInterval) clearInterval(resendInterval);
   clearOTPBoxes();
   showStep('email');
-  const btn = document.getElementById('btn-send-otp');
-  if (btn) { btn.disabled = false; btn.textContent = 'Send OTP →'; }
+  resetSendBtn();
 }
 
 // ─── OTP: Verify ─────────────────────────────────────────────────────────────

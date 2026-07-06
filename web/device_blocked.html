@@ -90,7 +90,7 @@
     <div class="actions">
       <button id="btn-notify" class="btn-notify" onclick="notifyAdmin()">📩 Notify Admin About This Issue</button>
       {{ if not .pending }}
-      <button id="btn-delete" class="btn-delete" onclick="requestDelete()">🕐 Delete Old Session in 24 Hours</button>
+      <button id="btn-delete" class="btn-delete" onclick="requestDelete()">🕐 Delete Old Session in 5 Days</button>
       {{ end }}
       <a href="/login" style="text-decoration:none;"><button class="btn-back">Back to Login</button></a>
     </div>
@@ -137,7 +137,7 @@ async function notifyAdmin() {
 
 async function requestDelete() {
   const btn = document.getElementById('btn-delete');
-  if (!confirm('Your old device session will be cleared after 24 hours, after which you can log in from this new device. Continue?')) return;
+  if (!confirm('Your old device session will be cleared after 5 days, after which you can log in from this new device. Continue?')) return;
   btn.disabled = true;
   btn.textContent = 'Submitting…';
   try {
@@ -154,12 +154,12 @@ async function requestDelete() {
     } else {
       showStatus('err', data.error || 'Something went wrong. Please try again.');
       btn.disabled = false;
-      btn.textContent = '🕐 Delete Old Session in 24 Hours';
+      btn.textContent = '🕐 Delete Old Session in 5 Days';
     }
   } catch (_) {
     showStatus('err', 'Network error. Please try again.');
     btn.disabled = false;
-    btn.textContent = '🕐 Delete Old Session in 24 Hours';
+    btn.textContent = '🕐 Delete Old Session in 5 Days';
   }
 }
 </script>
