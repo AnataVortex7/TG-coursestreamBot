@@ -1207,17 +1207,62 @@ func GetUserByTelegramID(telegramID int64) (*User, error) {
 	return &u, nil
 }
 
+// ─── One user ↔ one Telegram ID errors ────────────────────────────────────────
+var (
+	ErrTelegramAlreadyLinked = errors.New("account is already linked to a telegram id")
+	ErrTelegramIDInUse       = errors.New("this telegram account is already linked to another user")
+	ErrTelegramNotLinked     = errors.New("account has no linked telegram id")
+)
+
 // SetUserTelegramID links a website user record to a Telegram user ID.
-// Called by admin via the /settg bot command.
+// One user <-> one Telegram ID, कायमचं — एकदा link झाल्यावर relink करता येत नाही
+// (admin च्या /unlinktg शिवाय). दोन्ही बाजूंनी uniqueness check करतो.
+// Called by: admin चा /settg command, आणि bot चा auto-link (/start totp_<token>) flow.
 func SetUserTelegramID(userID primitive.ObjectID, telegramID int64) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 
-	_, err := ColUsers.UpdateOne(ctx,
+	var current User
+	if err := ColUsers.FindOne(ctx, bson.M{"_id": userID}).Decode(&current); err != nil {
+		return err
+	}
+	if current.TelegramID != 0 {
+		return ErrTelegramAlreadyLinked
+	}
+
+	var existing User
+	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&existing)
+	if err == nil && existing.ID != userID {
+		return ErrTelegramIDInUse
+	}
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return err
+	}
+
+	_, err = ColUsers.UpdateOne(ctx,
 		bson.M{"_id": userID},
 		bson.M{"$set": bson.M{"telegram_id": telegramID}},
 	)
 	return err
+}
+
+// UnlinkUserTelegramID — admin-only emergency unlink (/unlinktg).
+// Telegram ID परत 0 करतो, जेणेकरून user ला (deep-link किंवा /settg ने) पुन्हा link करता येईल.
+func UnlinkUserTelegramID(userID primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	res, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": userID, "telegram_id": bson.M{"$ne": 0}},
+		bson.M{"$set": bson.M{"telegram_id": 0}},
+	)
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return ErrTelegramNotLinked
+	}
+	return nil
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1321,6 +1366,25 @@ func GetAllLinkedUsers() ([]User, error) {
 
 const SettingTelegramContact = "telegram_contact_enabled"
 
+// SettingRegistrationOpen — website var navin users self-register karu shaktat
+// ka he control karto (GET/POST /register). Default (key DB madhe nasel tar)
+// TRUE ahe — म्हणजे existing installs var registration आधीसारखं ON च राहील,
+// admin explicitly OFF karat नाही tovar.
+//
+// IMPORTANT: ha check DoRegister (internal/auth/auth.go) chya sagळ्यat वर,
+// account create honya AADHI honar — koणीही form bypass karun direct
+// POST /register hit kela tarihi, DB madhe flag OFF asel tar account
+// create honarach nahi.
+const SettingRegistrationOpen = "registration_open"
+
+// SettingOfflineWatermarkEnabled — offline-download (student) video वर user चा
+// mobile/email FFmpeg ने burn-in watermark लावायचा का हे control karto
+// (internal/commands/start.go, processDLToken function). Default (key DB
+// madhe nasel tar) TRUE ahe — existing installs var watermark आधीसारखं ON च
+// राहील. OFF asel tar video direct copy-forward hoto (photo/PDF sarkha) —
+// download/FFmpeg/re-upload kahich hot nahi, jalad पण unprotected.
+const SettingOfflineWatermarkEnabled = "offline_watermark_enabled"
+
 // GetSettingBool — key साठी bool value मिळवतो. Key नसेल तर defaultVal return करतो.
 func GetSettingBool(key string, defaultVal bool) bool {
 	ctx, cancel := Ctx()
@@ -1338,6 +1402,34 @@ func GetSettingBool(key string, defaultVal bool) bool {
 
 // SetSettingBool — key साठी bool value set/update करतो.
 func SetSettingBool(key string, value bool) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColSettings.UpdateOne(ctx,
+		bson.M{"_id": key},
+		bson.M{"$set": bson.M{"value": value}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+// GetSettingString — key साठी string value मिळवतो. Key नसेल तर defaultVal.
+func GetSettingString(key, defaultVal string) string {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var doc struct {
+		Value string `bson:"value"`
+	}
+	err := ColSettings.FindOne(ctx, bson.M{"_id": key}).Decode(&doc)
+	if err != nil {
+		return defaultVal
+	}
+	return doc.Value
+}
+
+// SetSettingString — key साठी string value set/update करतो.
+func SetSettingString(key, value string) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 

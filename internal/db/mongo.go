@@ -35,6 +35,7 @@ var (
 	ColSettings         *mongo.Collection // key-value app settings (toggles etc.)
 	ColEmailProviderMap *mongo.Collection // email → SMTP provider permanent assignment (round-robin nahi, fixed)
 	ColUserMessages     *mongo.Collection // admin → user in-app messages (email सोबत, read status sकट)
+	ColTGLoginTokens    *mongo.Collection // Telegram OTP-login deep-link tokens (TTL: 10 min)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -248,6 +249,7 @@ func Connect() {
 	ColSettings = Database.Collection("app_settings")               // ← key-value settings
 	ColEmailProviderMap = Database.Collection("email_provider_map") // ← email → SMTP provider fixed assignment
 	ColUserMessages     = Database.Collection("user_messages")      // ← admin → user in-app messages
+	ColTGLoginTokens    = Database.Collection("tg_login_tokens")    // ← Telegram OTP-login deep-link tokens
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -320,10 +322,22 @@ func createIndexes() {
 	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "is_active", Value: 1}}, false)
 	ensureIndex(ctx, ColAnnouncements, bson.D{{Key: "created_at", Value: -1}}, false)
 
-	// users: telegram_id for /dl bot command lookup
-	// Drop first to handle conflict with any previously created unique index
+	// users: telegram_id — ek Telegram ID फक्त एकाच website account ला link होऊ शकतो.
+	// Plain unique index nahi vaparat, karan not-linked users cha telegram_id=0 asto
+	// (sparse index ha field "missing" asel tarach skip karto, value 0 asel tar nahi —
+	// tyamule multiple telegram_id:0 wale docs var duplicate-key error yeईल).
+	// म्हणून PARTIAL unique index — फक्त telegram_id > 0 असलेल्या docs वरच unique लागू होतो.
+	// जुना (non-unique) index असेल तर आधी drop करतो.
 	_, _ = ColUsers.Indexes().DropOne(ctx, "telegram_id_1")
-	ensureIndex(ctx, ColUsers, bson.D{{Key: "telegram_id", Value: 1}}, false)
+	ensurePartialUniqueIndex(ctx, ColUsers,
+		bson.D{{Key: "telegram_id", Value: 1}},
+		bson.M{"telegram_id": bson.M{"$gt": 0}},
+	)
+
+	// tg_login_tokens: unique token + TTL (10 min expiry) — Telegram deep-link OTP login
+	ensureIndex(ctx, ColTGLoginTokens, bson.D{{Key: "token", Value: 1}}, true)
+	ensureIndex(ctx, ColTGLoginTokens, bson.D{{Key: "user_id", Value: 1}}, false)
+	ensureTTLIndex(ctx, ColTGLoginTokens, "expires_at")
 
 	// offline_tokens: unique token + TTL (auto-delete at midnight IST via expires_at)
 	ensureIndex(ctx, Database.Collection("offline_tokens"), bson.D{{Key: "token", Value: 1}}, true)
@@ -370,6 +384,21 @@ func ensureIndex(ctx context.Context, col *mongo.Collection, keys bson.D, unique
 	}
 	if _, err := col.Indexes().CreateOne(ctx, model); err != nil {
 		log.Printf("[db] index warning (%s): %v", col.Name(), err)
+	}
+}
+
+// ensurePartialUniqueIndex — unique index फक्त filter match करणाऱ्या docs वरच लागू करतो.
+// उदा. telegram_id वर unique हवं पण फक्त telegram_id > 0 असलेल्या docs साठी —
+// इतर सगळे (telegram_id: 0, unlinked) docs निर्बंधाबाहेर राहतात.
+func ensurePartialUniqueIndex(ctx context.Context, col *mongo.Collection, keys bson.D, filter bson.M) {
+	model := mongo.IndexModel{
+		Keys: keys,
+		Options: options.Index().
+			SetUnique(true).
+			SetPartialFilterExpression(filter),
+	}
+	if _, err := col.Indexes().CreateOne(ctx, model); err != nil {
+		log.Printf("[db] partial unique index warning (%s): %v", col.Name(), err)
 	}
 }
 
