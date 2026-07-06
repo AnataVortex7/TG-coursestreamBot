@@ -1,8 +1,8 @@
-
 // internal/commands/admin_stream.go
 package commands
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -1493,7 +1493,16 @@ func prepareMessage(
 	var pm_tempPath string // non-watermark path sathi FFmpeg thumb fallback
 
 	koyebURLCheck := os.Getenv("KOYEB_URL")
-	if koyebURLCheck != "" && isVideoFile(file) {
+	// [FALLBACK] Colab/watermark worker configured असला तरी सध्या कुठलाही
+	// worker online नसेल (wmqueue.IsColabOnline — RecordPoll based tracker)
+	// तर Colab la job submit करण्यात अर्थ नाही — तो job pending राहून
+	// upCtx (30 min) timeout नंतरच fail होईल. त्याऐवजी लगेच main server
+	// वरच download+reupload कर (watermark शिवाय — main server कडे FFmpeg
+	// drawtext capability नाहीये, फक्त Colab worker कडे आहे).
+	colabConfigured := koyebURLCheck != "" && isVideoFile(file)
+	colabOnlineNow := colabConfigured && wmqueue.IsColabOnline()
+
+	if colabOnlineNow {
 		// Sarv videos Colab kade jातात — watermark असो वा नसो.
 		// Main server फक्त pipe सर्व्हर म्हणून काम करतो, free राहतो.
 		statusLabel := "Downloading for watermark..."
@@ -1561,21 +1570,48 @@ func prepareMessage(
 			finalCaptionForColab,
 		)
 	} else {
-		var tmpPath string
-		uploadedFile, tmpPath, err = downloadAndReupload(
-			stallCtx,
-			upCtx,
-			userbotClient,
-			botClient,
-			file,
-			onDownloadProgress,
-			onUploadProgress,
-		)
-		if tmpPath != "" {
-			// sendPreparedMessage thumbnail extract karayala use karto,
-			// nantar toch delete karnar (defer ethun karta yet nahi kaaran
-			// return zhalyavar tempVideoPath caller kade jato)
-			pm_tempPath = tmpPath
+		if colabConfigured && wmOk {
+			// Colab configured आहे आणि watermark set आहे, पण worker offline —
+			// त्यामुळे तोच watermark process (download → FFmpeg drawtext →
+			// reupload) आता main server वरच (CPU) चालवतो. Feature मध्ये काहीच
+			// फरक नाही, फक्त encoding location Colab ऐवजी main server.
+			editProgress(fmt.Sprintf(
+				"⚠️ Watermark server offline — applying watermark on main server\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
+				file.FileName, formatSize(file.FileSize), msgID,
+			))
+			var tmpPath string
+			uploadedFile, tmpPath, err = downloadWatermarkAndReuploadLocal(
+				stallCtx,
+				upCtx,
+				userbotClient,
+				botClient,
+				file,
+				wmText,
+				onDownloadProgress,
+				onUploadProgress,
+				editProgress,
+				msgID,
+			)
+			if tmpPath != "" {
+				pm_tempPath = tmpPath
+			}
+		} else {
+			var tmpPath string
+			uploadedFile, tmpPath, err = downloadAndReupload(
+				stallCtx,
+				upCtx,
+				userbotClient,
+				botClient,
+				file,
+				onDownloadProgress,
+				onUploadProgress,
+			)
+			if tmpPath != "" {
+				// sendPreparedMessage thumbnail extract karayala use karto,
+				// nantar toch delete karnar (defer ethun karta yet nahi kaaran
+				// return zhalyavar tempVideoPath caller kade jato)
+				pm_tempPath = tmpPath
+			}
 		}
 	}
 
@@ -1949,6 +1985,7 @@ func downloadWatermarkAndReupload(
 			logAccessHash,
 			caption,
 			msgID,
+			false, // protectContent — /userbotdl admin upload: forward block नको
 		)
 		if submitErr == nil {
 			editProgress(fmt.Sprintf(
@@ -1960,7 +1997,7 @@ func downloadWatermarkAndReupload(
 			// offline राहिला तरी job wmqueue मध्ये जिवंत राहतो आणि परत
 			// online झाल्यावर resume होतो. फक्त bot/process shutdown
 			// (bgCtx-कार्यान्वित) झाल्यास थांबावं.
-			success, jobErr := wmqueue.WaitForDone(context.Background(), jobID)
+			success, jobErr, _ := wmqueue.WaitForDone(context.Background(), jobID)
 			if success {
 				// Colab ne FFmpeg karun, Telethon (bot_token, MTProto) ne
 				// directly target chat la file pathavli — Koyeb la file
@@ -2110,6 +2147,199 @@ func downloadAndReupload(
 	}
 
 	return uploadedFile, tmpPath, nil
+}
+
+// ── downloadWatermarkAndReuploadLocal ─────────────────────────────────────────
+// [FALLBACK] Colab/watermark worker offline असताना तोच process (download →
+// FFmpeg drawtext watermark overlay → reupload) main server वरच replicate
+// करतो — जेणेकरून खालचा Phase B (thumbnail extract, sendChannel, sourcePeer,
+// log channel backup) कुठलाही बदल न करता जसाच्या तसा चालतो, फक्त encoding आता
+// Colab GPU ऐवजी main server च्या CPU वर होतं (libx264 ultrafast — Colab worker
+// चाच tier3 CPU fallback वापरतो, त्यामुळे quality/behaviour सारखंच राहतं).
+func downloadWatermarkAndReuploadLocal(
+	dlCtx context.Context,
+	upCtx context.Context,
+	dlClient *gotgproto.Client,
+	upClient *gotgproto.Client,
+	file *types.File,
+	wmText string,
+	onDownloadProgress func(written, total int64),
+	onUploadProgress func(written, total int64),
+	editProgress func(string),
+	msgID int,
+) (tg.InputFileClass, string, error) {
+
+	// ── Step 1: Download (Colab worker सारखंच पहिलं full download) ─────────
+	tmpFile, err := os.CreateTemp("", "userbotdl-in-*.tmp")
+	if err != nil {
+		return nil, "", fmt.Errorf("temp file create failed: %w", err)
+	}
+	inputPath := tmpFile.Name()
+
+	var dlWriter io.Writer = tmpFile
+	if onDownloadProgress != nil {
+		dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
+	}
+
+	d := downloader.NewDownloader()
+	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
+	tmpFile.Close()
+	if err != nil {
+		os.Remove(inputPath)
+		return nil, "", fmt.Errorf("download failed: %w", err)
+	}
+
+	// ── Step 2: FFmpeg drawtext watermark overlay ───────────────────────────
+	ext := filepath.Ext(file.FileName)
+	if ext == "" {
+		ext = ".mp4"
+	}
+	outFile, err := os.CreateTemp("", "userbotdl-wm-*"+ext)
+	if err != nil {
+		os.Remove(inputPath)
+		return nil, "", fmt.Errorf("output temp file create failed: %w", err)
+	}
+	outputPath := outFile.Name()
+	outFile.Close()
+	os.Remove(outputPath) // ffmpeg -y स्वतः तयार करेल — फक्त unique नाव हवं होतं
+
+	if err := runLocalWatermarkFFmpeg(inputPath, outputPath, wmText, editProgress, file.FileName, msgID); err != nil {
+		os.Remove(inputPath)
+		os.Remove(outputPath)
+		return nil, "", fmt.Errorf("ffmpeg watermark failed: %w", err)
+	}
+	os.Remove(inputPath) // watermark झालेली output file आता वापरायची, input नको
+
+	// ── Step 3: Upload processed file (downloadAndReupload सारखंच) ─────────
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		os.Remove(outputPath)
+		return nil, "", fmt.Errorf("output file stat failed: %w", err)
+	}
+	totalSize := info.Size()
+
+	readFile, err := os.Open(outputPath)
+	if err != nil {
+		os.Remove(outputPath)
+		return nil, "", fmt.Errorf("output file reopen failed: %w", err)
+	}
+	defer readFile.Close()
+
+	var upReader io.Reader = readFile
+	if onUploadProgress != nil {
+		upReader = &progressWriter{w: readFile, total: totalSize, onProgress: onUploadProgress}
+	}
+
+	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
+	uploadedFile, err := up.FromReader(upCtx, file.FileName, upReader)
+	if err != nil {
+		os.Remove(outputPath)
+		return nil, "", fmt.Errorf("upload failed: %w", err)
+	}
+
+	// caller (sendPreparedMessage) outputPath ला thumbnail extract sathi
+	// vaparto, mag delete karto — downloadAndReupload sarkhach contract.
+	return uploadedFile, outputPath, nil
+}
+
+// ── runLocalWatermarkFFmpeg ────────────────────────────────────────────────
+// Colab worker च्याच drawtext style ने (bottom-right corner, white text +
+// black shadow) CPU वर (libx264 ultrafast, crf 28) watermark overlay करतो.
+// ffmpeg "-progress pipe:1" मधून periodic % editProgress ला पाठवतो, जेणेकरून
+// admin ला "💧 Watermark applying..." हा Colab सारखाच feel येतो.
+func runLocalWatermarkFFmpeg(inputPath, outputPath, wmText string, editProgress func(string), fileName string, msgID int) error {
+	totalDur := getLocalVideoDuration(inputPath)
+
+	safeText := strings.ReplaceAll(wmText, `'`, `\'`)
+	safeText = strings.ReplaceAll(safeText, `:`, `\:`)
+	drawtext := fmt.Sprintf(
+		"drawtext=text='%s':fontcolor=white:fontsize=36:shadowcolor=black:shadowx=2:shadowy=2:x=w-tw-20:y=h-th-20",
+		safeText,
+	)
+
+	cmd := exec.Command("ffmpeg",
+		"-i", inputPath,
+		"-vf", drawtext,
+		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+		"-threads", "0", "-tune", "fastdecode",
+		"-c:a", "copy", "-movflags", "+faststart",
+		"-progress", "pipe:1", "-nostats",
+		"-y", outputPath,
+	)
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("ffmpeg stdout pipe failed: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ffmpeg start failed: %w", err)
+	}
+
+	start := time.Now()
+	lastUpdate := start
+	var curSeconds float64
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "out_time_ms=") {
+			if v, perr := strconv.ParseInt(strings.TrimPrefix(line, "out_time_ms="), 10, 64); perr == nil && v > 0 {
+				curSeconds = float64(v) / 1_000_000
+			}
+		}
+		if editProgress != nil && time.Since(lastUpdate) >= 4*time.Second {
+			elapsed := time.Since(start).Round(time.Second)
+			if totalDur > 0 && curSeconds > 0 {
+				pct := curSeconds / totalDur * 100
+				if pct > 99 {
+					pct = 99
+				}
+				var eta time.Duration
+				if pct > 0 {
+					eta = time.Duration(elapsed.Seconds() / pct * (100 - pct) * float64(time.Second))
+				}
+				editProgress(fmt.Sprintf(
+					"💧 Watermark applying (main server)...\n📄 `%s`\n📌 Msg: `%d`\n%s %.1f%%\n⏱ %s | ETA: %s",
+					fileName, msgID, progressBar(int(pct)), pct, elapsed, eta.Round(time.Second),
+				))
+			} else {
+				editProgress(fmt.Sprintf(
+					"💧 Watermark applying (main server)...\n📄 `%s`\n📌 Msg: `%d`\n⏱ %s elapsed...",
+					fileName, msgID, elapsed,
+				))
+			}
+			lastUpdate = time.Now()
+		}
+	}
+
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("ffmpeg exit error: %w", err)
+	}
+
+	if info, statErr := os.Stat(outputPath); statErr != nil || info.Size() == 0 {
+		return fmt.Errorf("ffmpeg produced empty/missing output")
+	}
+
+	return nil
+}
+
+// ── getLocalVideoDuration ──────────────────────────────────────────────────
+// ffprobe ने video duration (seconds) काढतो — ETA calculation साठी. Fail
+// झाल्यास 0 return करतो (caller ETA न दाखवता फक्त elapsed time दाखवतो).
+func getLocalVideoDuration(path string) float64 {
+	out, err := exec.Command("ffprobe", "-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1", path,
+	).Output()
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil {
+		return 0
+	}
+	return v
 }
 
 // ── progressWriter ────────────────────────────────────────────────────────────
@@ -2330,4 +2560,4 @@ func formatSize(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
-}
+}

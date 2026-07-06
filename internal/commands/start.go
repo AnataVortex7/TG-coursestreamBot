@@ -2,11 +2,17 @@ package commands
 
 import (
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
+	"context"
+	crand "crypto/rand"
 	"fmt"
+	"math/big"
 	"math/rand"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
@@ -34,6 +40,15 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	if len(a) > 0 && strings.HasPrefix(a[0], "dl_") {
 		token := strings.TrimSpace(strings.TrimPrefix(a[0], "dl_"))
 		return processDLToken(ctx, u, chatId, token)
+	}
+
+	// ── Deep Link: /start totp_<token> ────────────────────────────────────────
+	// Website login (OTP via Telegram) साठी. Token वरून कोणता website account
+	// आहे ते कळतं → auto-link + लगेच OTP telegram वर पाठवला जातो.
+	// AllowedUsers check skip — कुणीही (नवीन user सुद्धा) हा deep-link वापरू शकतो.
+	if len(a) > 0 && strings.HasPrefix(a[0], "totp_") {
+		token := strings.TrimSpace(strings.TrimPrefix(a[0], "totp_"))
+		return processTelegramLoginToken(ctx, u, chatId, token)
 	}
 
 	// ── Deep Link: /start ct_<userIDHex> ──────────────────────────────────────
@@ -166,7 +181,47 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
+	toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
+
+	var editMu sync.Mutex
+	lastEdit := time.Time{}
+	editProgress := func(text string) {
+		if sentMsg == nil {
+			return
+		}
+		editMu.Lock()
+		if time.Since(lastEdit) < 3*time.Second {
+			editMu.Unlock()
+			return
+		}
+		lastEdit = time.Now()
+		editMu.Unlock()
+		editCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = botClient.API().MessagesEditMessage(editCtx, &tg.MessagesEditMessageRequest{
+			Peer:    toPeer,
+			ID:      sentMsg.ID,
+			Message: text,
+		})
+	}
+
+	// ── Video असेल तर: download → user चा mobile watermark म्हणून burn → reupload.
+	// इतर file types (photo/PDF/etc) आधीसारखेच थेट copy-forward होतात.
+	// (offline watermark toggle OFF असेल तर video सुद्धा direct copy-forward होतो —
+	// खाली watermarked var caption साठी वेगळा ट्रॅक करतो, isVideo केवळ media-type ओळखतो.)
 	var inputMedia tg.InputMediaClass
+	isVideo := false
+	watermarked := false
+	wmEnabled := db.GetSettingBool(db.SettingOfflineWatermarkEnabled, true)
+
+	caption := fmt.Sprintf(
+		"📥 Offline Download\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d",
+		result.UsedToday, courseLimit,
+	)
+
+	deliveredByColab := false
+	colabMessageID := 0
+
 	switch m := msg.Media.(type) {
 	case *tg.MessageMediaDocument:
 		doc, ok := m.Document.(*tg.Document)
@@ -174,12 +229,61 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 			reply(ctx, u, "❌ Document read error.")
 			return dispatcher.EndGroups
 		}
-		inputMedia = &tg.InputMediaDocument{
-			ID: &tg.InputDocument{
-				ID:            doc.ID,
-				AccessHash:    doc.AccessHash,
-				FileReference: doc.FileReference,
-			},
+		for _, attr := range doc.Attributes {
+			if _, ok := attr.(*tg.DocumentAttributeVideo); ok {
+				isVideo = true
+				break
+			}
+		}
+		if !isVideo && strings.HasPrefix(strings.ToLower(doc.MimeType), "video/") {
+			isVideo = true
+		}
+
+		if isVideo && wmEnabled {
+			fileName := ""
+			for _, attr := range doc.Attributes {
+				if fn, ok := attr.(*tg.DocumentAttributeFilename); ok {
+					fileName = fn.FileName
+					break
+				}
+			}
+			watermarkText := dbUser.Mobile
+			if watermarkText == "" {
+				watermarkText = dbUser.Email
+			}
+			watermarkedCaption := caption + "\n💧 Protected copy"
+			progressMsgID := 0
+			if sentMsg != nil {
+				progressMsgID = sentMsg.ID
+			}
+			uploaded, sentMsgID, viaColab, wmErr := deliverVideoToUser(
+				botClient, result.ChannelID, result.MessageID, fileName, watermarkText,
+				chatID, progressMsgID, watermarkedCaption, editProgress,
+			)
+			if wmErr != nil {
+				utils.Logger.Sugar().Errorw("watermark delivery failed", "err", wmErr, "user", dbUser.Username)
+				reply(ctx, u, "❌ Video process करताना error आली. थोड्या वेळाने पुन्हा प्रयत्न करा किंवा admin शी संपर्क करा.")
+				return dispatcher.EndGroups
+			}
+			watermarked = true
+			if viaColab {
+				deliveredByColab = true
+				colabMessageID = sentMsgID
+			} else {
+				inputMedia = &tg.InputMediaUploadedDocument{
+					File:       uploaded,
+					MimeType:   doc.MimeType,
+					Attributes: doc.Attributes,
+				}
+			}
+		} else {
+			inputMedia = &tg.InputMediaDocument{
+				ID: &tg.InputDocument{
+					ID:            doc.ID,
+					AccessHash:    doc.AccessHash,
+					FileReference: doc.FileReference,
+				},
+			}
 		}
 	case *tg.MessageMediaPhoto:
 		photo, ok := m.Photo.(*tg.Photo)
@@ -199,31 +303,39 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
-	toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
-	caption := fmt.Sprintf(
-		"📥 Offline Download\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d",
-		result.UsedToday, courseLimit,
-	)
-
-	sentMedia, err := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-		Peer:       toPeer,
-		Media:      inputMedia,
-		Message:    caption,
-		Noforwards: true,
-		RandomID:   rand.Int63(),
-	})
-	if err != nil {
-		reply(ctx, u, "❌ Video पाठवताना error: "+err.Error())
-		return dispatcher.EndGroups
+	if watermarked {
+		caption += "\n💧 Protected copy"
 	}
 
-	if updates, ok := sentMedia.(*tg.Updates); ok {
-		for _, upd := range updates.Updates {
-			if m, ok := upd.(*tg.UpdateMessageID); ok {
-				_ = db.ScheduleDelete(chatID, m.ID)
-				break
+	sentMessageID := colabMessageID
+
+	if !deliveredByColab {
+		editProgress("📨 पाठवत आहोत...")
+
+		sentMedia, err := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+			Peer:       toPeer,
+			Media:      inputMedia,
+			Message:    caption,
+			Noforwards: true,
+			RandomID:   rand.Int63(),
+		})
+		if err != nil {
+			reply(ctx, u, "❌ Video पाठवताना error: "+err.Error())
+			return dispatcher.EndGroups
+		}
+
+		if updates, ok := sentMedia.(*tg.Updates); ok {
+			for _, upd := range updates.Updates {
+				if m, ok := upd.(*tg.UpdateMessageID); ok {
+					sentMessageID = m.ID
+					break
+				}
 			}
 		}
+	}
+
+	if sentMessageID != 0 {
+		_ = db.ScheduleDelete(chatID, sentMessageID)
 	}
 
 	shouldAlert, score, _ := db.RecordDownload(dbUser.ID, result.UsedToday)
@@ -239,6 +351,85 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 	}
 
 	return dispatcher.EndGroups
+}
+
+// processTelegramLoginToken — /start totp_<token>
+// Website login साठी वापरलेला deep-link. Token वरून कोणता website account आहे
+// ते कळतं. One-user-one-Telegram-ID कायमचं lock (relink नाही — फक्त admin चा
+// /unlinktg वापरून unlink झाल्यावरच परत link शक्य). Link झाल्यावर लगेच OTP
+// त्याच Telegram chat वर पाठवला जातो — user ला परत website वर जाऊन तो टाकायचा असतो.
+func processTelegramLoginToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr string) error {
+	rec, err := db.GetTGLoginToken(tokenStr)
+	if err != nil || rec == nil {
+		reply(ctx, u, "❌ Link expire झाला किंवा आधीच वापरला गेला.\n\nWebsite वरून परत \"Login via Telegram\" दाबा.")
+		return dispatcher.EndGroups
+	}
+
+	siteUser, err := db.GetUserByID(rec.UserID)
+	if err != nil || siteUser == nil {
+		reply(ctx, u, "❌ Website account सापडला नाही. Admin शी संपर्क करा.")
+		return dispatcher.EndGroups
+	}
+
+	if siteUser.TelegramID != 0 && siteUser.TelegramID != chatID {
+		// One user ↔ one Telegram ID — दुसऱ्याच telegram वरून हा link वापरता येणार नाही.
+		reply(ctx, u, "❌ हा website account आधीच दुसऱ्या Telegram account शी link आहे.")
+		return dispatcher.EndGroups
+	}
+
+	if siteUser.TelegramID == 0 {
+		// दुसऱ्या कुठल्या website account ला हा Telegram ID आधीच link आहे का?
+		if other, _ := db.GetUserByTelegramID(chatID); other != nil && other.ID != siteUser.ID {
+			reply(ctx, u, "❌ तुमचा Telegram account आधीच दुसऱ्या website account शी link आहे.\n\nएक Telegram account फक्त एकाच account शी link होऊ शकतो.")
+			return dispatcher.EndGroups
+		}
+
+		if err := db.SetUserTelegramID(siteUser.ID, chatID); err != nil {
+			reply(ctx, u, "❌ Link करताना error आली. पुन्हा प्रयत्न करा किंवा admin शी संपर्क करा.")
+			return dispatcher.EndGroups
+		}
+
+		// लगेच peer cache warm करतो — पुढच्या OTP साठी redeploy नंतरही पुन्हा
+		// user कडून message लागणार नाही (WarmUserPeerCache startup ला हेच पुढे continue करतो).
+		if tgUser := u.EffectiveUser(); tgUser != nil {
+			ctx.PeerStorage.AddPeer(tgUser.ID, tgUser.AccessHash, storage.TypeUser, tgUser.Username)
+		}
+	}
+
+	_ = db.MarkTGLoginTokenUsed(rec.ID)
+
+	// ── लगेच OTP generate करून याच chat वर पाठवतो ──────────────────────────────
+	identifier := siteUser.Mobile
+	if identifier == "" {
+		identifier = siteUser.Email
+	}
+
+	otpPlain := generateLoginOTP()
+	otpHash, err := auth.HashPassword(otpPlain)
+	if err != nil {
+		reply(ctx, u, "❌ Server error. Website वरून पुन्हा प्रयत्न करा.")
+		return dispatcher.EndGroups
+	}
+	if err := db.CreateOTP(identifier, otpHash); err != nil {
+		reply(ctx, u, "❌ Server error. Website वरून पुन्हा प्रयत्न करा.")
+		return dispatcher.EndGroups
+	}
+
+	reply(ctx, u, fmt.Sprintf(
+		"✅ *Telegram Linked!*\n\n"+
+			"🔐 तुमचा Login OTP: `%s`\n\n"+
+			"⏳ 10 मिनिटांत expire होईल.\n"+
+			"👉 website वर परत जाऊन हा OTP टाका.",
+		otpPlain,
+	))
+	return dispatcher.EndGroups
+}
+
+// generateLoginOTP — cryptographically random 4-digit code (1000–9999).
+// internal/auth चा generateOTP सारखाच (unexported असल्यामुळे इथे स्वतंत्र copy).
+func generateLoginOTP() string {
+	n, _ := crand.Int(crand.Reader, big.NewInt(9000))
+	return fmt.Sprintf("%d", 1000+n.Int64())
 }
 
 // sendDownloadNotification — user ने video download केल्यावर owner ला notify करतो.

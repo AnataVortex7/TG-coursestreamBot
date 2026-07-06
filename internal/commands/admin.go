@@ -28,7 +28,7 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	log := m.log.Named("admin")
 	defer log.Sugar().Info("Loaded admin commands")
 
-	d.AddHandler(handlers.NewCommand("cmd", adminOnly(cmdHelp)))
+	d.AddHandler(handlers.NewCommand("cmd", adminOnly(cmdMenuRoot)))
 	d.AddHandler(handlers.NewCommand("adduser", adminOnly(cmdAddUser)))
 	d.AddHandler(handlers.NewCommand("deluser", adminOnly(cmdDelUser)))
 	d.AddHandler(handlers.NewCommand("listusers", adminOnly(cmdListUsers)))
@@ -51,6 +51,14 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("colabstop", adminOnly(cmdColabStop)))
 	d.AddHandler(handlers.NewCommand("colabstart", adminOnly(cmdColabStart)))
 	d.AddHandler(handlers.NewCommand("colabstatus", adminOnly(cmdColabStatus)))
+
+	d.AddHandler(handlers.NewCommand("regopen", adminOnly(cmdRegOpen)))
+	d.AddHandler(handlers.NewCommand("regclose", adminOnly(cmdRegClose)))
+	d.AddHandler(handlers.NewCommand("regstatus", adminOnly(cmdRegStatus)))
+
+	d.AddHandler(handlers.NewCommand("offlinewmon", adminOnly(cmdOfflineWmOn)))
+	d.AddHandler(handlers.NewCommand("offlinewmoff", adminOnly(cmdOfflineWmOff)))
+	d.AddHandler(handlers.NewCommand("offlinewmstatus", adminOnly(cmdOfflineWmStatus)))
 }
 
 // ─── adminOnly wrapper ────────────────────────────────────────────────────────
@@ -69,6 +77,13 @@ func adminOnly(fn func(*ext.Context, *ext.Update) error) func(*ext.Context, *ext
 // ─── reply helpers ────────────────────────────────────────────────────────────
 
 func reply(ctx *ext.Context, u *ext.Update, text string) {
+	// Button-menu (menu.go) मधून call झाला असेल (callback query) तर message
+	// edit करून back/refresh buttons attach करतो — normal /command flow
+	// साठी काहीच बदलत नाही.
+	if u.CallbackQuery != nil {
+		answerCallbackText(ctx, u, text)
+		return
+	}
 	ctx.Reply(u, ext.ReplyTextString(text), nil)
 }
 
@@ -820,6 +835,90 @@ func cmdStats(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
+// ─── Website Registration Open/Close ──────────────────────────────────────────
+// /register (website POST) create-account path db.SettingRegistrationOpen
+// check karto (internal/auth/auth.go, DoRegister function, sagळ्यat var) —
+// ha check UI/form bypass karun direct API call kela tarihi honarach, karan
+// to server-side, account create honya AADHI ahe. Ithe फक्त tya flag la
+// admin साठी Telegram bot madhun ON/OFF karnyacha button dila ahe.
+
+func cmdRegOpen(ctx *ext.Context, u *ext.Update) error {
+	if err := db.SetSettingBool(db.SettingRegistrationOpen, true); err != nil {
+		reply(ctx, u, "❌ Registration ON karta ala nahi: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u,
+		"✅ *Registration ON kela*\n\n"+
+			"आता website च्या `/register` page वरून कोणीही नवीन account बनवू शकेल.\n\n"+
+			"बंद करण्यासाठी: `/regclose`")
+	return dispatcher.EndGroups
+}
+
+func cmdRegClose(ctx *ext.Context, u *ext.Update) error {
+	if err := db.SetSettingBool(db.SettingRegistrationOpen, false); err != nil {
+		reply(ctx, u, "❌ Registration OFF karta ala nahi: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u,
+		"⛔ *Registration OFF kela*\n\n"+
+			"आतापासून website वर नवीन कोणीही signup करू शकणार नाही — "+
+			"form बायपास करून direct API call केला तरीही (server-side block).\n\n"+
+			"Existing users चा login/access यावर काहीच परिणाम होणार नाही.\n\n"+
+			"परत सुरू करण्यासाठी: `/regopen`")
+	return dispatcher.EndGroups
+}
+
+func cmdRegStatus(ctx *ext.Context, u *ext.Update) error {
+	open := db.GetSettingBool(db.SettingRegistrationOpen, true)
+	if open {
+		reply(ctx, u, "🟢 Registration सध्या *ON* आहे — नवीन users signup करू शकतात.\n\nबंद करण्यासाठी: `/regclose`")
+	} else {
+		reply(ctx, u, "🔴 Registration सध्या *OFF* आहे — नवीन signup ब्लॉक्ड आहे.\n\nसुरू करण्यासाठी: `/regopen`")
+	}
+	return dispatcher.EndGroups
+}
+
+// ─── Offline Download — Video Watermark ON/OFF ────────────────────────────────
+// ON  → offline video: download → user चा mobile/email watermark burn → reupload
+//       (जुनी, default behaviour — deliverWatermarkedVideo वापरतो, start.go मध्ये).
+// OFF → offline video थेट copy-forward होतो (photo/PDF सारखं) — कोणताही
+//       download/FFmpeg/re-upload होत नाही, त्यामुळे जलद पण watermark शिवाय.
+
+func cmdOfflineWmOn(ctx *ext.Context, u *ext.Update) error {
+	if err := db.SetSettingBool(db.SettingOfflineWatermarkEnabled, true); err != nil {
+		reply(ctx, u, "❌ Watermark ON करता आला नाही: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u,
+		"✅ *Offline Video Watermark ON केलं*\n\n"+
+			"आतापासून offline downloads मध्ये user चा mobile/email number video वर burn होऊन जाईल.\n\n"+
+			"बंद करण्यासाठी: `/offlinewmoff`")
+	return dispatcher.EndGroups
+}
+
+func cmdOfflineWmOff(ctx *ext.Context, u *ext.Update) error {
+	if err := db.SetSettingBool(db.SettingOfflineWatermarkEnabled, false); err != nil {
+		reply(ctx, u, "❌ Watermark OFF करता आला नाही: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u,
+		"⛔ *Offline Video Watermark OFF केलं*\n\n"+
+			"आतापासून offline video downloads user ला direct पाठवले जातील — "+
+			"कोणताही watermark burn होणार नाही (जलद delivery, पण unprotected).\n\n"+
+			"परत सुरू करण्यासाठी: `/offlinewmon`")
+	return dispatcher.EndGroups
+}
+
+func cmdOfflineWmStatus(ctx *ext.Context, u *ext.Update) error {
+	on := db.GetSettingBool(db.SettingOfflineWatermarkEnabled, true)
+	if on {
+		reply(ctx, u, "🟢 Offline Video Watermark सध्या *ON* आहे — videos वर mobile/email burn होतो.\n\nबंद करण्यासाठी: `/offlinewmoff`")
+	} else {
+		reply(ctx, u, "🔴 Offline Video Watermark सध्या *OFF* आहे — videos direct (without watermark) पाठवले जातात.\n\nसुरू करण्यासाठी: `/offlinewmon`")
+	}
+	return dispatcher.EndGroups
+}
+
 // ─── Go 1.21 min/max compat ───────────────────────────────────────────────────
 
 func max(a, b int) int {
@@ -940,6 +1039,7 @@ func cmdHelp(ctx *ext.Context, u *ext.Update) error {
 /listusers — सर्व users list
 /userinfo \<mobile\_or\_email\> — user चा पूर्ण info
 /settg \<mobile\_or\_email\> \<telegram\_id\> — Telegram ID link करा
+/unlinktg \<mobile\_or\_email\> — ⚠️ emergency: Telegram ID unlink करा \(support साठीच\)
 /blockuser \<identifier\> \<days\> \<reason\> — user block करा
 /unblockuser \<identifier\> — user unblock करा
 /suspicious — suspicious users list
@@ -949,6 +1049,12 @@ func cmdHelp(ctx *ext.Context, u *ext.Update) error {
 /delcourse \<course\_id\> — course delete करा
 /listcourses — सर्व courses व त्यांचे IDs
 /setdlimit \<course\_id\> \<limit\> — daily download limit set करा \(0 \= default 3\)
+/regopen — website registration ON करा
+/regclose — website registration OFF करा
+/regstatus — registration सध्या ON/OFF आहे का ते बघा
+/offlinewmon — offline video watermark ON करा
+/offlinewmoff — offline video watermark OFF करा \(video direct, without watermark, पाठवला जाईल\)
+/offlinewmstatus — offline watermark सध्या ON/OFF आहे का ते बघा
 
 🔑 *Access*
 /grantaccess \<identifier\> \<course\_id\> \[months\] — user ला access द्या

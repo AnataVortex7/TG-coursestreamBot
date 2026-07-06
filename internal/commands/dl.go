@@ -20,15 +20,18 @@ import (
 	"github.com/gotd/td/tg"
 )
 
-// LoadDL — फक्त /settg admin command register करतो (/dl काढून टाकला)
+// LoadDL — /settg आणि /unlinktg admin commands register करतो (/dl काढून टाकला)
 func (m *command) LoadDL(d dispatcher.Dispatcher) {
 	log := m.log.Named("dl")
-	defer log.Sugar().Info("Loaded /settg command")
+	defer log.Sugar().Info("Loaded /settg, /unlinktg commands")
 	d.AddHandler(handlers.NewCommand("settg", adminOnly(cmdSetTG)))
+	d.AddHandler(handlers.NewCommand("unlinktg", adminOnly(cmdUnlinkTG)))
 }
 
 // ── /settg <identifier> <telegram_id> ────────────────────────────────────────
 // Admin command: website user चा DB record Telegram ID शी link करतो.
+// One user ↔ one Telegram ID, कायमचं — आधीच link असेल तर हा command काम करणार नाही
+// (आधी /unlinktg वापरावं लागेल).
 // Usage: /settg 9876543210 987654321
 //        /settg user@email.com 987654321
 
@@ -57,13 +60,93 @@ func cmdSetTG(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	if err := db.SetUserTelegramID(user.ID, tgID); err != nil {
-		reply(ctx, u, "❌ DB update error: "+err.Error())
+		switch err {
+		case db.ErrTelegramAlreadyLinked:
+			reply(ctx, u, fmt.Sprintf(
+				"⚠️ हा account (%s) आधीच एका Telegram ID शी link आहे.\n\n"+
+					"आधी unlink करा: `/unlinktg %s`",
+				identifier, identifier,
+			))
+		case db.ErrTelegramIDInUse:
+			reply(ctx, u, "❌ हा Telegram ID आधीच दुसऱ्या website account शी link आहे.\n\nएक Telegram account फक्त एकाच user शी link होऊ शकतो.")
+		default:
+			reply(ctx, u, "❌ DB update error: "+err.Error())
+		}
 		return dispatcher.EndGroups
 	}
 
 	reply(ctx, u, fmt.Sprintf(
-		"✅ Linked!\n👤 User: %s\n📱 Telegram ID: %d\n\nआता user website वरून direct video मिळवू शकतो.",
+		"✅ Linked!\n👤 User: %s\n📱 Telegram ID: %d\n\nआता user Telegram वरून OTP login वापरू शकतो.",
 		user.Username, tgID,
+	))
+	return dispatcher.EndGroups
+}
+
+// ── /unlinktg <identifier> ───────────────────────────────────────────────────
+// Admin-only emergency unlink. Normal flow मध्ये कधीच वापरला जात नाही — फक्त
+// support साठी (उदा. user चा phone हरवला / Telegram account delete झाला).
+// Unlink झाल्यावर तो account परत fresh unlinked सारखा — user स्वतः deep-link ने
+// किंवा admin परत /settg ने, दोन्हीपैकी कुठल्याही मार्गाने relink करू शकतो.
+// Usage: /unlinktg 9876543210
+//        /unlinktg user@email.com
+
+func cmdUnlinkTG(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	if len(a) < 1 {
+		reply(ctx, u,
+			"Usage: `/unlinktg <mobile_or_email>`\n\n"+
+				"⚠️ फक्त emergency/support साठी वापरा (user चा phone हरवला, Telegram account delete झाला, इ.)\n"+
+				"Unlink झाल्यावर user परत deep-link किंवा /settg ने relink करू शकतो.")
+		return dispatcher.EndGroups
+	}
+
+	identifier := strings.ToLower(strings.TrimSpace(a[0]))
+
+	user, err := db.GetUserByMobileOrEmail(identifier)
+	if err != nil || user == nil {
+		reply(ctx, u, "❌ User सापडला नाही: "+identifier)
+		return dispatcher.EndGroups
+	}
+
+	oldTgID := user.TelegramID
+
+	if err := db.UnlinkUserTelegramID(user.ID); err != nil {
+		if err == db.ErrTelegramNotLinked {
+			reply(ctx, u, "⚠️ हा account आधीच unlinked आहे.")
+		} else {
+			reply(ctx, u, "❌ Unlink करताना error: "+err.Error())
+		}
+		return dispatcher.EndGroups
+	}
+
+	// Audit — कोणी, कधी, कोणासाठी unlink केलं याचा admin log (misuse ट्रॅक करायला)
+	adminName := "admin"
+	if senderUser := u.EffectiveUser(); senderUser != nil {
+		adminName = senderUser.FirstName
+	}
+	logMsg := fmt.Sprintf(
+		"🔓 *Telegram Unlinked (Emergency)*\n\n"+
+			"👤 User: %s\n"+
+			"📱 जुना Telegram ID: %d\n"+
+			"🛠 केलं: %s\n\n"+
+			"आता user deep-link किंवा /settg ने परत link करू शकतो.",
+		identifier, oldTgID, adminName,
+	)
+	for _, adminID := range getAdminIDs() {
+		adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+		if adminPeer == nil {
+			continue
+		}
+		_, _ = MainBotClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     adminPeer,
+			Message:  logMsg,
+			RandomID: rand.Int63(),
+		})
+	}
+
+	reply(ctx, u, fmt.Sprintf(
+		"✅ Unlinked!\n👤 User: %s\n📱 जुना Telegram ID: %d\n\nआता हा account पुन्हा link करता येईल.",
+		user.Username, oldTgID,
 	))
 	return dispatcher.EndGroups
 }
