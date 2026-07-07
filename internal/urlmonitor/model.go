@@ -16,6 +16,10 @@ type MonitorURL struct {
 	Enabled         bool               `bson:"enabled"            json:"enabled"`
 	CreatedAt       time.Time          `bson:"created_at"         json:"created_at"`
 	Label           string             `bson:"label,omitempty"    json:"label,omitempty"` // optional friendly name
+	// Token — optional Hugging Face access token, fakt private/gated HF Spaces
+	// check karnyasathi vaparla jato. json:"-" mule ha frontend la kadhihi
+	// return hot nahi (secret leak nako mhanun).
+	Token string `bson:"token,omitempty" json:"-"`
 }
 
 // PingResult — stored only in memory (last 50 per URL)
@@ -25,16 +29,18 @@ type PingResult struct {
 	LatencyMs  int64     `json:"latency_ms"`
 	Error      string    `json:"error,omitempty"`
 	IsUp       bool      `json:"is_up"`
+	Stage      string    `json:"stage,omitempty"` // Hugging Face runtime stage (RUNNING/SLEEPING/BUILDING/...) — empty for plain HTTP checks
 }
 
 // URLStatus — combined live status returned to frontend
 type URLStatus struct {
 	MonitorURL
-	LastResult  *PingResult  `json:"last_result"`  // most recent ping
-	History     []PingResult `json:"history"`      // last 50 pings
-	IsRunning   bool         `json:"is_running"`   // goroutine active?
-	AvgLatency  int64        `json:"avg_latency"`  // avg ms over last 50
-	UptimePct   float64      `json:"uptime_pct"`   // % up over last 50
+	LastResult *PingResult  `json:"last_result"` // most recent ping
+	History    []PingResult `json:"history"`     // last 50 pings
+	IsRunning  bool         `json:"is_running"`  // goroutine active?
+	AvgLatency int64        `json:"avg_latency"` // avg ms over last 50
+	UptimePct  float64      `json:"uptime_pct"`  // % up over last 50
+	HasToken   bool         `json:"has_token"`   // true if an HF token is stored (value itself never sent)
 }
 
 // ringBuffer — fixed-size circular buffer for last 50 ping results

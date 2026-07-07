@@ -55,9 +55,9 @@ type config struct {
 	// Admin notification email — registration requests येथे येतात
 	AdminEmail  string `envconfig:"ADMIN_EMAIL" default:""`
 	BotUsername string `envconfig:"BOT_USERNAME" default:""`
-	StreamConcurrency int `envconfig:"STREAM_CONCURRENCY" default:"4"`
-	StreamBufferCount int `envconfig:"STREAM_BUFFER_COUNT" default:"8"`
-	StreamTimeoutSec  int `envconfig:"STREAM_TIMEOUT_SEC" default:"30"`
+	StreamConcurrency int `envconfig:"STREAM_CONCURRENCY" default:"6"`
+	StreamBufferCount int `envconfig:"STREAM_BUFFER_COUNT" default:"30"`
+	StreamTimeoutSec  int `envconfig:"STREAM_TIMEOUT_SEC" default:"20"`
 	StreamMaxRetries  int `envconfig:"STREAM_MAX_RETRIES" default:"3"`
 
 	// Security — same secret shared with all workers
@@ -242,13 +242,13 @@ func Load(log *zap.Logger, cmd *cobra.Command) {
 		ValueOf.HashLength = 6
 	}
 	if ValueOf.StreamConcurrency <= 0 {
-		ValueOf.StreamConcurrency = 4
+		ValueOf.StreamConcurrency = 6
 	}
 	if ValueOf.StreamBufferCount <= 0 {
-		ValueOf.StreamBufferCount = 8
+		ValueOf.StreamBufferCount = 30
 	}
 	if ValueOf.StreamTimeoutSec <= 0 {
-		ValueOf.StreamTimeoutSec = 30
+		ValueOf.StreamTimeoutSec = 20
 	}
 	if ValueOf.StreamMaxRetries <= 0 {
 		ValueOf.StreamMaxRetries = 3

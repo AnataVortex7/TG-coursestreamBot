@@ -93,6 +93,23 @@ func runApp(cmd *cobra.Command, args []string) {
 	commands.UserbotStop = bot.UserBot.Stop
 	commands.UserbotStartFromSession = bot.UserBot.StartFromSession
 	commands.GetLiveUserbotClient = bot.UserBot.GetClient
+	// Watermark worker (course offline-download flow) साठी — download-bot token
+	// आणि त्याच bot च्या स्वतःच्या client मधून resolve केलेला access_hash, दोन्ही
+	// एकत्र (mismatch टाळायला — access_hash प्रत्येक bot साठी वेगळा असतो).
+	commands.GetDownloadBotForChannel = func(ctx context.Context, channelID int64) (string, int64, error) {
+		if len(bot.Workers.Bots) == 0 {
+			return "", 0, fmt.Errorf("no worker bots configured")
+		}
+		w := bot.GetNextWorker()
+		if w == nil || w.Client == nil {
+			return "", 0, fmt.Errorf("no worker available")
+		}
+		inputChannel, err := utils.GetChannelPeer(ctx, w.Client.API(), w.Client.PeerStorage, channelID)
+		if err != nil {
+			return "", 0, err
+		}
+		return w.BotToken, inputChannel.AccessHash, nil
+	}
 	// Registration Telegram notification hook (import cycle टाळायला — auth ← bot direct import karu shakat nahi)
 	auth.NotifyAdmins = bot.NotifyAllowedUsers
 	// Bot cha PeerStorage redeploy nantar empty asto (fsb.session ephemeral

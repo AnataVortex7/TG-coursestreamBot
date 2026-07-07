@@ -505,6 +505,11 @@
               <div class="form-hint">Minimum 2 seconds</div>
             </div>
           </div>
+          <div class="form-row" style="margin-top:12px">
+            <label>Hugging Face Token (Optional)</label>
+            <input type="password" id="um-hftoken" placeholder="hf_xxxxxxxxxxxxxxxxxxxx" autocomplete="off" />
+            <div class="form-hint">Fakt private/gated Hugging Face Space monitor karnyasathi lagto — normal URL sathi rikama theva</div>
+          </div>
           <button class="btn btn-primary" id="addURLBtn" onclick="execAddURL()">➕ URL Monitor Madhe Add Kara</button>
         </div>
       </div>
@@ -2013,19 +2018,21 @@ async function execAddURL() {
   const url = document.getElementById('um-url').value.trim();
   const label = document.getElementById('um-label').value.trim();
   const interval = parseInt(document.getElementById('um-interval').value) || 30;
+  const hfToken = document.getElementById('um-hftoken').value.trim();
   if (!url) { toast('❌ URL required aahe','error'); return; }
   if (!url.startsWith('http://') && !url.startsWith('https://')) { toast('❌ URL http:// kiva https:// ne suruvat pahije','error'); return; }
   if (interval < 2) { toast('❌ Minimum interval 2 seconds aahe','error'); return; }
   const btn = document.getElementById('addURLBtn');
   btn.disabled=true; btn.textContent='⏳ Adding...';
   try {
-    const res = await api('/urlmonitor', {method:'POST', body:JSON.stringify({url, label, interval_seconds:interval})});
+    const res = await api('/urlmonitor', {method:'POST', body:JSON.stringify({url, label, interval_seconds:interval, hf_token:hfToken})});
     const d = await res.json();
     if (!res.ok) { toast('❌ '+(d.error||'Error'),'error'); return; }
     toast('✅ URL monitor madhe add kela! Ping chalu zala.');
     document.getElementById('um-url').value='';
     document.getElementById('um-label').value='';
     document.getElementById('um-interval').value='30';
+    document.getElementById('um-hftoken').value='';
     loadURLMonitor();
   } catch(e){ toast('❌ Network error','error'); }
   finally { btn.disabled=false; btn.textContent='➕ URL Monitor Madhe Add Kara'; }
@@ -2057,17 +2064,18 @@ async function loadURLMonitor() {
       const lr = u.last_result;
       let statusBadge;
       if (!lr) statusBadge = '<span class="badge badge-gray">⚪ Unknown</span>';
-      else if (lr.is_up) statusBadge = `<span class="badge badge-green">🟢 UP ${lr.status_code}</span>`;
-      else statusBadge = `<span class="badge badge-red">🔴 DOWN${lr.status_code?' '+lr.status_code:''}</span>`;
+      else if (lr.is_up) statusBadge = `<span class="badge badge-green">🟢 UP${lr.stage?' '+lr.stage:' '+lr.status_code}</span>`;
+      else statusBadge = `<span class="badge badge-red">🔴 DOWN${lr.stage?' ('+lr.stage+')':(lr.status_code?' '+lr.status_code:'')}</span>`;
       const lastPing = lr ? fmtTime(lr.timestamp) : '—';
       const latency = lr ? lr.latency_ms+'ms' : '—';
       const uptime = u.uptime_pct > 0 ? u.uptime_pct.toFixed(1)+'%' : (lr ? '0%' : '—');
       const uptimeColor = u.uptime_pct >= 90 ? '#2e7d32' : u.uptime_pct >= 50 ? '#e65100' : '#c62828';
       const label = u.label || '';
       const shortURL = u.url.length > 45 ? u.url.slice(0,45)+'…' : u.url;
+      const tokenBadge = u.has_token ? ' <span class="badge badge-purple" title="HF token saved">🔒</span>' : '';
       h += `<tr>
         <td>${statusBadge}</td>
-        <td>${label ? `<div class="um-label-cell">${esc(label)}</div>` : ''}<div class="um-url-cell" title="${esc(u.url)}">${esc(shortURL)}</div></td>
+        <td>${label ? `<div class="um-label-cell">${esc(label)}${tokenBadge}</div>` : tokenBadge}<div class="um-url-cell" title="${esc(u.url)}">${esc(shortURL)}</div></td>
         <td><span class="badge badge-purple">⏱ ${u.interval_seconds}s</span></td>
         <td style="font-size:12px;color:#888">${lastPing}</td>
         <td style="font-size:12px;font-family:monospace">${latency}</td>
@@ -2092,7 +2100,7 @@ async function manualCheck(id, label) {
     const res = await api('/urlmonitor/'+id+'/check', {method:'POST'});
     const d = await res.json();
     if (!res.ok) { toast('❌ '+(d.error||'Error'),'error'); return; }
-    const status = d.is_up ? '🟢 UP ('+d.status_code+')' : '🔴 DOWN';
+    const status = d.is_up ? '🟢 UP ('+(d.stage||d.status_code)+')' : '🔴 DOWN'+(d.stage?' ('+d.stage+')':'');
     toast('✅ '+label+' — '+status+' | '+d.latency_ms+'ms');
     loadURLMonitor();
   } catch(e){ toast('❌ Network error','error'); }

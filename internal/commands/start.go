@@ -256,7 +256,7 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 			if sentMsg != nil {
 				progressMsgID = sentMsg.ID
 			}
-			uploaded, sentMsgID, viaColab, wmErr := deliverVideoToUser(
+			uploaded, sentMsgID, viaColab, skipWM, wmErr := deliverVideoToUser(
 				botClient, result.ChannelID, result.MessageID, fileName, watermarkText,
 				chatID, progressMsgID, watermarkedCaption, editProgress,
 			)
@@ -265,15 +265,29 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 				reply(ctx, u, "❌ Video process करताना error आली. थोड्या वेळाने पुन्हा प्रयत्न करा किंवा admin शी संपर्क करा.")
 				return dispatcher.EndGroups
 			}
-			watermarked = true
-			if viaColab {
-				deliveredByColab = true
-				colabMessageID = sentMsgID
+			if skipWM {
+				// कोणताही watermark worker/Colab उपलब्ध नाही (किंवा job fail झाला) —
+				// main server वर आता कधीच local FFmpeg चालत नाही, त्यामुळे
+				// original video plain copy-forward (unwatermarked) होतो.
+				watermarked = false
+				inputMedia = &tg.InputMediaDocument{
+					ID: &tg.InputDocument{
+						ID:            doc.ID,
+						AccessHash:    doc.AccessHash,
+						FileReference: doc.FileReference,
+					},
+				}
 			} else {
-				inputMedia = &tg.InputMediaUploadedDocument{
-					File:       uploaded,
-					MimeType:   doc.MimeType,
-					Attributes: doc.Attributes,
+				watermarked = true
+				if viaColab {
+					deliveredByColab = true
+					colabMessageID = sentMsgID
+				} else {
+					inputMedia = &tg.InputMediaUploadedDocument{
+						File:       uploaded,
+						MimeType:   doc.MimeType,
+						Attributes: doc.Attributes,
+					}
 				}
 			}
 		} else {

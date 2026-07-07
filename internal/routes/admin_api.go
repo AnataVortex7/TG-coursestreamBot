@@ -1159,18 +1159,22 @@ func adminURLMonitorList(c *gin.Context) {
 }
 
 // adminURLMonitorAdd — POST /api/admin/urlmonitor
-// Body: { "url": "https://...", "label": "My Site", "interval_seconds": 10 }
+// Body: { "url": "https://...", "label": "My Site", "interval_seconds": 10, "hf_token": "hf_xxx" }
+// hf_token optional aahe — fakt private/gated Hugging Face Space monitor
+// karnyasathi lagto, normal URLs sathi rikama theva.
 func adminURLMonitorAdd(c *gin.Context) {
 	var req struct {
 		URL             string `json:"url"`
 		Label           string `json:"label"`
 		IntervalSeconds int    `json:"interval_seconds"`
+		HFToken         string `json:"hf_token"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 	req.URL = strings.TrimSpace(req.URL)
+	req.HFToken = strings.TrimSpace(req.HFToken)
 	if req.URL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "URL required"})
 		return
@@ -1183,7 +1187,7 @@ func adminURLMonitorAdd(c *gin.Context) {
 		req.IntervalSeconds = 2
 	}
 
-	doc, err := urlmonitor.AddURL(req.URL, req.Label, req.IntervalSeconds)
+	doc, err := urlmonitor.AddURL(req.URL, req.Label, req.IntervalSeconds, req.HFToken)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

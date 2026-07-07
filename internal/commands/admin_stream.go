@@ -1986,6 +1986,9 @@ func downloadWatermarkAndReupload(
 			caption,
 			msgID,
 			false, // protectContent — /userbotdl admin upload: forward block नको
+			0,     // channelID — 0 = जुना pipe/file_url mode (unchanged)
+			0,     // channelAccessHash — pipe mode मध्ये लागत नाही
+			"",    // downloadBotToken — रिकामा = जुना pipe/file_url mode (unchanged)
 		)
 		if submitErr == nil {
 			editProgress(fmt.Sprintf(

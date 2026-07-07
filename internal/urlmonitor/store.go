@@ -13,7 +13,7 @@ import (
 )
 
 // SaveURL — insert new MonitorURL into MongoDB
-func SaveURL(url, label string, intervalSeconds int) (*MonitorURL, error) {
+func SaveURL(url, label string, intervalSeconds int, token string) (*MonitorURL, error) {
 	if intervalSeconds < 2 {
 		intervalSeconds = 2
 	}
@@ -24,6 +24,7 @@ func SaveURL(url, label string, intervalSeconds int) (*MonitorURL, error) {
 		IntervalSeconds: intervalSeconds,
 		Enabled:         true,
 		CreatedAt:       time.Now(),
+		Token:           token,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

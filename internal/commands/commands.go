@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"reflect"
     "github.com/celestix/gotgproto"  
 	"github.com/celestix/gotgproto/dispatcher"
@@ -39,6 +40,23 @@ var (
 // नंतर login/logout (button menu) झाल्यास तो stale राहतो. हा bridge नेहमी
 // bot.UserBot चा सध्याचा live client देतो (नसेल तर nil).
 var GetLiveUserbotClient func() *gotgproto.Client
+
+// GetDownloadBotForChannel — bot pool (MultiTokens) मधून round-robin एक worker
+// निवडतो आणि त्याच worker च्या स्वतःच्या client/PeerStorage मधून त्या channel
+// साठीचा access_hash resolve करून token सोबत देतो.
+//
+// महत्त्वाचं: Telegram चा access_hash प्रत्येक bot/account साठी वेगळा असतो — तो
+// त्या विशिष्ट bot च्या session ने त्या channel शी आधी interact केलेलं असेल
+// तरच वैध असतो. दुसऱ्या bot चा access_hash वापरला की Telegram "CHANNEL_INVALID"
+// देतो. त्यामुळे access_hash आणि जो bot download करणार तो एकाच worker मधून
+// यायला हवेत — म्हणून हे दोन्ही एकत्र एका function मधून देतो (वेगळं
+// token-only + access_hash-only काढल्यास mismatch होण्याची शक्यता असते).
+//
+// bot package direct import करू शकत नाही (import cycle — bot ← commands
+// आधीच import करतो), म्हणून run.go हे bot.GetNextWorker() + utils.GetChannelPeer
+// वर wire करतो. Pool रिकामा/wire न झालेला असेल तर ("", 0, err) देतो — caller
+// ने त्यावेळी मुख्य BOT_TOKEN (आणि त्याच client चा access_hash) वर fallback करायचा.
+var GetDownloadBotForChannel func(ctx context.Context, channelID int64) (botToken string, accessHash int64, err error)
 
 func Load(log *zap.Logger, dispatcher dispatcher.Dispatcher) {
 	log = log.Named("commands")

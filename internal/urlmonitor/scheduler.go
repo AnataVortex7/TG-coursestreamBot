@@ -79,50 +79,53 @@ func (w *workerState) loop() {
 	}
 }
 
-// ping — performs one HTTP GET and stores result in ring buffer
+// ping — performs one check and stores result in ring buffer
 func (w *workerState) ping() {
-	start := time.Now()
-	result := PingResult{
-		Timestamp: start,
-	}
-
-	resp, err := httpClient.Get(w.monitorURL.URL)
-	result.LatencyMs = time.Since(start).Milliseconds()
-
-	if err != nil {
-		result.Error = err.Error()
-		result.IsUp = false
-		result.StatusCode = 0
-	} else {
-		resp.Body.Close()
-		result.StatusCode = resp.StatusCode
-		result.IsUp = resp.StatusCode >= 200 && resp.StatusCode < 400
-	}
-
+	result := checkURL(w.monitorURL.URL, w.monitorURL.Token)
 	w.buffer.Add(result)
 }
 
-// manualPing — trigger one immediate ping outside the ticker cycle
+// manualPing — trigger one immediate check outside the ticker cycle
 func (w *workerState) manualPing() PingResult {
+	result := checkURL(w.monitorURL.URL, w.monitorURL.Token)
+	w.buffer.Add(result)
+	return result
+}
+
+// checkURL — dispatches to the right checker based on URL type.
+// Hugging Face Space URLs (huggingface.co/spaces/... or *.hf.space) go through
+// pingHuggingFace (see hf.go), which asks HF's own Spaces API for the real
+// runtime stage — because a Space's public URL is not always available
+// directly (private/gated spaces) or can return a misleading 200 OK "loading"
+// page while the Space is actually asleep. token — per-monitor HF token,
+// vaparla jato private/gated space sathi (rikama asel tar HF_TOKEN env
+// var fallback mhanun vaparla jato). Every other URL uses a plain HTTP GET.
+func checkURL(rawURL, token string) PingResult {
+	if isHuggingFaceURL(rawURL) {
+		return pingHuggingFace(rawURL, token)
+	}
+	return pingHTTP(rawURL)
+}
+
+// pingHTTP — plain HTTP GET check (default, non-HF URLs)
+func pingHTTP(rawURL string) PingResult {
 	start := time.Now()
 	result := PingResult{
 		Timestamp: start,
 	}
 
-	resp, err := httpClient.Get(w.monitorURL.URL)
+	resp, err := httpClient.Get(rawURL)
 	result.LatencyMs = time.Since(start).Milliseconds()
 
 	if err != nil {
 		result.Error = err.Error()
 		result.IsUp = false
 		result.StatusCode = 0
-	} else {
-		resp.Body.Close()
-		result.StatusCode = resp.StatusCode
-		result.IsUp = resp.StatusCode >= 200 && resp.StatusCode < 400
+		return result
 	}
-
-	w.buffer.Add(result)
+	defer resp.Body.Close()
+	result.StatusCode = resp.StatusCode
+	result.IsUp = resp.StatusCode >= 200 && resp.StatusCode < 400
 	return result
 }
 
@@ -136,5 +139,6 @@ func (w *workerState) status() URLStatus {
 		IsRunning:  w.running,
 		AvgLatency: avgLatency,
 		UptimePct:  uptimePct,
+		HasToken:   w.monitorURL.Token != "",
 	}
 }

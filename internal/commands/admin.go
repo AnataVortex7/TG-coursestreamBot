@@ -879,8 +879,10 @@ func cmdRegStatus(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ─── Offline Download — Video Watermark ON/OFF ────────────────────────────────
-// ON  → offline video: download → user चा mobile/email watermark burn → reupload
-//       (जुनी, default behaviour — deliverWatermarkedVideo वापरतो, start.go मध्ये).
+// ON  → offline video: watermark worker/Colab वर download → user चा mobile/email
+//       watermark burn → student ला थेट पाठवतो (deliverVideoToUser, start.go मध्ये).
+//       Worker offline असेल तर watermark टाळून plain copy-forward होतो — main
+//       server वर local FFmpeg आता कधीच चालत नाही.
 // OFF → offline video थेट copy-forward होतो (photo/PDF सारखं) — कोणताही
 //       download/FFmpeg/re-upload होत नाही, त्यामुळे जलद पण watermark शिवाय.
 

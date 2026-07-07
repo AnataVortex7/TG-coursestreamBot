@@ -56,6 +56,14 @@ type WatermarkJob struct {
 	// वेगळं वागतात.
 	ProtectContent bool      `json:"protect_content,omitempty"`
 	Caption       string    `json:"caption"`
+	// ── Direct-download fields (course offline-token flow only) ────────────
+	// हे दोन्ही set असतील तरच worker main server च्या pipe/file_url ऐवजी
+	// स्वतः थेट Telegram वरून (own Pyrogram session, DownloadBotToken वापरून)
+	// source channel मधून file fetch करतो. /userbotdl (admin) flow अजूनही
+	// जुनाच file_url/pipe मार्ग वापरतो — तिथे हे दोन्ही रिकामे/0 राहतात.
+	ChannelID        int64  `json:"channel_id,omitempty"`
+	ChannelAccessHash int64 `json:"channel_access_hash,omitempty"`
+	DownloadBotToken string `json:"download_bot_token,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	Status        string    `json:"status"`
 	Error         string    `json:"error,omitempty"`
@@ -519,6 +527,9 @@ func SubmitJob(
 	caption string,
 	srcMsgID int,
 	protectContent bool,
+	channelID int64, // 0 असेल तर pipe/file_url mode (जुना, /userbotdl साठी)
+	channelAccessHash int64, // worker ला Pyrogram peer-cache seed करण्यासाठी लागतो
+	downloadBotToken string, // "" असेल तर pipe/file_url mode
 ) (string, error) {
 	jobID := fmt.Sprintf("wm-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
 	job := &WatermarkJob{
@@ -538,6 +549,9 @@ func SubmitJob(
 		LogAccessHash:    logAccessHash,
 		Caption:          caption,
 		ProtectContent:   protectContent,
+		ChannelID:        channelID,
+		ChannelAccessHash: channelAccessHash,
+		DownloadBotToken: downloadBotToken,
 	}
 	Default.Enqueue(job)
 	return jobID, nil

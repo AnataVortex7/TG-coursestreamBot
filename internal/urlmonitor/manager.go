@@ -50,8 +50,8 @@ func (m *Manager) startWorker(u MonitorURL) {
 }
 
 // AddURL — save to Mongo + start goroutine
-func AddURL(url, label string, intervalSeconds int) (*MonitorURL, error) {
-	doc, err := SaveURL(url, label, intervalSeconds)
+func AddURL(url, label string, intervalSeconds int, token string) (*MonitorURL, error) {
+	doc, err := SaveURL(url, label, intervalSeconds, token)
 	if err != nil {
 		return nil, err
 	}

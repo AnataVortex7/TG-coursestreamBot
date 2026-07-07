@@ -1,3 +1,13 @@
+---
+title: TG Course Stream Bot
+emoji: 📡
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 8080
+pinned: false
+---
+
 <h1 align="center">Telegram File Stream Bot</h1>
 <p align="center">
   </a>
