@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -585,31 +586,68 @@ func WaitForDone(ctx context.Context, jobID string) (success bool, errMsg string
 }
 
 // ── EditTgMessage ─────────────────────────────────────────────────────────────
-
+//
+// आधी parse_mode:"Markdown" कायम वापरत होतो आणि response कधीच check करत
+// नव्हतो — त्यामुळे कुठलाही error (उदा. filename मध्ये `_`/`*`/backtick असेल
+// तर Telegram चा "can't parse entities" 400 error) पूर्णपणे silently गायब
+// व्हायचा. परिणाम: पहिला (plain-text) message दिसायचा, पण त्यानंतरचे सगळे
+// progress % edits (Markdown सकट) fail व्हायचे — म्हणून UI कायम पहिल्याच
+// text वर freeze व्हायचं (नुसतं "Uploading..." दिसत राहायचं).
+//
+// आता: (1) Markdown सकट प्रयत्न करतो, (2) Telegram ने parse-error दिला तर
+// plain text (parse_mode शिवाय) retry करतो — म्हणजे formatting शक्य असेल
+// तिथे मिळतं, नसेल तिथे edit तरी होतोच. (3) failure असेल तर log होतो.
 func EditTgMessage(botToken string, chatID int64, msgID int, text string) {
+	if editTgMessageAttempt(botToken, chatID, msgID, text, true) {
+		return
+	}
+	// Markdown parse fail झाला असेल — plain text ने retry (हमखास यशस्वी होईल,
+	// फक्त *bold*/`code` literal दिसेल, edit तरी होईल).
+	editTgMessageAttempt(botToken, chatID, msgID, text, false)
+}
+
+func editTgMessageAttempt(botToken string, chatID int64, msgID int, text string, useMarkdown bool) bool {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/editMessageText", botToken)
-	payload, err := json.Marshal(map[string]interface{}{
+	body := map[string]interface{}{
 		"chat_id":    chatID,
 		"message_id": msgID,
 		"text":       text,
-		"parse_mode": "Markdown",
-	})
-	if err != nil {
-		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if useMarkdown {
+		body["parse_mode"] = "Markdown"
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		log.Printf("[wmqueue] EditTgMessage: marshal error: %v", err)
+		return false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
-		return
+		log.Printf("[wmqueue] EditTgMessage: request build error: %v", err)
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return
+		log.Printf("[wmqueue] EditTgMessage: request failed (chatID=%d, msgID=%d): %v", chatID, msgID, err)
+		return false
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		// "message is not modified" ही निरुपद्रवी आहे (तेच text पुन्हा पाठवलं
+		// गेलं) — तिला वेगळी treat करतो, बाकी सगळं खरं failure म्हणून log करतो.
+		if bytes.Contains(respBody, []byte("message is not modified")) {
+			return true
+		}
+		log.Printf("[wmqueue] EditTgMessage: non-200 (markdown=%v, chatID=%d, msgID=%d): %d — %s",
+			useMarkdown, chatID, msgID, resp.StatusCode, string(respBody))
+		return false
+	}
+	return true
 }
 
 // ── SecretOK ──────────────────────────────────────────────────────────────────
@@ -666,7 +704,7 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 		log.Printf("[wmqueue] sendTgMessage: marshal error: %v", err)
 		return 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -674,7 +712,7 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 25 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] sendTgMessage: http error: %v", err)
@@ -711,14 +749,14 @@ func sendTgMessagePlain(botToken string, chatID int64, text string) int64 {
 	if err != nil {
 		return 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 25 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] sendTgMessagePlain: http error: %v", err)
@@ -749,7 +787,7 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 		log.Printf("[wmqueue] deleteTgMessage: marshal error: %v", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -757,7 +795,7 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 25 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] deleteTgMessage: http error: %v", err)
