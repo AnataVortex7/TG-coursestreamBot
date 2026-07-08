@@ -13,6 +13,7 @@ import (
 	"EverythingSuckz/fsb/internal/urlmonitor"
 	"EverythingSuckz/fsb/internal/utils"
 	workerreg "EverythingSuckz/fsb/internal/worker"
+	"EverythingSuckz/fsb/internal/wmqueue"
 	"fmt"
 	"net/http"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gotd/td/tg"
 	"go.uber.org/zap"
 )
 
@@ -109,6 +111,41 @@ func runApp(cmd *cobra.Command, args []string) {
 			return "", 0, err
 		}
 		return w.BotToken, inputChannel.AccessHash, nil
+	}
+	// Watermark progress edits — HTTP Bot API ऐवजी आधी already-चालू असलेल्या
+	// persistent MTProto connection वापरून बघतो (जास्त reliable — विशेषतः
+	// Hugging Face सारख्या hosting वर जिथे नवीन outbound HTTPS connections
+	// अधूनमधून वेळ जास्त लागतो/timeout होतो — "context deadline exceeded").
+	// bot.ClientForToken ला client न सापडल्यास किंवा edit error आल्यास false
+	// return होतो, आणि wmqueue.EditTgMessage आपोआप जुन्या HTTP मार्गावर
+	// fallback होतो — त्यामुळे हे पूर्णपणे safe addition आहे.
+	wmqueue.MTProtoEdit = func(botToken string, chatID int64, msgID int, text string) bool {
+		client := bot.ClientForToken(botToken)
+		if client == nil {
+			return false
+		}
+		peer := client.PeerStorage.GetInputPeerById(chatID)
+		if peer == nil {
+			return false
+		}
+		editCtx, editCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer editCancel()
+		_, err := client.API().MessagesEditMessage(editCtx, &tg.MessagesEditMessageRequest{
+			Peer:    peer,
+			ID:      msgID,
+			Message: text,
+		})
+		if err != nil {
+			// "message is not modified" निरुपद्रवी आहे — तेच text परत पाठवलं
+			// गेलं, actual failure नाही. बाकी कुठलाही error असेल तर HTTP
+			// fallback ला संधी द्यायला false return करतो.
+			if strings.Contains(err.Error(), "MESSAGE_NOT_MODIFIED") {
+				return true
+			}
+			log.Sugar().Warnw("wmqueue.MTProtoEdit failed — falling back to HTTP", "chatID", chatID, "msgID", msgID, "err", err)
+			return false
+		}
+		return true
 	}
 	// Registration Telegram notification hook (import cycle टाळायला — auth ← bot direct import karu shakat nahi)
 	auth.NotifyAdmins = bot.NotifyAllowedUsers

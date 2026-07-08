@@ -585,6 +585,21 @@ func WaitForDone(ctx context.Context, jobID string) (success bool, errMsg string
 	}
 }
 
+// ── MTProtoEdit ───────────────────────────────────────────────────────────────
+// run.go मधून wire होतो (import cycle टाळण्यासाठी DI — wmqueue फक्त stdlib+gin
+// import करतो, gotgproto/tg नाही). Set असेल तर EditTgMessage आधी हाच वापरतो —
+// bot च्या आधीच चालू असलेल्या persistent MTProto connection वरून थेट
+// messages.editMessage पाठवतो, त्यामुळे प्रत्येक edit साठी नवीन HTTPS
+// connection (api.telegram.org) उघडावी लागत नाही. काही होस्टिंग (उदा.
+// Hugging Face Spaces) वरून त्या नवीन HTTPS connections ला वेळोवेळी वेळ जास्त
+// लागतो/timeout (context deadline exceeded) होतो — तिथे progress edits
+// पहिल्याच text वर freeze होतात. MTProtoEdit ते बायपास करतो.
+//
+// bool return: true = edit यशस्वी (आणखी काही करायची गरज नाही), false = हा
+// path वापरता आला नाही (unset/client सापडला नाही/error) — EditTgMessage मग
+// जुन्या HTTP Bot API मार्गावर fallback होतो.
+var MTProtoEdit func(botToken string, chatID int64, msgID int, text string) bool
+
 // ── EditTgMessage ─────────────────────────────────────────────────────────────
 //
 // आधी parse_mode:"Markdown" कायम वापरत होतो आणि response कधीच check करत
@@ -594,10 +609,16 @@ func WaitForDone(ctx context.Context, jobID string) (success bool, errMsg string
 // progress % edits (Markdown सकट) fail व्हायचे — म्हणून UI कायम पहिल्याच
 // text वर freeze व्हायचं (नुसतं "Uploading..." दिसत राहायचं).
 //
-// आता: (1) Markdown सकट प्रयत्न करतो, (2) Telegram ने parse-error दिला तर
-// plain text (parse_mode शिवाय) retry करतो — म्हणजे formatting शक्य असेल
-// तिथे मिळतं, नसेल तिथे edit तरी होतोच. (3) failure असेल तर log होतो.
+// आता: (0) आधी MTProtoEdit (जर wire केला असेल) — persistent MTProto
+// connection वापरून, HTTP पेक्षा जास्त reliable (विशेषतः Hugging Face सारख्या
+// hosting वर जिथे नवीन outbound HTTPS connections ला वेळ जास्त लागू शकतो).
+// (1) Markdown सकट HTTP Bot API प्रयत्न करतो, (2) Telegram ने parse-error
+// दिला तर plain text (parse_mode शिवाय) retry करतो — म्हणजे formatting शक्य
+// असेल तिथे मिळतं, नसेल तिथे edit तरी होतोच. (3) failure असेल तर log होतो.
 func EditTgMessage(botToken string, chatID int64, msgID int, text string) {
+	if MTProtoEdit != nil && MTProtoEdit(botToken, chatID, msgID, text) {
+		return
+	}
 	if editTgMessageAttempt(botToken, chatID, msgID, text, true) {
 		return
 	}
@@ -621,7 +642,7 @@ func editTgMessageAttempt(botToken string, chatID int64, msgID int, text string,
 		log.Printf("[wmqueue] EditTgMessage: marshal error: %v", err)
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -704,7 +725,7 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 		log.Printf("[wmqueue] sendTgMessage: marshal error: %v", err)
 		return 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -712,7 +733,7 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 25 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] sendTgMessage: http error: %v", err)
@@ -749,14 +770,14 @@ func sendTgMessagePlain(botToken string, chatID int64, text string) int64 {
 	if err != nil {
 		return 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 25 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] sendTgMessagePlain: http error: %v", err)
@@ -787,7 +808,7 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 		log.Printf("[wmqueue] deleteTgMessage: marshal error: %v", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -795,7 +816,7 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 25 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] deleteTgMessage: http error: %v", err)

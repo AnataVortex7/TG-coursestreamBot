@@ -85,6 +85,24 @@ func (w *BotWorkers) Add(token string) (err error) {
 	return nil
 }
 
+// ClientForToken — दिलेल्या raw bot token शी match होणारा already-running
+// MTProto client (Worker) शोधतो — main bot असो किंवा MultiTokens pool मधला
+// worker bot. सापडला नाही तर nil. wmqueue.MTProtoEdit साठी वापरतो (जिथे
+// job.BotToken एक string आहे, direct client reference नाही).
+func ClientForToken(token string) *gotgproto.Client {
+	if token == "" {
+		return nil
+	}
+	Workers.mut.Lock()
+	defer Workers.mut.Unlock()
+	for _, w := range Workers.Bots {
+		if w.BotToken == token && w.Client != nil {
+			return w.Client
+		}
+	}
+	return nil
+}
+
 func GetNextWorker() *Worker {
 	Workers.mut.Lock()
 	defer Workers.mut.Unlock()
