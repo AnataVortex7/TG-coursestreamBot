@@ -1444,7 +1444,7 @@ func prepareMessage(
 	}
 
 	editProgress(fmt.Sprintf(
-		"📥 Downloading...\n📄 `%s`\n💾 %s\n📌 Chat: `%d` | Msg: `%d`\n░░░░░░░░░░ 0%%",
+		"📥 Downloading...STEP.1/3\n📄 `%s`\n💾 %s\n📌 Chat: `%d` | Msg: `%d`\n░░░░░░░░░░ 0%%",
 		file.FileName, formatSize(file.FileSize), chatIDRaw, msgID,
 	))
 
@@ -1460,7 +1460,7 @@ func prepareMessage(
 		pct := written * 100 / total
 		bar := progressBar(int(pct))
 		editProgress(fmt.Sprintf(
-			"📥 Downloading...\n📄 `%s`\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
+			"📥 Downloading...STEP.1/3\n📄 `%s`\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
 			file.FileName,
 			formatSize(written), formatSize(total),
 			bar, pct, msgID,
@@ -1474,7 +1474,7 @@ func prepareMessage(
 		pct := written * 100 / total
 		bar := progressBar(int(pct))
 		editProgress(fmt.Sprintf(
-			"📤 Uploading...\n📄 `%s`\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
+			"📤 Uploading...STEP.1/3\n📄 `%s`\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
 			file.FileName,
 			formatSize(written), formatSize(total),
 			bar, pct, msgID,
@@ -2303,12 +2303,12 @@ func runLocalWatermarkFFmpeg(inputPath, outputPath, wmText string, editProgress 
 					eta = time.Duration(elapsed.Seconds() / pct * (100 - pct) * float64(time.Second))
 				}
 				editProgress(fmt.Sprintf(
-					"💧 Watermark applying (main server)...\n📄 `%s`\n📌 Msg: `%d`\n%s %.1f%%\n⏱ %s | ETA: %s",
+					"💧 Watermark applying (main server)...STEP.2/3\n📄 `%s`\n📌 Msg: `%d`\n%s %.1f%%\n⏱ %s | ETA: %s",
 					fileName, msgID, progressBar(int(pct)), pct, elapsed, eta.Round(time.Second),
 				))
 			} else {
 				editProgress(fmt.Sprintf(
-					"💧 Watermark applying (main server)...\n📄 `%s`\n📌 Msg: `%d`\n⏱ %s elapsed...",
+					"💧 Watermark applying (main server)...STEP.2/3\n📄 `%s`\n📌 Msg: `%d`\n⏱ %s elapsed...",
 					fileName, msgID, elapsed,
 				))
 			}
@@ -2563,4 +2563,4 @@ func formatSize(bytes int64) string {
 	default:
 		return fmt.Sprintf("%d B", bytes)
 	}
-}
+}

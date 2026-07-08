@@ -25,7 +25,7 @@ import (
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 // PendingDelete — bot ने पाठवलेला प्रत्येक video message track करतो.
-// Background worker हे 2 दिवसांनी delete करतो.
+// Background worker हे 5 दिवसांनी delete करतो.
 type PendingDelete struct {
 	ID         primitive.ObjectID `bson:"_id,omitempty"`
 	ChatID     int64              `bson:"chat_id"`      // user चा Telegram chat ID
@@ -65,7 +65,7 @@ func ScheduleDelete(chatID int64, messageID int) error {
 	_, err := colPendingDeletes().InsertOne(ctx, PendingDelete{
 		ChatID:    chatID,
 		MessageID: messageID,
-		DeleteAt:  time.Now().Add(48 * time.Hour),
+		DeleteAt:  time.Now().Add(120 * time.Hour),
 		CreatedAt: time.Now(),
 		Deleted:   false,
 	})
