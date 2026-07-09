@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/bot"
@@ -11,9 +12,8 @@ import (
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/urlmonitor"
 	"EverythingSuckz/fsb/internal/utils"
-	"EverythingSuckz/fsb/internal/wmqueue"
 	workerreg "EverythingSuckz/fsb/internal/worker"
-	"context"
+	"EverythingSuckz/fsb/internal/wmqueue"
 	"fmt"
 	"net/http"
 	"os"
@@ -70,7 +70,6 @@ func runApp(cmd *cobra.Command, args []string) {
 	janitorCtx, janitorCancel := context.WithCancel(context.Background())
 	defer janitorCancel()
 	go commands.StartJanitor(janitorCtx, mainBot, log)
-	go commands.StartExpiryCleanup(janitorCtx, mainBot, log)
 
 	workers, err := bot.StartWorkers(log)
 	if err != nil {
@@ -254,6 +253,7 @@ func getRouter(log *zap.Logger) *gin.Engine {
 			Uptime:  utils.TimeFormat(uint64(time.Since(startTime).Seconds())),
 		})
 	})
+
 
 	router.StaticFile("/1713b039-f83f-40fd-936c-7225cf5ba339.txt", "web/1713b039-f83f-40fd-936c-7225cf5ba339.txt")
 

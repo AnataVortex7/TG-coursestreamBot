@@ -444,7 +444,6 @@ func cmdRevokeAccess(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ "+err.Error())
 		return dispatcher.EndGroups
 	}
-	purgeSentLecturesForAccess(ctx, user.ID, courseID, nil)
 
 	reply(ctx, u, fmt.Sprintf("✅ Access revoked for user: %s", user.Username))
 	return dispatcher.EndGroups

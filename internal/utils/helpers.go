@@ -184,79 +184,46 @@ func GetLogChannelPeer(ctx context.Context, api *tg.Client, peerStorage *storage
 
 // GetChannelPeer resolves any Telegram channel by ID.
 func GetChannelPeer(ctx context.Context, api *tg.Client, peerStorage *storage.PeerStorage, channelID int64) (*tg.InputChannel, error) {
+    
+    // -100 prefix strip kar MTProto saathi
+    mtprotoID := channelID
+    if mtprotoID < 0 {
+        mtprotoID = (-mtprotoID) - 1000000000000
+    }
 
-	// -100 prefix strip kar MTProto saathi
-	mtprotoID := channelID
-	if mtprotoID < 0 {
-		mtprotoID = (-mtprotoID) - 1000000000000
-	}
+    // peer storage madhe mtprotoID ne search kar
+    cachedInputPeer := peerStorage.GetInputPeerById(mtprotoID)
 
-	// peer storage madhe mtprotoID ne search kar
-	cachedInputPeer := peerStorage.GetInputPeerById(mtprotoID)
+    switch peer := cachedInputPeer.(type) {
+    case *tg.InputPeerEmpty:
+        break
+    case *tg.InputPeerChannel:
+        return &tg.InputChannel{
+            ChannelID:  peer.ChannelID,
+            AccessHash: peer.AccessHash,
+        }, nil
+    default:
+        return nil, errors.New("unexpected type of input peer")
+    }
 
-	switch peer := cachedInputPeer.(type) {
-	case *tg.InputPeerEmpty:
-		break
-	case *tg.InputPeerChannel:
-		return &tg.InputChannel{
-			ChannelID:  peer.ChannelID,
-			AccessHash: peer.AccessHash,
-		}, nil
-	default:
-		return nil, errors.New("unexpected type of input peer")
-	}
-
-	// ChannelsGetChannels la pan mtprotoID pathav
-	inputChannel := &tg.InputChannel{
-		ChannelID: mtprotoID, // ✅ correct format
-	}
-	channels, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{inputChannel})
-	if err != nil {
-		return nil, err
-	}
-	if len(channels.GetChats()) == 0 {
-		return nil, errors.New("no channels found")
-	}
-	channel, ok := channels.GetChats()[0].(*tg.Channel)
-	if !ok {
-		return nil, errors.New("type assertion to *tg.Channel failed")
-	}
-	peerStorage.AddPeer(channel.GetID(), channel.AccessHash, storage.TypeChannel, "")
-	return channel.AsInput(), nil
+    // ChannelsGetChannels la pan mtprotoID pathav
+    inputChannel := &tg.InputChannel{
+        ChannelID: mtprotoID,  // ✅ correct format
+    }
+    channels, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{inputChannel})
+    if err != nil {
+        return nil, err
+    }
+    if len(channels.GetChats()) == 0 {
+        return nil, errors.New("no channels found")
+    }
+    channel, ok := channels.GetChats()[0].(*tg.Channel)
+    if !ok {
+        return nil, errors.New("type assertion to *tg.Channel failed")
+    }
+    peerStorage.AddPeer(channel.GetID(), channel.AccessHash, storage.TypeChannel, "")
+    return channel.AsInput(), nil
 }
-
-// ForwardFromLogChannel — LOG_CHANNEL मधून एक आधीच-watermarked message थेट
-// student च्या chat मध्ये forward करतो (cache-hit fast path, कोणतंही
-// re-processing न करता). DropAuthor: true — "Forwarded from LOG_CHANNEL"
-// असं दिसू नये म्हणून. Noforwards: true — student ला ती copy पुन्हा
-// forward/save करता येऊ नये.
-func ForwardFromLogChannel(ctx *ext.Context, logMsgID int, toChatId int64) (*tg.Updates, error) {
-	fromPeer, err := GetLogChannelPeer(ctx, ctx.Raw, ctx.PeerStorage)
-	if err != nil {
-		return nil, err
-	}
-	toPeer := ctx.PeerStorage.GetInputPeerById(toChatId)
-	if toPeer.Zero() {
-		return nil, fmt.Errorf("toChatId: %d is not a valid peer", toChatId)
-	}
-	update, err := ctx.Raw.MessagesForwardMessages(ctx, &tg.MessagesForwardMessagesRequest{
-		RandomID:   []int64{rand.Int63()},
-		FromPeer:   &tg.InputPeerChannel{ChannelID: fromPeer.ChannelID, AccessHash: fromPeer.AccessHash},
-		ID:         []int{logMsgID},
-		ToPeer:     toPeer,
-		DropAuthor: true,
-		Noforwards: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	updates, ok := update.(*tg.Updates)
-	if !ok {
-		return nil, errors.New("unexpected update type from MessagesForwardMessages")
-	}
-	return updates, nil
-}
-
 func ForwardMessages(ctx *ext.Context, fromChatId, toChatId int64, messageID int) (*tg.Updates, error) {
 	fromPeer := ctx.PeerStorage.GetInputPeerById(fromChatId)
 	if fromPeer.Zero() {

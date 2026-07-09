@@ -36,7 +36,6 @@ var (
 	ColEmailProviderMap *mongo.Collection // email → SMTP provider permanent assignment (round-robin nahi, fixed)
 	ColUserMessages     *mongo.Collection // admin → user in-app messages (email सोबत, read status sकट)
 	ColTGLoginTokens    *mongo.Collection // Telegram OTP-login deep-link tokens (TTL: 10 min)
-	ColDeliveredCache   *mongo.Collection // in-bot watch: per-user watermarked-copy cache (log channel msg ref)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -85,18 +84,16 @@ type Course struct {
 	IsActive      bool               `bson:"is_active"      json:"is_active"`
 	CreatedAt     time.Time          `bson:"created_at"     json:"created_at"`
 	DownloadLimit int                `bson:"download_limit" json:"download_limit"` // per-user daily offline download limit (0 = default 3)
-	PaymentMode   string             `bson:"payment_mode"   json:"payment_mode"`   // "" (auto) | "link" | "giftcard" — in-bot Buy flow साठी
 }
 
 // Access — which user can access which course (no expiry by design)
 type Access struct {
-	ID               primitive.ObjectID `bson:"_id,omitempty"`
-	UserID           primitive.ObjectID `bson:"user_id"`
-	CourseID         primitive.ObjectID `bson:"course_id"`
-	GrantedAt        time.Time          `bson:"granted_at"`
-	GrantedBy        int64              `bson:"granted_by"`         // telegram admin user_id
-	ExpiresAt        *time.Time         `bson:"expires_at"`         // nil = permanent
-	ContentCleanedAt *time.Time         `bson:"content_cleaned_at"` // set केल्यावर याच expiry साठी bot-sent content आधीच delete झालाय (nil = अजून बाकी/लागू नाही)
+	ID        primitive.ObjectID `bson:"_id,omitempty"`
+	UserID    primitive.ObjectID `bson:"user_id"`
+	CourseID  primitive.ObjectID `bson:"course_id"`
+	GrantedAt time.Time          `bson:"granted_at"`
+	GrantedBy int64              `bson:"granted_by"` // telegram admin user_id
+	ExpiresAt *time.Time         `bson:"expires_at"` // nil = permanent
 }
 
 // CachedFile — one Telegram message cached from channel
@@ -113,35 +110,6 @@ type CachedFile struct {
 	FileSize  int64              `bson:"file_size"      json:"file_size"`
 	SortOrder int                `bson:"sort_order"     json:"sort_order"` // playback order inside course
 	CreatedAt time.Time          `bson:"created_at"     json:"created_at"`
-}
-
-// DeliveredCache — in-bot "Watch" flow साठी. एका user ला एकदा watermark
-// लावून पाठवलेली video चा log-channel मधला copy लक्षात ठेवतो, जेणेकरून
-// तोच user पुन्हा तीच lecture बघायला गेला की परत watermark/re-process न
-// करता log channel मधून थेट (instant) forward करता येईल. प्रत्येक
-// (UserID, CourseID, MessageID) combination साठी वेगळी watermarked copy —
-// कारण watermark मध्ये user ओळख (mobile/email) असते, दुसऱ्या user ला ती
-// दुसऱ्याची copy देता येणार नाही.
-type DeliveredCache struct {
-	ID              primitive.ObjectID `bson:"_id,omitempty"`
-	UserID          primitive.ObjectID `bson:"user_id"`
-	CourseID        primitive.ObjectID `bson:"course_id"`
-	MessageID       int                `bson:"message_id"`         // original content message_id (course channel मधला)
-	LogChannelMsgID int                `bson:"log_channel_msg_id"` // LOG_CHANNEL मधली watermarked copy चा message id
-	Watermarked     bool               `bson:"watermarked"`        // false = unwatermarked copy cache केली (wm worker offline होता तेव्हा)
-	CreatedAt       time.Time          `bson:"created_at"`
-}
-
-// SentLectureMsg — प्रत्येक वेळी bot ने student च्या chat मध्ये lecture video
-// पाठवला (cache-hit असो वा fresh) की एक record — जेणेकरून access expire
-// झाल्यावर नेमके कोणते messages delete करायचे ते कळेल.
-type SentLectureMsg struct {
-	ID        primitive.ObjectID `bson:"_id,omitempty"`
-	UserID    primitive.ObjectID `bson:"user_id"`
-	CourseID  primitive.ObjectID `bson:"course_id"`
-	ChatID    int64              `bson:"chat_id"`
-	MessageID int                `bson:"message_id"`
-	CreatedAt time.Time          `bson:"created_at"`
 }
 
 // Worker — an external streaming worker instance registered with the main server.
@@ -280,9 +248,8 @@ func Connect() {
 	ColFolders = Database.Collection("course_folders")              // ← course folders
 	ColSettings = Database.Collection("app_settings")               // ← key-value settings
 	ColEmailProviderMap = Database.Collection("email_provider_map") // ← email → SMTP provider fixed assignment
-	ColUserMessages = Database.Collection("user_messages")          // ← admin → user in-app messages
-	ColTGLoginTokens = Database.Collection("tg_login_tokens")       // ← Telegram OTP-login deep-link tokens
-	ColDeliveredCache = Database.Collection("delivered_cache")      // ← in-bot watch: per-user watermarked-copy cache
+	ColUserMessages     = Database.Collection("user_messages")      // ← admin → user in-app messages
+	ColTGLoginTokens    = Database.Collection("tg_login_tokens")    // ← Telegram OTP-login deep-link tokens
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)
@@ -393,12 +360,6 @@ func createIndexes() {
 	ensureIndex(ctx, Database.Collection("pending_deletes"), bson.D{{Key: "deleted", Value: 1}}, false)
 
 	// user_guard: suspicion score + block status per user
-	ensureCompoundIndex(ctx, Database.Collection("delivered_cache"),
-		bson.D{{Key: "user_id", Value: 1}, {Key: "course_id", Value: 1}, {Key: "message_id", Value: 1}}, true)
-
-	ensureCompoundIndex(ctx, Database.Collection("sent_lecture_msgs"),
-		bson.D{{Key: "user_id", Value: 1}, {Key: "course_id", Value: 1}}, false)
-
 	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "user_id", Value: 1}}, true)
 	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "suspicion_score", Value: -1}}, false)
 	ensureIndex(ctx, Database.Collection("user_guard"), bson.D{{Key: "is_blocked", Value: 1}}, false)
