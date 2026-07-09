@@ -61,7 +61,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
 		ctx.Reply(u, ext.ReplyTextString(
 			"👋 Namaskar!\n\nखाली तुमचा message किंवा file पाठवा — ते admin ला जाईल आणि लवकरच reply मिळेल.",
-		), nil)
+		), &ext.ReplyOpts{Markup: coursesButtonMarkup()})
 		return dispatcher.EndGroups
 	}
 
@@ -72,7 +72,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 			"⚙️ पहिल्यांदा:\n"+
 			"   /register 9876543210\n\n"+
 			"❓ Telegram ID: /myid",
-	), nil)
+	), &ext.ReplyOpts{Markup: coursesButtonMarkup()})
 	return dispatcher.EndGroups
 }
 

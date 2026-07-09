@@ -302,7 +302,6 @@ func CreateCourse(title, description, thumbnail, price, buyLink string, channelI
 	return course, nil
 }
 
-
 // GetCourseByChannelID — channel_id वरून active course शोधतो.
 // Auto-cache handler वापरतो — नवीन channel message आल्यावर course identify करायला.
 func GetCourseByChannelID(channelID int64) (*Course, error) {
@@ -392,9 +391,10 @@ func GrantAccess(userID, courseID primitive.ObjectID, adminTelegramID int64, mon
 	// Upsert: if access already exists, update the expiry
 	filter := bson.M{"user_id": userID, "course_id": courseID}
 	update := bson.M{"$set": bson.M{
-		"granted_at": time.Now(),
-		"granted_by": adminTelegramID,
-		"expires_at": expiresAt,
+		"granted_at":         time.Now(),
+		"granted_by":         adminTelegramID,
+		"expires_at":         expiresAt,
+		"content_cleaned_at": nil, // renew झाल्यावर पुढच्या expiry साठी cleanup flag reset
 	}}
 	opts := options.Update().SetUpsert(true)
 	_, err := ColAccess.UpdateOne(ctx, filter, update, opts)
@@ -406,6 +406,40 @@ func RevokeAccess(userID, courseID primitive.ObjectID) error {
 	defer cancel()
 
 	_, err := ColAccess.DeleteOne(ctx, bson.M{"user_id": userID, "course_id": courseID})
+	return err
+}
+
+// ExpiredUncleanedAccess — expires_at उलटून गेलेले पण अजून bot-sent content
+// delete न झालेले Access records. Background worker (expiry_cleanup.go) हे
+// दर काही मिनिटांनी call करतो.
+func ExpiredUncleanedAccess() ([]Access, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColAccess.Find(ctx, bson.M{
+		"expires_at":         bson.M{"$ne": nil, "$lt": time.Now()},
+		"content_cleaned_at": nil,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var list []Access
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// MarkAccessContentCleaned — cleanup पूर्ण झाल्यावर call करा, म्हणजे worker
+// पुन्हा पुन्हा तेच access record process करत बसणार नाही.
+func MarkAccessContentCleaned(id primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	now := time.Now()
+	_, err := ColAccess.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"content_cleaned_at": now}})
 	return err
 }
 
@@ -710,6 +744,7 @@ func HighestSortOrder(courseID primitive.ObjectID) (int, error) {
 	}
 	return f.SortOrder, nil
 }
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STREAM NONCES  (anti-piracy: per-page-load nonce binding)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -724,11 +759,11 @@ func UpsertStreamNonce(userID primitive.ObjectID, watchToken, nonce string, expi
 	filter := bson.M{"user_id": userID, "watch_token": watchToken}
 	update := bson.M{
 		"$set": bson.M{
-			"nonce":      nonce,
-			"user_id":    userID,
+			"nonce":       nonce,
+			"user_id":     userID,
 			"watch_token": watchToken,
-			"created_at": time.Now(),
-			"expires_at": expiresAt,
+			"created_at":  time.Now(),
+			"expires_at":  expiresAt,
 		},
 	}
 	opts := options.Update().SetUpsert(true)

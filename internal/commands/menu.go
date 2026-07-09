@@ -211,6 +211,7 @@ var categories = []category{
 		"grantaccess", "revokeaccess", "addvideo", "syncchannel",
 		"regstatus", "regopen", "regclose",
 		"offlinewmstatus", "offlinewmon", "offlinewmoff",
+		"setpaymentmode",
 	}},
 	{"userbot", "🤖 Userbot", []string{"userbotstatus", "userbotlogin", "userbotlogout", "adminstream", "userbotdl", "stopuserbotdl"}},
 	{"sessions", "📱 Sessions/Devices", []string{"sessions", "kill", "killsession"}},
@@ -569,6 +570,10 @@ func init() {
 	registerCmd(menuCmd{key: "offlinewmstatus", label: "💧 Offline Watermark Status", kind: kindView, fn: cmdOfflineWmStatus})
 	registerCmd(menuCmd{key: "offlinewmon", label: "🟢 Offline Watermark ON", kind: kindToggle, fn: cmdOfflineWmOn})
 	registerCmd(menuCmd{key: "offlinewmoff", label: "🔴 Offline Watermark OFF", kind: kindToggle, fn: cmdOfflineWmOff})
+	registerCmd(menuCmd{key: "setpaymentmode", label: "💰 Set Payment Mode", kind: kindFlow, fn: cmdSetPaymentMode, steps: []cmdStep{
+		selectStep("💰 कोणत्या Course चा payment mode सेट करायचा:", listCoursesItems),
+		selectStep("💰 कोणता mode हवा:", paymentModeItems),
+	}})
 
 	// ── Userbot ──
 	registerCmd(menuCmd{key: "userbotstatus", label: "ℹ️ Userbot Status", kind: kindView, fn: cmdUserbotStatusView})
