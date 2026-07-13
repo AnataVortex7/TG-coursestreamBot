@@ -135,9 +135,10 @@ func handleColabDone(c *gin.Context) {
 		return
 	}
 	var req struct {
-		JobID         string `json:"job_id"`
-		WorkerID      string `json:"worker_id"`
-		SentMessageID int    `json:"sent_message_id"` // ← नवीन, optional — जुना Colab script पाठवत नसेल तर 0
+		JobID           string `json:"job_id"`
+		WorkerID        string `json:"worker_id"`
+		SentMessageID   int    `json:"sent_message_id"`      // ← नवीन, optional — जुना Colab script पाठवत नसेल तर 0
+		LogChannelMsgID int    `json:"log_channel_msg_id"` // ← worker ने LOG_CHANNEL ला पाठवलेल्या master copy चा msg ID (DeliveredCache fast-path साठी, optional — नसेल तर 0)
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
@@ -156,6 +157,9 @@ func handleColabDone(c *gin.Context) {
 
 	if req.SentMessageID > 0 {
 		wmqueue.Default.SetSentMessageID(req.JobID, req.SentMessageID)
+	}
+	if req.LogChannelMsgID > 0 {
+		wmqueue.Default.SetLogChannelMsgID(req.JobID, req.LogChannelMsgID)
 	}
 	wmqueue.Default.UpdateStatus(req.JobID, wmqueue.StatusDone, "")
 	c.JSON(http.StatusOK, gin.H{"ok": true})

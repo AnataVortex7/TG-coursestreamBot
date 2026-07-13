@@ -302,7 +302,6 @@ func CreateCourse(title, description, thumbnail, price, buyLink string, channelI
 	return course, nil
 }
 
-
 // GetCourseByChannelID — channel_id वरून active course शोधतो.
 // Auto-cache handler वापरतो — नवीन channel message आल्यावर course identify करायला.
 func GetCourseByChannelID(channelID int64) (*Course, error) {
@@ -321,6 +320,12 @@ func GetCourseByChannelID(channelID int64) (*Course, error) {
 }
 
 func GetCourseByID(id primitive.ObjectID) (*Course, error) {
+	cacheKey := "id:" + id.Hex()
+	if v, ok := coursesCache.get(cacheKey); ok {
+		c, _ := v.(*Course)
+		return c, nil
+	}
+
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -328,14 +333,21 @@ func GetCourseByID(id primitive.ObjectID) (*Course, error) {
 	err := ColCourses.FindOne(ctx, bson.M{"_id": id, "is_active": true}).Decode(&course)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
+			coursesCache.set(cacheKey, (*Course)(nil), staticCacheTTL)
 			return nil, nil
 		}
 		return nil, err
 	}
+	coursesCache.set(cacheKey, &course, staticCacheTTL)
 	return &course, nil
 }
 
 func ListAllCourses() ([]Course, error) {
+	if v, ok := coursesCache.get("all"); ok {
+		courses, _ := v.([]Course)
+		return courses, nil
+	}
+
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -350,6 +362,7 @@ func ListAllCourses() ([]Course, error) {
 	if err = cursor.All(ctx, &courses); err != nil {
 		return nil, err
 	}
+	coursesCache.set("all", courses, staticCacheTTL)
 	return courses, nil
 }
 
@@ -358,6 +371,7 @@ func UpdateCourse(id primitive.ObjectID, fields bson.M) error {
 	defer cancel()
 
 	_, err := ColCourses.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": fields})
+	invalidateCourseCaches()
 	return err
 }
 
@@ -370,6 +384,7 @@ func DeleteCourse(id primitive.ObjectID) error {
 		bson.M{"_id": id},
 		bson.M{"$set": bson.M{"is_active": false}},
 	)
+	invalidateCourseCaches()
 	return err
 }
 
@@ -392,12 +407,14 @@ func GrantAccess(userID, courseID primitive.ObjectID, adminTelegramID int64, mon
 	// Upsert: if access already exists, update the expiry
 	filter := bson.M{"user_id": userID, "course_id": courseID}
 	update := bson.M{"$set": bson.M{
-		"granted_at": time.Now(),
-		"granted_by": adminTelegramID,
-		"expires_at": expiresAt,
+		"granted_at":         time.Now(),
+		"granted_by":         adminTelegramID,
+		"expires_at":         expiresAt,
+		"content_cleaned_at": nil, // renew झाल्यावर पुढच्या expiry साठी cleanup flag reset
 	}}
 	opts := options.Update().SetUpsert(true)
 	_, err := ColAccess.UpdateOne(ctx, filter, update, opts)
+	invalidateAccessCache(userID, courseID)
 	return err
 }
 
@@ -406,10 +423,51 @@ func RevokeAccess(userID, courseID primitive.ObjectID) error {
 	defer cancel()
 
 	_, err := ColAccess.DeleteOne(ctx, bson.M{"user_id": userID, "course_id": courseID})
+	invalidateAccessCache(userID, courseID)
+	return err
+}
+
+// ExpiredUncleanedAccess — expires_at उलटून गेलेले पण अजून bot-sent content
+// delete न झालेले Access records. Background worker (expiry_cleanup.go) हे
+// दर काही मिनिटांनी call करतो.
+func ExpiredUncleanedAccess() ([]Access, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cursor, err := ColAccess.Find(ctx, bson.M{
+		"expires_at":         bson.M{"$ne": nil, "$lt": time.Now()},
+		"content_cleaned_at": nil,
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var list []Access
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// MarkAccessContentCleaned — cleanup पूर्ण झाल्यावर call करा, म्हणजे worker
+// पुन्हा पुन्हा तेच access record process करत बसणार नाही.
+func MarkAccessContentCleaned(id primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	now := time.Now()
+	_, err := ColAccess.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"content_cleaned_at": now}})
 	return err
 }
 
 func HasAccess(userID, courseID primitive.ObjectID) (bool, error) {
+	cacheKey := userID.Hex() + ":" + courseID.Hex()
+	if v, ok := accessCache.get(cacheKey); ok {
+		has, _ := v.(bool)
+		return has, nil
+	}
+
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -423,7 +481,12 @@ func HasAccess(userID, courseID primitive.ObjectID) (bool, error) {
 		},
 	}
 	count, err := ColAccess.CountDocuments(ctx, filter)
-	return count > 0, err
+	if err != nil {
+		return false, err
+	}
+	has := count > 0
+	accessCache.set(cacheKey, has, userCacheTTL)
+	return has, nil
 }
 
 // ActiveAccessForUser returns full Access records (with expiry) for a user.
@@ -506,6 +569,7 @@ func UpsertCachedFile(f *CachedFile) error {
 	}}
 	opts := options.Update().SetUpsert(true)
 	_, err := ColChannelCache.UpdateOne(ctx, filter, update, opts)
+	invalidateCourseCaches()
 	return err
 }
 
@@ -528,6 +592,12 @@ func GetCachedFile(messageID int, channelID int64) (*CachedFile, error) {
 
 // FilesForCourse returns all cached files for a course, ordered by sort_order.
 func FilesForCourse(courseID primitive.ObjectID) ([]CachedFile, error) {
+	cacheKey := courseID.Hex()
+	if v, ok := filesCache.get(cacheKey); ok {
+		files, _ := v.([]CachedFile)
+		return files, nil
+	}
+
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -544,6 +614,7 @@ func FilesForCourse(courseID primitive.ObjectID) ([]CachedFile, error) {
 	if err = cursor.All(ctx, &files); err != nil {
 		return nil, err
 	}
+	filesCache.set(cacheKey, files, staticCacheTTL)
 	return files, nil
 }
 
@@ -710,6 +781,7 @@ func HighestSortOrder(courseID primitive.ObjectID) (int, error) {
 	}
 	return f.SortOrder, nil
 }
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // STREAM NONCES  (anti-piracy: per-page-load nonce binding)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -724,11 +796,11 @@ func UpsertStreamNonce(userID primitive.ObjectID, watchToken, nonce string, expi
 	filter := bson.M{"user_id": userID, "watch_token": watchToken}
 	update := bson.M{
 		"$set": bson.M{
-			"nonce":      nonce,
-			"user_id":    userID,
+			"nonce":       nonce,
+			"user_id":     userID,
 			"watch_token": watchToken,
-			"created_at": time.Now(),
-			"expires_at": expiresAt,
+			"created_at":  time.Now(),
+			"expires_at":  expiresAt,
 		},
 	}
 	opts := options.Update().SetUpsert(true)
@@ -1387,6 +1459,11 @@ const SettingOfflineWatermarkEnabled = "offline_watermark_enabled"
 
 // GetSettingBool — key साठी bool value मिळवतो. Key नसेल तर defaultVal return करतो.
 func GetSettingBool(key string, defaultVal bool) bool {
+	if v, ok := settingsCache.get(key); ok {
+		b, _ := v.(bool)
+		return b
+	}
+
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -1395,8 +1472,10 @@ func GetSettingBool(key string, defaultVal bool) bool {
 	}
 	err := ColSettings.FindOne(ctx, bson.M{"_id": key}).Decode(&doc)
 	if err != nil {
+		settingsCache.set(key, defaultVal, staticCacheTTL)
 		return defaultVal
 	}
+	settingsCache.set(key, doc.Value, staticCacheTTL)
 	return doc.Value
 }
 
@@ -1410,6 +1489,7 @@ func SetSettingBool(key string, value bool) error {
 		bson.M{"$set": bson.M{"value": value}},
 		options.Update().SetUpsert(true),
 	)
+	invalidateSettingsCache()
 	return err
 }
 

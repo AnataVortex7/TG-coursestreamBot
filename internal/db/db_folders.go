@@ -45,6 +45,7 @@ func CreateFolder(courseID primitive.ObjectID, name string, ranges []FolderRange
 	if err != nil {
 		return nil, err
 	}
+	invalidateCourseCaches()
 	return &folder, nil
 }
 
@@ -52,6 +53,12 @@ func CreateFolder(courseID primitive.ObjectID, name string, ranges []FolderRange
 
 // GetFoldersForCourse — course च्या सर्व folders, display order नुसार.
 func GetFoldersForCourse(courseID primitive.ObjectID) ([]CourseFolder, error) {
+	cacheKey := courseID.Hex()
+	if v, ok := foldersCache.get(cacheKey); ok {
+		folders, _ := v.([]CourseFolder)
+		return folders, nil
+	}
+
 	ctx, cancel := Ctx()
 	defer cancel()
 
@@ -68,6 +75,7 @@ func GetFoldersForCourse(courseID primitive.ObjectID) ([]CourseFolder, error) {
 	if err := cursor.All(ctx, &folders); err != nil {
 		return nil, err
 	}
+	foldersCache.set(cacheKey, folders, staticCacheTTL)
 	return folders, nil
 }
 
@@ -105,6 +113,7 @@ func UpdateFolder(folderID primitive.ObjectID, name string, ranges []FolderRange
 			"messages": messages,
 		}},
 	)
+	invalidateCourseCaches()
 	return err
 }
 
@@ -139,6 +148,7 @@ func DeleteFolder(folderID primitive.ObjectID) error {
 	defer cancel()
 
 	_, err := ColFolders.DeleteOne(ctx, bson.M{"_id": folderID})
+	invalidateCourseCaches()
 	return err
 }
 
@@ -148,6 +158,7 @@ func DeleteAllFoldersForCourse(courseID primitive.ObjectID) error {
 	defer cancel()
 
 	_, err := ColFolders.DeleteMany(ctx, bson.M{"course_id": courseID})
+	invalidateCourseCaches()
 	return err
 }
 

@@ -49,10 +49,12 @@ import (
 //
 // Returns:
 //
-//	uploadedFile   — (यापुढे कायम nil — local upload path आता अस्तित्वात नाही)
-//	sentMessageID  — colab path असेल तर आधीच पाठवलेल्या message चा ID (48hr auto-delete साठी)
-//	viaColab       — true असेल तर worker ने आधीच थेट student ला पाठवलंय, caller ने परत पाठवायची गरज नाही
-//	skipWatermark  — true असेल तर caller ने plain (unwatermarked) copy-forward करायचा
+//	uploadedFile     — (यापुढे कायम nil — local upload path आता अस्तित्वात नाही)
+//	sentMessageID    — colab path असेल तर आधीच पाठवलेल्या message चा ID (48hr auto-delete साठी)
+//	logChannelMsgID  — worker ने LOG_CHANNEL ला पाठवलेल्या master copy चा msg ID (0 = नाही मिळाला —
+//	                    DeliveredCache fast-path साठी caller ने वापरायचा, logChatID दिलेला नसेल तर नेहमी 0)
+//	viaColab         — true असेल तर worker ने आधीच थेट student ला पाठवलंय, caller ने परत पाठवायची गरज नाही
+//	skipWatermark    — true असेल तर caller ने plain (unwatermarked) copy-forward करायचा
 func deliverVideoToUser(
 	botClient *gotgproto.Client,
 	channelID int64,
@@ -62,26 +64,28 @@ func deliverVideoToUser(
 	studentChatID int64,
 	progressMsgID int,
 	caption string,
+	logChatID int64, // 0 = LOG_CHANNEL backup नको (offline-download flow साठी, स्पॅम टाळायला)
+	logAccessHash int64,
 	editProgress func(string),
-) (uploadedFile tg.InputFileClass, sentMessageID int, viaColab bool, skipWatermark bool, err error) {
+) (uploadedFile tg.InputFileClass, sentMessageID int, logChannelMsgID int, viaColab bool, skipWatermark bool, err error) {
 
 	if os.Getenv("KOYEB_URL") != "" && wmqueue.IsColabOnline() {
-		msgID, colabErr := deliverViaColab(
+		msgID, logMsgID, colabErr := deliverViaColab(
 			botClient, channelID, messageID, fileName, watermarkText,
-			studentChatID, progressMsgID, caption, editProgress,
+			studentChatID, progressMsgID, caption, logChatID, logAccessHash, editProgress,
 		)
 		if colabErr == nil {
-			return nil, msgID, true, false, nil
+			return nil, msgID, logMsgID, true, false, nil
 		}
 		utils.Logger.Sugar().Warnw("watermark worker delivery failed — sending original (unwatermarked) copy", "err", colabErr)
 		editProgress("⚠️ Processing server सध्या busy आहे — original video पाठवत आहोत...")
-		return nil, 0, false, true, nil
+		return nil, 0, 0, false, true, nil
 	}
 
 	// कोणताही watermark worker/Colab online नाही — main server वर local FFmpeg
 	// आता कधीच चालत नाही, त्यामुळे थेट unwatermarked forward करतो.
 	editProgress("ℹ️ Watermark server सध्या offline आहे — original video पाठवत आहोत...")
-	return nil, 0, false, true, nil
+	return nil, 0, 0, false, true, nil
 }
 
 // deliverViaColab — main server इथे कुठलाही file download/pipe करत नाही.
@@ -90,7 +94,8 @@ func deliverVideoToUser(
 // download-bot token ने) थेट त्या channel मधून file fetch करतो, FFmpeg ने
 // watermark burn करतो, आणि मुख्य BOT_TOKEN ने (upload साठी, job मध्ये वेगळा
 // पाठवलेला) थेट studentChatID ला पाठवतो. Main server ला processed file
-// कधीच परत येत नाही — फक्त success/fail आणि sent message ID कळतो.
+// कधीच परत येत नाही — फक्त success/fail, sent message ID, आणि (असल्यास)
+// log-channel master copy चा msg ID कळतो.
 func deliverViaColab(
 	botClient *gotgproto.Client,
 	channelID int64,
@@ -100,8 +105,10 @@ func deliverViaColab(
 	studentChatID int64,
 	progressMsgID int,
 	caption string,
+	logChatID int64,
+	logAccessHash int64,
 	editProgress func(string),
-) (int, error) {
+) (sentMessageID int, logChannelMsgID int, err error) {
 
 	if fileName == "" {
 		fileName = "video.mp4"
@@ -144,7 +151,7 @@ func deliverViaColab(
 	editProgress("📤 Uploading...\n☁️ पाठवत आहोत...")
 
 	jobID, err := wmqueue.SubmitJob(
-		"",   // fileURL — direct-download mode मध्ये लागत नाही
+		"", // fileURL — direct-download mode मध्ये लागत नाही
 		fileName,
 		0, // fileSize — worker स्वतः source message वरून काढेल
 		watermarkText,
@@ -154,8 +161,8 @@ func deliverViaColab(
 		studentChatID, // sendToChatID — student ला थेट पाठवायचा
 		0,             // sendToAccessHash — private chat, worker च्या entity cache वर (admin flow सारखाच पॅटर्न)
 		0,             // sendToTopicID
-		0,             // logChatID — student downloads साठी LOG_CHANNEL backup नको (स्पॅम टाळायला)
-		0,             // logAccessHash
+		logChatID,     // logChatID — caller ठरवतो (offline-download: 0/स्पॅम टाळायला, bot Watch: LOG_CHANNEL)
+		logAccessHash, // logAccessHash
 		caption,
 		messageID,
 		true, // protectContent — offline course student copy: forward/save block
@@ -164,18 +171,18 @@ func deliverViaColab(
 		downloadBotToken,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("submit job failed: %w", err)
+		return 0, 0, fmt.Errorf("submit job failed: %w", err)
 	}
 
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer waitCancel()
 
-	success, jobErr, sentMessageID := wmqueue.WaitForDone(waitCtx, jobID)
+	success, jobErr, sentMsgID, logMsgID := wmqueue.WaitForDone(waitCtx, jobID)
 	if !success {
 		if jobErr == "" {
 			jobErr = "colab job timeout/failed"
 		}
-		return 0, errors.New(jobErr)
+		return 0, 0, errors.New(jobErr)
 	}
-	return sentMessageID, nil
+	return sentMsgID, logMsgID, nil
 }

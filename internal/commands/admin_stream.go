@@ -2000,7 +2000,7 @@ func downloadWatermarkAndReupload(
 			// offline राहिला तरी job wmqueue मध्ये जिवंत राहतो आणि परत
 			// online झाल्यावर resume होतो. फक्त bot/process shutdown
 			// (bgCtx-कार्यान्वित) झाल्यास थांबावं.
-			success, jobErr, _ := wmqueue.WaitForDone(context.Background(), jobID)
+			success, jobErr, _, _ := wmqueue.WaitForDone(context.Background(), jobID)
 			if success {
 				// Colab ne FFmpeg karun, Telethon (bot_token, MTProto) ne
 				// directly target chat la file pathavli — Koyeb la file

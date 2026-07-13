@@ -4,7 +4,8 @@
 //
 // commands → wmqueue  ✅
 // routes   → wmqueue  ✅
-// wmqueue  → (only stdlib + gin)  ✅
+// wmqueue  → internal/db (colab poll tracking, replica-safe) + stdlib + gin  ✅
+// (internal/db कुठलाही internal package import करत नाही — cycle नाही.)
 
 package wmqueue
 
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/db"
 )
 
 // ── Job Status ────────────────────────────────────────────────────────────────
@@ -36,46 +38,54 @@ const (
 // ── WatermarkJob ──────────────────────────────────────────────────────────────
 
 type WatermarkJob struct {
-	JobID         string    `json:"job_id"`
-	FileURL       string    `json:"file_url"`
-	FileName      string    `json:"file_name"`
-	FileSize      int64     `json:"file_size"`
-	WatermarkText string    `json:"watermark_text"`
-	BotToken      string    `json:"bot_token"`
-	ChatID        int64     `json:"chat_id"`
-	MsgID         int       `json:"msg_id"`
-	ProgressMsgID int       `json:"progress_msg_id"`
-	SendToChatID     int64     `json:"send_to_chat_id"`
-	SendToAccessHash int64     `json:"send_to_access_hash,omitempty"`
-	SendToTopicID    int       `json:"send_to_topic_id,omitempty"`
-	LogChatID        int64     `json:"log_chat_id,omitempty"`
-	LogAccessHash    int64     `json:"log_access_hash,omitempty"`
+	JobID            string `json:"job_id"`
+	FileURL          string `json:"file_url"`
+	FileName         string `json:"file_name"`
+	FileSize         int64  `json:"file_size"`
+	WatermarkText    string `json:"watermark_text"`
+	BotToken         string `json:"bot_token"`
+	ChatID           int64  `json:"chat_id"`
+	MsgID            int    `json:"msg_id"`
+	ProgressMsgID    int    `json:"progress_msg_id"`
+	SendToChatID     int64  `json:"send_to_chat_id"`
+	SendToAccessHash int64  `json:"send_to_access_hash,omitempty"`
+	SendToTopicID    int    `json:"send_to_topic_id,omitempty"`
+	LogChatID        int64  `json:"log_chat_id,omitempty"`
+	LogAccessHash    int64  `json:"log_access_hash,omitempty"`
 	// ProtectContent — true असेल तरच Colab worker पाठवलेल्या video वर
 	// forward/save block (protect_content) लावतो. Offline course student
 	// watermark delivery साठी true, /userbotdl admin uploads साठी false —
 	// त्यामुळे same WatermarkJob / same worker code वापरूनही दोन्ही cases
 	// वेगळं वागतात.
-	ProtectContent bool      `json:"protect_content,omitempty"`
-	Caption       string    `json:"caption"`
+	ProtectContent bool   `json:"protect_content,omitempty"`
+	Caption        string `json:"caption"`
 	// ── Direct-download fields (course offline-token flow only) ────────────
 	// हे दोन्ही set असतील तरच worker main server च्या pipe/file_url ऐवजी
 	// स्वतः थेट Telegram वरून (own Pyrogram session, DownloadBotToken वापरून)
 	// source channel मधून file fetch करतो. /userbotdl (admin) flow अजूनही
 	// जुनाच file_url/pipe मार्ग वापरतो — तिथे हे दोन्ही रिकामे/0 राहतात.
-	ChannelID        int64  `json:"channel_id,omitempty"`
-	ChannelAccessHash int64 `json:"channel_access_hash,omitempty"`
-	DownloadBotToken string `json:"download_bot_token,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	Status        string    `json:"status"`
-	Error         string    `json:"error,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	WorkerID      string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
+	ChannelID         int64     `json:"channel_id,omitempty"`
+	ChannelAccessHash int64     `json:"channel_access_hash,omitempty"`
+	DownloadBotToken  string    `json:"download_bot_token,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	Status            string    `json:"status"`
+	Error             string    `json:"error,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at"`
+	WorkerID          string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
 
 	// SentMessageID — Colab ने प्रत्यक्ष पाठवलेल्या message चा ID (student
 	// offline-download साठी 48hr auto-delete schedule करायला लागतो). Colab
 	// script "/api/colab/done" call करताना हे पाठवतो (नसेल तर 0 राहतो —
 	// जुना Colab script अजूनही काम करत राहील, फक्त auto-delete मिळणार नाही).
 	SentMessageID int `json:"-"`
+
+	// LogChannelMsgID — worker ने LOG_CHANNEL ला पाठवलेल्या (unprotected
+	// master) copy चा message ID. "/api/colab/done" call मध्ये worker हे
+	// पाठवतो (नसेल तर 0). हा मिळाल्यावर caller (deliverViaColab) db.
+	// UpsertDeliveredCache मध्ये save करतो — त्याच user ने तीच lecture परत
+	// मागितली तर नवीन watermark job न चालवता, इथून थेट forward होतो
+	// (CPU/वेळ वाचतो).
+	LogChannelMsgID int `json:"-"`
 
 	// ── Progress ordering ──────────────────────────────────────────────────
 	// LastProgressSeq — आता पर्यंत apply झालेला सर्वात मोठा sequence number.
@@ -97,28 +107,55 @@ type WatermarkJob struct {
 
 const workerOfflineThreshold = 30 * time.Second // 6 missed polls @ 5s — network lag/processing veles khota offline tick na yenya sathi
 
-var colabTracker = struct {
-	mu        sync.Mutex
-	lastPoll  map[string]time.Time // workerID -> last poll time
-}{
-	lastPoll: make(map[string]time.Time),
-}
+// [FIX] आधी हे फक्त एका process cha in-memory map मध्ये track व्हायचं —
+// main-server एकापेक्षा जास्त replicas/containers वर चालत असेल (उदा. काही
+// hosting platforms हे स्वतःहून करतात) तर एका replica ला poll मिळाला तरी
+// दुसऱ्या replica ला (जो admin चा /colabstatus command handle करतोय) तो
+// कधीच दिसायचा नाही — "worker online असूनही कायम offline दिसणं" हा नेमका
+// bug यातूनच येत होता. आता खरं state DB मध्ये (सगळ्या replicas मध्ये
+// shared) ठेवलं आहे — कुठलाही replica आता बरोबर स्थिती दाखवेल.
+//
+// स्थानिक map अजूनही ठेवला आहे — फक्त याच process च्या पटीत (जसं की एका
+// request मध्ये लागोपाठ बरेच checks) DB ला दरवेळी hit न करता जलद वाचता यावं
+// म्हणून — पण खरा source-of-truth आता DB आहे.
 
-// RecordPoll — workerID च्या poll चा timestamp नोंदवतो
+var localPollCache = struct {
+	mu       sync.Mutex
+	lastPoll map[string]time.Time
+}{lastPoll: make(map[string]time.Time)}
+
+// RecordPoll — workerID च्या poll चा timestamp नोंदवतो (DB + local cache दोन्हीकडे).
 func RecordPoll(workerID string) {
 	if workerID == "" {
 		return
 	}
-	colabTracker.mu.Lock()
-	defer colabTracker.mu.Unlock()
-	colabTracker.lastPoll[workerID] = time.Now()
+	localPollCache.mu.Lock()
+	localPollCache.lastPoll[workerID] = time.Now()
+	localPollCache.mu.Unlock()
+
+	// DB write इथे block करत नाही (poll response लगेच जायला हवा) — पण
+	// error आला तर log जरूर करतो, नाहीतर हा दुसरा silent-failure bug बनेल.
+	if err := db.RecordColabPoll(workerID); err != nil {
+		log.Printf("wmqueue: RecordColabPoll (DB) failed for worker %s: %v", workerID, err)
+	}
 }
 
-// IsColabOnline — कुठलाही 1 worker तरी online आहे का (overall system status)
+// IsColabOnline — कुठलाही 1 worker तरी online आहे का (overall system status).
+// DB मधून बघतो (सगळ्या replicas मध्ये accurate राहण्यासाठी); DB error आला
+// तरच याच process च्या local cache वर fallback करतो.
 func IsColabOnline() bool {
-	colabTracker.mu.Lock()
-	defer colabTracker.mu.Unlock()
-	for _, t := range colabTracker.lastPoll {
+	online, err := db.IsColabOnlineDB(workerOfflineThreshold)
+	if err != nil {
+		log.Printf("wmqueue: IsColabOnlineDB failed, falling back to local cache: %v", err)
+		return isOnlineLocalFallback()
+	}
+	return online
+}
+
+func isOnlineLocalFallback() bool {
+	localPollCache.mu.Lock()
+	defer localPollCache.mu.Unlock()
+	for _, t := range localPollCache.lastPoll {
 		if time.Since(t) < workerOfflineThreshold {
 			return true
 		}
@@ -126,28 +163,22 @@ func IsColabOnline() bool {
 	return false
 }
 
-// ActiveWorkers — सध्या online असलेले worker IDs
+// ActiveWorkers — सध्या online असलेले worker IDs (DB-backed).
 func ActiveWorkers() []string {
-	colabTracker.mu.Lock()
-	defer colabTracker.mu.Unlock()
-	var ids []string
-	for id, t := range colabTracker.lastPoll {
-		if time.Since(t) < workerOfflineThreshold {
-			ids = append(ids, id)
-		}
+	ids, err := db.ActiveColabWorkersDB(workerOfflineThreshold)
+	if err != nil {
+		log.Printf("wmqueue: ActiveColabWorkersDB failed: %v", err)
+		return nil
 	}
 	return ids
 }
 
-// LastPollAgo — सर्वात recent poll कधी झाला (कुठल्याही worker कडून)
+// LastPollAgo — सर्वात recent poll कधी झाला (कुठल्याही worker कडून, DB-backed).
 func LastPollAgo() string {
-	colabTracker.mu.Lock()
-	defer colabTracker.mu.Unlock()
-	var latest time.Time
-	for _, t := range colabTracker.lastPoll {
-		if t.After(latest) {
-			latest = t
-		}
+	latest, err := db.LastColabPollAgoDB()
+	if err != nil {
+		log.Printf("wmqueue: LastColabPollAgoDB failed: %v", err)
+		return "unknown (DB error)"
 	}
 	if latest.IsZero() {
 		return "never"
@@ -156,24 +187,29 @@ func LastPollAgo() string {
 	return d.String()
 }
 
-// snapshotOnlineWorkers — सध्या online असलेल्या workers चा set (StartColabWatcher साठी)
+// snapshotOnlineWorkers — सध्या online असलेल्या workers चा set (StartColabWatcher साठी, DB-backed).
 func snapshotOnlineWorkers() map[string]bool {
-	colabTracker.mu.Lock()
-	defer colabTracker.mu.Unlock()
-	set := make(map[string]bool)
-	for id, t := range colabTracker.lastPoll {
-		if time.Since(t) < workerOfflineThreshold {
-			set[id] = true
-		}
+	ids, err := db.ActiveColabWorkersDB(workerOfflineThreshold)
+	if err != nil {
+		log.Printf("wmqueue: snapshotOnlineWorkers (DB) failed: %v", err)
+		return map[string]bool{}
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
 	}
 	return set
 }
 
-// forgetWorker — worker बराच वेळ offline राहिला तर tracker मधून काढतो (memory cleanup)
+// forgetWorker — worker बराच वेळ offline राहिला तर tracker मधून काढतो (local + DB cleanup).
 func forgetWorker(workerID string) {
-	colabTracker.mu.Lock()
-	defer colabTracker.mu.Unlock()
-	delete(colabTracker.lastPoll, workerID)
+	localPollCache.mu.Lock()
+	delete(localPollCache.lastPoll, workerID)
+	localPollCache.mu.Unlock()
+
+	if err := db.ForgetColabWorkerDB(workerID); err != nil {
+		log.Printf("wmqueue: ForgetColabWorkerDB failed for worker %s: %v", workerID, err)
+	}
 }
 
 // ── Colab Stop Flag ────────────────────────────────────────────────────────────
@@ -265,11 +301,22 @@ func (q *Queue) SetSentMessageID(jobID string, msgID int) {
 	}
 }
 
+// SetLogChannelMsgID — worker ने LOG_CHANNEL ला पाठवलेल्या master copy चा
+// message ID साठवतो (DeliveredCache fast-path साठी).
+func (q *Queue) SetLogChannelMsgID(jobID string, msgID int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if job, ok := q.jobs[jobID]; ok {
+		job.LogChannelMsgID = msgID
+	}
+}
+
 // ── TryProgress ───────────────────────────────────────────────────────────────
 // एका वेळी फक्त एक progress edit Telegram कडे जावा यासाठी ordering+lock:
 //   - seq <= LastProgressSeq → stale (out-of-order/late) update, skip करा.
 //   - मागचा edit अजून चालू आहे (progressBusy) → हा update skip करा, पुढचा
 //     update येईल तेव्हा त्या वेळची latest progress दाखवली जाईल.
+//
 // दोन्ही cases मध्ये ok=false. ok=true असेल तर caller ने edit सुरू केल्यावर
 // FinishProgress() call करून busy flag clear करावा.
 func (q *Queue) TryProgress(jobID string, seq int64) (job *WatermarkJob, ok bool) {
@@ -534,25 +581,25 @@ func SubmitJob(
 ) (string, error) {
 	jobID := fmt.Sprintf("wm-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
 	job := &WatermarkJob{
-		JobID:            jobID,
-		FileURL:          fileURL,
-		FileName:         fileName,
-		FileSize:         fileSize,
-		WatermarkText:    wmText,
-		BotToken:         botToken,
-		ChatID:           adminChatID,
-		MsgID:            srcMsgID,
-		ProgressMsgID:    progressMsgID,
-		SendToChatID:     sendToChatID,
-		SendToAccessHash: sendToAccessHash,
-		SendToTopicID:    sendToTopicID,
-		LogChatID:        logChatID,
-		LogAccessHash:    logAccessHash,
-		Caption:          caption,
-		ProtectContent:   protectContent,
-		ChannelID:        channelID,
+		JobID:             jobID,
+		FileURL:           fileURL,
+		FileName:          fileName,
+		FileSize:          fileSize,
+		WatermarkText:     wmText,
+		BotToken:          botToken,
+		ChatID:            adminChatID,
+		MsgID:             srcMsgID,
+		ProgressMsgID:     progressMsgID,
+		SendToChatID:      sendToChatID,
+		SendToAccessHash:  sendToAccessHash,
+		SendToTopicID:     sendToTopicID,
+		LogChatID:         logChatID,
+		LogAccessHash:     logAccessHash,
+		Caption:           caption,
+		ProtectContent:    protectContent,
+		ChannelID:         channelID,
 		ChannelAccessHash: channelAccessHash,
-		DownloadBotToken: downloadBotToken,
+		DownloadBotToken:  downloadBotToken,
 	}
 	Default.Enqueue(job)
 	return jobID, nil
@@ -563,23 +610,23 @@ func SubmitJob(
 // processed file pathvतो. Koyeb फक्त job चा final status (done/failed) wait
 // karto — output file Koyeb kade kadhich yet nahi.
 
-func WaitForDone(ctx context.Context, jobID string) (success bool, errMsg string, sentMessageID int) {
+func WaitForDone(ctx context.Context, jobID string) (success bool, errMsg string, sentMessageID int, logChannelMsgID int) {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return false, "context cancelled", 0
+			return false, "context cancelled", 0, 0
 		case <-ticker.C:
 			job, ok := Default.Get(jobID)
 			if !ok {
-				return false, "job not found in queue", 0
+				return false, "job not found in queue", 0, 0
 			}
 			switch job.Status {
 			case StatusDone:
-				return true, "", job.SentMessageID
+				return true, "", job.SentMessageID, job.LogChannelMsgID
 			case StatusFailed:
-				return false, job.Error, 0
+				return false, job.Error, 0, 0
 			}
 		}
 	}

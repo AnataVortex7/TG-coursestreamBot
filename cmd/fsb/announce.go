@@ -25,25 +25,20 @@ const settingLastAnnouncedVersion = "last_announced_version"
 
 // deployAnnouncementText — user/admin ला दिसणारा मेसेज.
 const deployAnnouncementText = `
-✅ Bot अपडेट झाला आहे!
+🎉 Bot Update!
 
-🔧 काही bugs fix केले आहेत.
-⚡ आता सर्व services व्यवस्थित काम करत आहेत.
-🛡️ Security साठी आता inbuilt watermark add केला आहे.
+📚 आता रोज Website वर जाण्याची गरज नाही.
+तुम्ही आता Lectures **Bot** आणि **Website** दोन्ही ठिकाणी पाहू शकता.
 
-💬 Your message will stay in your chat for 5 days.
+🛡️ जोपर्यंत तुमचा Course Active आहे, तोपर्यंत Lectures Delete होणार नाहीत.
 
-⏳ महत्त्वाची सूचना:
-पूर्वी video लगेच मिळत होता. आता server optimization मुळे पहिल्यांदा offline token टाकल्यानंतर video तयार होण्यासाठी साधारण 5–8 minutes लागू शकतात. हा temporary change आहे आणि लवकरच पूर्वीसारखा fast केला जाईल.
+🆕 नवीन Features पाहण्यासाठी **/start** command वापरा.
 
-📥 कृपया processing सुरू असताना तोच token पुन्हा पुन्हा send करू नका. त्यामुळे queue वाढू शकते.
+💬 कृपया तुमचा Feedback नक्की पाठवा. काही नवीन Features किंवा Changes सुचवायचे असतील तर आम्हाला जरूर सांगा.
 
-💬 Admin शी संपर्क:
-काही समस्या असल्यास किंवा मदत हवी असल्यास bot च्या chat मध्ये थेट message type करा. तो message थेट Admin पर्यंत पोहोचेल आणि Admin चा reply देखील तुम्हाला याच chat मध्ये मिळेल.
-
-🙏 तुमच्या सहकार्याबद्दल धन्यवाद!
-❤️ Thank you for your patience and support!
+❤️ Thank you!
 `;
+
 
 // announceDeployIfNewVersion — versionString बदलला असेल तरच (नवीन deploy)
 // broadcast पाठवतो; तोच version आधीच announce झाला असेल तर काहीच करत नाही.
