@@ -401,7 +401,7 @@ func backOnlyRow(data string) []tg.KeyboardButtonRow {
 // प्रयत्न केला की reply-markup खूप मोठं होतं आणि Telegram edit/send
 // तिथेच silently fail व्हायचं (folder "उघडायचंच नाही" असं दिसायचं) —
 // pagination नी हे कायमचं टाळलं जातं, folder मध्ये कितीही lectures असोत.
-const lecturesPerPage = 10
+const lecturesPerPage = 5
 
 func renderFolderContentsView(chatID int64, courseID, folderID primitive.ObjectID, page int) (string, tg.ReplyMarkupClass, error) {
 	dbUser, _ := db.GetUserByTelegramID(chatID)
@@ -916,15 +916,24 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 
 	// ── Cache hit — आधीच watermark लावलेली copy LOG_CHANNEL मध्ये आहे ─────
 	if cached, cErr := db.GetDeliveredCache(dbUser.ID, courseID, messageID); cErr == nil && cached != nil {
+		utils.Logger.Sugar().Infow("catalog: DeliveredCache hit — trying fast-path forward",
+			"logChannelMsgID", cached.LogChannelMsgID, "chatID", chatID)
 		if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, cached.LogChannelMsgID, chatID); fErr == nil {
 			if newMsgID := extractNewMessageID(fwdUpdates); newMsgID != 0 {
 				_ = db.RecordSentLectureMsg(dbUser.ID, courseID, chatID, newMsgID)
 			}
 			editCatalogMessage(ctx, u, "✅ लेक्चर खाली पाठवलं आहे 👇", &tg.ReplyInlineMarkup{Rows: backRow})
 			return
+		} else {
+			utils.Logger.Sugar().Warnw("catalog: fast-path forward failed — falling back to fresh delivery", "err", fErr)
 		}
 		// Cache forward fail झालं (log channel मधून message delete झाला असेल) —
 		// खालच्या fresh-delivery मार्गावर पडतो.
+	} else if cErr != nil {
+		utils.Logger.Sugar().Warnw("catalog: GetDeliveredCache query error", "err", cErr)
+	} else {
+		utils.Logger.Sugar().Infow("catalog: DeliveredCache miss — no cached entry for this user/lecture",
+			"userID", dbUser.ID.Hex(), "courseID", courseID.Hex(), "messageID", messageID)
 	}
 
 	botClient := MainBotClient
@@ -1124,8 +1133,17 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	//      अजिबात न करता वरच्या "Cache hit" मार्गाने थेट forward होईल.
 	//   2. कुठल्याही delivery साठी (logChannelMsgID 0 असला तरी) — folder-listing
 	//      मध्ये या lecture वर "✅ आधीच पाहिलं/डाउनलोड केलं" mark दाखवता येतं.
+	utils.Logger.Sugar().Infow("catalog: delivery finished — cache save check",
+		"userID", dbUser.ID.Hex(), "courseID", courseID.Hex(), "messageID", messageID,
+		"sentMessageID", sentMessageID, "logChannelMsgID", logChannelMsgID, "watermarked", watermarked)
 	if sentMessageID != 0 {
-		_ = db.UpsertDeliveredCache(dbUser.ID, courseID, messageID, logChannelMsgID, watermarked)
+		if cacheErr := db.UpsertDeliveredCache(dbUser.ID, courseID, messageID, logChannelMsgID, watermarked); cacheErr != nil {
+			utils.Logger.Sugar().Warnw("catalog: UpsertDeliveredCache failed", "err", cacheErr)
+		} else {
+			utils.Logger.Sugar().Infow("catalog: UpsertDeliveredCache saved OK")
+		}
+	} else {
+		utils.Logger.Sugar().Warnw("catalog: sentMessageID is 0 — DeliveredCache NOT saved (tick/cache won't work for this delivery)")
 	}
 
 	editCatalogMessage(ctx, u, "✅ लेक्चर खाली पाठवलं आहे 👇", &tg.ReplyInlineMarkup{Rows: backRow})
