@@ -989,6 +989,13 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	caption := "🎬 " + lectureName
 	sentMessageID := 0
 	logChannelMsgID := 0 // viaColab path मध्ये worker कडून मिळालेला LOG_CHANNEL master msg ID (असल्यास)
+	// [FIX] Python worker "sent_message_id" हा field कधीच पाठवत नाही (फक्त
+	// "log_channel_msg_id" पाठवतो) — त्यामुळे viaColab delivery साठी
+	// sentMessageID कायम 0 च राहतो, जरी delivery प्रत्यक्ष यशस्वी झाली तरी.
+	// फक्त "sentMessageID != 0" वर अवलंबून राहिलो तर DeliveredCache कधीच
+	// save होत नाही (✅ tick कधीच येत नाही, पुढच्या वेळी परत fresh job चालतो).
+	// हा flag त्या केससाठी वेगळा track करतो.
+	deliveredOK := false
 
 	switch m := msg.Media.(type) {
 	case *tg.MessageMediaDocument:
@@ -1049,6 +1056,7 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 				if viaColab {
 					sentMessageID = colabMsgID
 					logChannelMsgID = colabLogMsgID
+					deliveredOK = true // worker ने आधीच थेट student ला पाठवलंय — sentMessageID 0 असला तरी delivery यशस्वी झालीये
 				} else {
 					inputMedia = &tg.InputMediaUploadedDocument{File: uploaded, MimeType: doc.MimeType, Attributes: doc.Attributes}
 				}
@@ -1135,15 +1143,15 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	//      मध्ये या lecture वर "✅ आधीच पाहिलं/डाउनलोड केलं" mark दाखवता येतं.
 	utils.Logger.Sugar().Infow("catalog: delivery finished — cache save check",
 		"userID", dbUser.ID.Hex(), "courseID", courseID.Hex(), "messageID", messageID,
-		"sentMessageID", sentMessageID, "logChannelMsgID", logChannelMsgID, "watermarked", watermarked)
-	if sentMessageID != 0 {
+		"sentMessageID", sentMessageID, "logChannelMsgID", logChannelMsgID, "watermarked", watermarked, "deliveredOK", deliveredOK)
+	if sentMessageID != 0 || deliveredOK {
 		if cacheErr := db.UpsertDeliveredCache(dbUser.ID, courseID, messageID, logChannelMsgID, watermarked); cacheErr != nil {
 			utils.Logger.Sugar().Warnw("catalog: UpsertDeliveredCache failed", "err", cacheErr)
 		} else {
 			utils.Logger.Sugar().Infow("catalog: UpsertDeliveredCache saved OK")
 		}
 	} else {
-		utils.Logger.Sugar().Warnw("catalog: sentMessageID is 0 — DeliveredCache NOT saved (tick/cache won't work for this delivery)")
+		utils.Logger.Sugar().Warnw("catalog: sentMessageID is 0 and delivery not confirmed — DeliveredCache NOT saved (tick/cache won't work for this delivery)")
 	}
 
 	editCatalogMessage(ctx, u, "✅ लेक्चर खाली पाठवलं आहे 👇", &tg.ReplyInlineMarkup{Rows: backRow})
