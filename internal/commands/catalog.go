@@ -401,7 +401,7 @@ func backOnlyRow(data string) []tg.KeyboardButtonRow {
 // प्रयत्न केला की reply-markup खूप मोठं होतं आणि Telegram edit/send
 // तिथेच silently fail व्हायचं (folder "उघडायचंच नाही" असं दिसायचं) —
 // pagination नी हे कायमचं टाळलं जातं, folder मध्ये कितीही lectures असोत.
-const lecturesPerPage = 5
+const lecturesPerPage = 12
 
 func renderFolderContentsView(chatID int64, courseID, folderID primitive.ObjectID, page int) (string, tg.ReplyMarkupClass, error) {
 	dbUser, _ := db.GetUserByTelegramID(chatID)
