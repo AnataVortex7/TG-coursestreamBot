@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -152,8 +153,6 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
-	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString("⏳ Video पाठवत आहे..."), nil)
-
 	channelPeer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, result.ChannelID)
 	if err != nil {
 		reply(ctx, u, "❌ Channel access error: "+err.Error())
@@ -181,6 +180,32 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		return dispatcher.EndGroups
 	}
 
+	// [NEW] ── Cache hit — हीच lecture आधीच (offline-token मधून किंवा bot च्या
+	// in-bot "Watch" catalog मधून) याच user ला watermark सोबत LOG_CHANNEL मार्गे
+	// गेलेली असेल, तर नवीन watermark job/re-upload न करता तिथूनच थेट forward
+	// करतो — जलद, आणि CPU/bandwidth दोन्ही वाचतं. दोन्ही मार्ग (offline-token,
+	// in-bot watch) एकाच DeliveredCache (userID+courseID+messageID) वर लिहितात
+	// आणि वाचतात, त्यामुळे कुठूनही आधी घेतलेली lecture कुठूनही cache-hit होते.
+	if cached, cErr := db.GetDeliveredCache(dbUser.ID, result.CourseID, result.MessageID); cErr == nil && cached != nil && cached.LogChannelMsgID != 0 {
+		if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, cached.LogChannelMsgID, chatID); fErr == nil {
+			newMsgID := extractNewMessageID(fwdUpdates)
+			if newMsgID != 0 {
+				_ = db.ScheduleDelete(chatID, newMsgID)
+			}
+			shouldAlert, score, _ := db.RecordDownload(dbUser.ID, result.UsedToday)
+			if shouldAlert {
+				go sendAdminAlert(ctx, dbUser, score)
+			}
+			go sendDownloadNotification(ctx, dbUser, msg, course, result, courseLimit)
+			reply(ctx, u, fmt.Sprintf("✅ Video पाठवलं!\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d", result.UsedToday, courseLimit))
+			return dispatcher.EndGroups
+		}
+		// Cache forward fail झालं (log channel मधून message delete झाला असेल) —
+		// खालच्या fresh-delivery मार्गावर पडतो.
+	}
+
+	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString("⏳ Video पाठवत आहे..."), nil)
+
 	toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
 
 	var editMu sync.Mutex
@@ -205,6 +230,22 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		})
 	}
 
+	// [NEW] LOG_CHANNEL peer एकदाच resolve करतो — colab job साठी (logChatID)
+	// आणि खालच्या direct-send fallback साठी (log-first-then-forward) दोन्हीसाठी
+	// वापरतो. config.ValueOf.LogChannelID हा stripInt() मुळे "-100" शिवायचा raw
+	// channel_id असतो — worker ला मात्र पूर्ण Bot-API स्वरूपाचा chat_id
+	// ("-100"+channelID) लागतो, नाहीतर PEER_ID_INVALID येतं.
+	var logChatID, logAccessHash int64
+	var logPeer *tg.InputChannel
+	if config.ValueOf.LogChannelID != 0 {
+		if lp, lpErr := utils.GetLogChannelPeer(ctx, botClient.API(), botClient.PeerStorage); lpErr == nil && lp != nil {
+			logPeer = lp
+			logIDStr := fmt.Sprintf("-100%d", lp.ChannelID)
+			logChatID, _ = strconv.ParseInt(logIDStr, 10, 64)
+			logAccessHash = lp.AccessHash
+		}
+	}
+
 	// ── Video असेल तर: download → user चा mobile watermark म्हणून burn → reupload.
 	// इतर file types (photo/PDF/etc) आधीसारखेच थेट copy-forward होतात.
 	// (offline watermark toggle OFF असेल तर video सुद्धा direct copy-forward होतो —
@@ -221,6 +262,8 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 
 	deliveredByColab := false
 	colabMessageID := 0
+	logChannelMsgID := 0 // LOG_CHANNEL मध्ये गेलेल्या master copy चा msg ID (DeliveredCache साठी)
+	deliveredOK := false // worker ने आधीच थेट पाठवलंय अशा वेळी sentMessageID 0 असला तरी delivery यशस्वी आहे हे दाखवायला
 
 	switch m := msg.Media.(type) {
 	case *tg.MessageMediaDocument:
@@ -256,9 +299,9 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 			if sentMsg != nil {
 				progressMsgID = sentMsg.ID
 			}
-			uploaded, sentMsgID, _, viaColab, skipWM, wmErr := deliverVideoToUser(
+			uploaded, sentMsgID, colabLogMsgID, viaColab, skipWM, wmErr := deliverVideoToUser(
 				botClient, result.ChannelID, result.MessageID, fileName, watermarkText,
-				chatID, progressMsgID, watermarkedCaption, 0, 0, editProgress,
+				chatID, progressMsgID, watermarkedCaption, logChatID, logAccessHash, editProgress,
 			)
 			if wmErr != nil {
 				utils.Logger.Sugar().Errorw("watermark delivery failed", "err", wmErr, "user", dbUser.Username)
@@ -282,6 +325,8 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 				if viaColab {
 					deliveredByColab = true
 					colabMessageID = sentMsgID
+					logChannelMsgID = colabLogMsgID
+					deliveredOK = true // worker ने आधीच थेट student ला पाठवलंय — sentMsgID 0 असला तरी delivery यशस्वी आहे
 				} else {
 					inputMedia = &tg.InputMediaUploadedDocument{
 						File:       uploaded,
@@ -323,33 +368,66 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 
 	sentMessageID := colabMessageID
 
-	if !deliveredByColab {
+	// [FIX] आधी थेट student ला Noforwards:true सोबत पाठवायचो — त्यामुळे ना
+	// LOG_CHANNEL backup व्हायचा, ना DeliveredCache भरायचा (पुढच्या वेळी परत
+	// तीच lecture मागितली तरी परत नवीन upload व्हायचा). आता (worker मार्फत
+	// गेलं नसेल तरच) आधी LOG_CHANNEL ला unprotected master म्हणून पाठवतो, मग
+	// तिथूनच student ला protected म्हणून forward करतो — catalog.go च्या
+	// in-bot "Watch" flow सारखाच पॅटर्न, आणि तीच DeliveredCache वापरतो.
+	if !deliveredByColab && inputMedia != nil {
 		editProgress("📨 पाठवत आहोत...")
 
-		sentMedia, err := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
-			Peer:       toPeer,
-			Media:      inputMedia,
-			Message:    caption,
-			Noforwards: true,
-			RandomID:   rand.Int63(),
-		})
-		if err != nil {
-			reply(ctx, u, "❌ Video पाठवताना error: "+err.Error())
-			return dispatcher.EndGroups
+		if logPeer != nil {
+			logPeerInput := &tg.InputPeerChannel{ChannelID: logPeer.ChannelID, AccessHash: logPeer.AccessHash}
+			logSent, logErr := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+				Peer:     logPeerInput,
+				Media:    inputMedia,
+				Message:  caption,
+				RandomID: rand.Int63(),
+			})
+			if logErr == nil {
+				logMsgID := extractNewMessageID(toUpdates(logSent))
+				if logMsgID != 0 {
+					logChannelMsgID = logMsgID
+					if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, logMsgID, chatID); fErr == nil {
+						sentMessageID = extractNewMessageID(fwdUpdates)
+					} else {
+						utils.Logger.Sugar().Warnw("processDLToken: forward from log-channel to student failed", "err", fErr)
+					}
+				}
+			} else {
+				utils.Logger.Sugar().Warnw("processDLToken: log-channel upload failed, sending direct to student instead", "err", logErr)
+			}
 		}
 
-		if updates, ok := sentMedia.(*tg.Updates); ok {
-			for _, upd := range updates.Updates {
-				if m, ok := upd.(*tg.UpdateMessageID); ok {
-					sentMessageID = m.ID
-					break
-				}
+		// LOG_CHANNEL configure नसेल, किंवा वरचा मार्ग काही कारणाने जमला नाही —
+		// तरी student ला video मिळायलाच हवं, थेट पाठवतो (backup/cache न होता).
+		if sentMessageID == 0 {
+			sentMedia, sendErr := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+				Peer:       toPeer,
+				Media:      inputMedia,
+				Message:    caption,
+				Noforwards: true,
+				RandomID:   rand.Int63(),
+			})
+			if sendErr != nil {
+				reply(ctx, u, "❌ Video पाठवताना error: "+sendErr.Error())
+				return dispatcher.EndGroups
 			}
+			sentMessageID = extractNewMessageID(toUpdates(sentMedia))
 		}
 	}
 
 	if sentMessageID != 0 {
 		_ = db.ScheduleDelete(chatID, sentMessageID)
+	}
+
+	// [NEW] DeliveredCache save — याच cache वर catalog.go चा in-bot "Watch" flow
+	// सुद्धा लिहितो/वाचतो, त्यामुळे offline-token आणि in-bot watch दोन्ही
+	// मार्गांनी एकदा घेतलेली lecture कुठूनही परत मागितली तरी fast-path
+	// forward होते (नवीन watermark job न चालवता).
+	if sentMessageID != 0 || deliveredOK {
+		_ = db.UpsertDeliveredCache(dbUser.ID, result.CourseID, result.MessageID, logChannelMsgID, watermarked)
 	}
 
 	shouldAlert, score, _ := db.RecordDownload(dbUser.ID, result.UsedToday)
