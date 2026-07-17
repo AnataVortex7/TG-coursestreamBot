@@ -197,7 +197,8 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 				go sendAdminAlert(ctx, dbUser, score)
 			}
 			go sendDownloadNotification(ctx, dbUser, msg, course, result, courseLimit)
-			reply(ctx, u, fmt.Sprintf("✅ Video पाठवलं!\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d", result.UsedToday, courseLimit))
+			reply(ctx, u, fmt.Sprintf("✅ %s पाठवलं!\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d",
+				offlineLectureName(result, course, msg), result.UsedToday, courseLimit))
 			return dispatcher.EndGroups
 		}
 		// Cache forward fail झालं (log channel मधून message delete झाला असेल) —
@@ -256,8 +257,8 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 	wmEnabled := db.GetSettingBool(db.SettingOfflineWatermarkEnabled, true)
 
 	caption := fmt.Sprintf(
-		"📥 Offline Download\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d",
-		result.UsedToday, courseLimit,
+		"🎬 %s\n📥 Offline Download\n🔒 Forward व Save blocked\n\n📊 आजचे downloads: %d/%d",
+		offlineLectureName(result, course, msg), result.UsedToday, courseLimit,
 	)
 
 	deliveredByColab := false
@@ -767,4 +768,45 @@ func handleContactDeepLink(ctx *ext.Context, u *ext.Update, chatID int64, userID
 		"👋 Namaskar!\n\nखाली तुमचा message किंवा file पाठवा — ते थेट admin ला जाईल आणि लवकरच reply मिळेल.",
 	), nil)
 	return dispatcher.EndGroups
+}
+
+// offlineLectureName — offline-download video/file caption मध्ये दाखवायला
+// खरं lecture नाव ठरवतो. Priority: CachedFile चा actual file/title नाव
+// (in-bot catalog listing मध्ये जेच दिसतं तेच) → course चं title → channel
+// message चा caption. यामुळे user ला (bot मधून असो वा website मधून) कुठूनही
+// video परत मागितलं तरी नाव कायम सारखंच आणि ओळखता येण्यासारखं दिसतं.
+// offlineLectureNameMaxLen — caption मध्ये lecture-name भागाची कमाल लांबी.
+// Telegram caption ची एकूण मर्यादा 1024 characters आहे — नाव त्यापेक्षा मोठं
+// (उदा. खूप लांब file name) गेलं तर संपूर्ण send च reject होतो (ना video जातो,
+// ना caption) — म्हणून इथेच सुरुवातीला safe length वर कापतो.
+const offlineLectureNameMaxLen = 150
+
+func offlineLectureName(result *db.RedeemResult, course *db.Course, msg *tg.Message) string {
+	name := "Lecture"
+	if cf, cfErr := db.GetCachedFile(result.MessageID, result.ChannelID); cfErr == nil && cf != nil {
+		if cf.FileName != "" {
+			name = cf.FileName
+		} else if cf.Title != "" {
+			name = cf.Title
+		} else {
+			name = ""
+		}
+	} else {
+		name = ""
+	}
+	if name == "" && course != nil && course.Title != "" {
+		name = course.Title
+	}
+	if name == "" && msg != nil && msg.Message != "" {
+		name = msg.Message
+	}
+	if name == "" {
+		name = "Lecture"
+	}
+
+	runes := []rune(name)
+	if len(runes) > offlineLectureNameMaxLen {
+		name = string(runes[:offlineLectureNameMaxLen]) + "…"
+	}
+	return name
 }
