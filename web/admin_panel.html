@@ -139,7 +139,7 @@
   .um-stat .label{font-size:11px;color:#888;font-weight:500;margin-bottom:4px}
   .um-stat .value{font-size:22px;font-weight:700}
 
-  .um-url-cell{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-family:monospace;color:#555}
+  .um-url-cell{max-width:320px;word-break:break-all;white-space:normal;font-size:12px;font-family:monospace;color:#555}
   .um-label-cell{font-size:13px;font-weight:600}
   .um-actions{display:flex;gap:6px;flex-wrap:wrap}
 
@@ -2071,19 +2071,18 @@ async function loadURLMonitor() {
       const uptime = u.uptime_pct > 0 ? u.uptime_pct.toFixed(1)+'%' : (lr ? '0%' : '—');
       const uptimeColor = u.uptime_pct >= 90 ? '#2e7d32' : u.uptime_pct >= 50 ? '#e65100' : '#c62828';
       const label = u.label || '';
-      const shortURL = u.url.length > 45 ? u.url.slice(0,45)+'…' : u.url;
       const tokenBadge = u.has_token ? ' <span class="badge badge-purple" title="HF token saved">🔒</span>' : '';
       h += `<tr>
         <td>${statusBadge}</td>
-        <td>${label ? `<div class="um-label-cell">${esc(label)}${tokenBadge}</div>` : tokenBadge}<div class="um-url-cell" title="${esc(u.url)}">${esc(shortURL)}</div></td>
+        <td>${label ? `<div class="um-label-cell">${esc(label)}${tokenBadge}</div>` : tokenBadge}<div class="um-url-cell">${esc(u.url)}</div></td>
         <td><span class="badge badge-purple">⏱ ${u.interval_seconds}s</span></td>
         <td style="font-size:12px;color:#888">${lastPing}</td>
         <td style="font-size:12px;font-family:monospace">${latency}</td>
         <td style="font-weight:600;color:${uptimeColor}">${uptime}</td>
         <td><div class="um-actions">
           <button class="btn btn-info btn-sm" onclick="showHistory('${u.id}','${esc(u.label||u.url)}')">📊 History</button>
-          <button class="btn btn-warning btn-sm" onclick="manualCheck('${u.id}','${esc(u.label||shortURL)}')">⚡ Check</button>
-          <button class="btn btn-danger btn-sm" onclick="removeURL('${u.id}','${esc(u.label||shortURL)}')">🗑 Remove</button>
+          <button class="btn btn-warning btn-sm" onclick="manualCheck('${u.id}','${esc(u.label||u.url)}')">⚡ Check</button>
+          <button class="btn btn-danger btn-sm" onclick="removeURL('${u.id}','${esc(u.label||u.url)}')">🗑 Remove</button>
         </div></td>
       </tr>`;
     });
