@@ -5,6 +5,7 @@ import (
 	"EverythingSuckz/fsb/internal/auth"
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/internal/utils"
+	"EverythingSuckz/fsb/internal/wmqueue"
 	"context"
 	crand "crypto/rand"
 	"fmt"
@@ -27,6 +28,7 @@ func (m *command) LoadStart(dispatcher dispatcher.Dispatcher) {
 	log := m.log.Named("start")
 	defer log.Sugar().Info("Loaded")
 	dispatcher.AddHandler(handlers.NewCommand("start", start))
+	dispatcher.AddHandlerToGroup(handlers.NewMessage(nil, handleReplyKeyboardButton), -4)
 }
 
 func start(ctx *ext.Context, u *ext.Update) error {
@@ -62,7 +64,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
 		ctx.Reply(u, ext.ReplyTextString(
 			"👋 Namaskar!\n\nखाली तुमचा message किंवा file पाठवा — ते admin ला जाईल आणि लवकरच reply मिळेल.",
-		), &ext.ReplyOpts{Markup: coursesButtonMarkup()})
+		), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatId)})
 		return dispatcher.EndGroups
 	}
 
@@ -73,7 +75,7 @@ func start(ctx *ext.Context, u *ext.Update) error {
 			"⚙️ पहिल्यांदा:\n"+
 			"   /register 9876543210\n\n"+
 			"❓ Telegram ID: /myid",
-	), &ext.ReplyOpts{Markup: coursesButtonMarkup()})
+	), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatId)})
 	return dispatcher.EndGroups
 }
 
@@ -295,6 +297,11 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 			if watermarkText == "" {
 				watermarkText = dbUser.Email
 			}
+			// [NEW] Naav pn watermark madhe — mobile/email cha varchya oli var,
+			// jenekaran video var donhi (naav + mobile) disel.
+			if dbUser.FullName != "" {
+				watermarkText = dbUser.FullName + "\n" + watermarkText
+			}
 			watermarkedCaption := caption + "\n💧 Protected copy"
 			progressMsgID := 0
 			if sentMsg != nil {
@@ -302,7 +309,7 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 			}
 			uploaded, sentMsgID, colabLogMsgID, viaColab, skipWM, wmErr := deliverVideoToUser(
 				botClient, result.ChannelID, result.MessageID, fileName, watermarkText,
-				chatID, progressMsgID, watermarkedCaption, logChatID, logAccessHash, editProgress,
+				chatID, progressMsgID, watermarkedCaption, logChatID, logAccessHash, false, editProgress,
 			)
 			if wmErr != nil {
 				utils.Logger.Sugar().Errorw("watermark delivery failed", "err", wmErr, "user", dbUser.Username)
@@ -310,9 +317,10 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 				return dispatcher.EndGroups
 			}
 			if skipWM {
-				// कोणताही watermark worker/Colab उपलब्ध नाही (किंवा job fail झाला) —
-				// main server वर आता कधीच local FFmpeg चालत नाही, त्यामुळे
-				// original video plain copy-forward (unwatermarked) होतो.
+				if wmEnabled {
+					reply(ctx, u, "❌ Watermark server currently offline. Video without watermark pathvne blocked aahe.")
+					return dispatcher.EndGroups
+				}
 				watermarked = false
 				inputMedia = &tg.InputMediaDocument{
 					ID: &tg.InputDocument{
@@ -809,4 +817,68 @@ func offlineLectureName(result *db.RedeemResult, course *db.Course, msg *tg.Mess
 		name = string(runes[:offlineLectureNameMaxLen]) + "…"
 	}
 	return name
+}
+
+func handleReplyKeyboardButton(ctx *ext.Context, u *ext.Update) error {
+	msg := u.EffectiveMessage
+	if msg == nil {
+		return nil
+	}
+	txt := strings.TrimSpace(msg.Text)
+	if !isMenuButtonText(txt) {
+		return nil
+	}
+
+	chatID := u.EffectiveChat().GetID()
+	isAdmin := len(config.ValueOf.AllowedUsers) == 0 || utils.Contains(config.ValueOf.AllowedUsers, chatID)
+
+	switch txt {
+	case "📚 Courses":
+		_ = cmdCoursesRoot(ctx, u)
+		return dispatcher.EndGroups
+	case "⭐ Userbot Settings", "⭐ Premium Menu", "⭐ Premium":
+		if !db.HasUserbotAccess(chatID) {
+			ctx.Reply(u, ext.ReplyTextString("⛔ तुम्हाला Userbot Features चा ॲक्सेस नाही."), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+			return dispatcher.EndGroups
+		}
+		text, markup := renderPremiumMenuView(chatID)
+		ctx.Reply(u, ext.ReplyTextString(text), &ext.ReplyOpts{Markup: markup})
+		return dispatcher.EndGroups
+	case "💻 CMD", "💻 Commands":
+		if !isAdmin {
+			ctx.Reply(u, ext.ReplyTextString("⛔ हे फिचर फक्त Admin साठी उपलब्ध आहे."), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+			return dispatcher.EndGroups
+		}
+		_ = cmdMenuRoot(ctx, u)
+		return dispatcher.EndGroups
+	case "⚡ Pre-download":
+		if !isAdmin {
+			ctx.Reply(u, ext.ReplyTextString("⛔ हे फिचर फक्त Admin साठी उपलब्ध आहे."), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+			return dispatcher.EndGroups
+		}
+		ctx.Reply(u, ext.ReplyTextString("⚡ *Fast Pre-download Course*\n\nकमांड फॉरमॅट:\n`/predownload <user_mobile_or_email> <course_id>`"), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+		return dispatcher.EndGroups
+	case "📥 Userbot Download":
+		if !db.HasUserbotAccess(chatID) {
+			ctx.Reply(u, ext.ReplyTextString("⛔ हे फिचर फक्त Authorised युझर्ससाठी उपलब्ध आहे."), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+			return dispatcher.EndGroups
+		}
+		ctx.Reply(u, ext.ReplyTextString("📥 *Userbot Download*\n\nकमांड फॉरमॅट:\n`/userbotdl <target_chat_id> <start_msg_id> <end_msg_id>`"), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+		return dispatcher.EndGroups
+	case "📊 Bot Status":
+		if !isAdmin {
+			ctx.Reply(u, ext.ReplyTextString("⛔ हे फिचर फक्त Admin साठी उपलब्ध आहे."), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+			return dispatcher.EndGroups
+		}
+		activeWorkers := len(wmqueue.ActiveWorkers())
+		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("📊 *Bot & Worker Status*\n\n🟢 Active Colab Workers: *%d*\n⚡ Max Parallel Capacity: *%d jobs*", activeWorkers, activeWorkers*2)), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+		return dispatcher.EndGroups
+	case "❓ My ID":
+		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf("🆔 *तुमचा Telegram ID:* `%d`", chatID)), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+		return dispatcher.EndGroups
+	case "ℹ️ Help":
+		ctx.Reply(u, ext.ReplyTextString("ℹ️ *Help & Instructions*\n\n1. 📚 `/courses` — सर्व उपलब्ध कोर्स पहा\n2. ⚡ `/predownload` — कोर्स फास्ट प्री-डाऊनलोड करा\n3. 📥 `/userbotdl` — यूजरबॉटने डाऊनलोड करा\n4. ❓ `/myid` — Telegram ID मिळवा"), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+		return dispatcher.EndGroups
+	}
+	return nil
 }

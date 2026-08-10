@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/db"
 	"errors"
@@ -37,6 +38,12 @@ func StartUserBot(l *zap.Logger) {
 	)
 	if err != nil {
 		log.Error("Failed to start userbot", zap.Error(err))
+		errStr := err.Error()
+		if strings.Contains(errStr, "AUTH_KEY_UNREGISTERED") || strings.Contains(errStr, "401") || strings.Contains(errStr, "SESSION_REVOKED") {
+			log.Warn("Expired or revoked userbot session detected in DB — clearing invalid session string")
+			_ = db.DeleteUserBotSession()
+			config.ValueOf.UserSession = ""
+		}
 		return
 	}
 	UserBot.log = log
@@ -64,6 +71,7 @@ func (u *UserBotStruct) GetClient() *gotgproto.Client {
 //     - Userbot admin NASEL (ya channel access nasel) tar -> kahihi modify na
 //       karta, channel ID warning level log madhe print karto, ani return.
 func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
+	PromoteWorkerBotsUsingMainBot(channelID, u.log)
 	if u.client == nil {
 		u.log.Warn("AddBotsAsAdminsForChannel: userbot client running nahi - skip", zap.Int64("channel_id", channelID))
 		return errors.New("userbot not running")
@@ -229,4 +237,108 @@ func (u *UserBotStruct) AddBotsAsAdmins() error {
 		time.Sleep(1500 * time.Millisecond)
 	}
 	return nil
+}
+
+func PromoteWorkerBotsUsingMainBot(channelID int64, log *zap.Logger) {
+	if Workers == nil || len(Workers.Bots) <= 1 {
+		return
+	}
+	mainBot := Workers.Bots[0]
+	if mainBot == nil || mainBot.Client == nil {
+		return
+	}
+
+	ctx := mainBot.Client.CreateContext()
+
+	mtprotoID := channelID
+	if mtprotoID < 0 {
+		mtprotoID = (-mtprotoID) - 1000000000000
+	}
+
+	channelInfos, err := mainBot.Client.API().ChannelsGetChannels(
+		ctx,
+		[]tg.InputChannelClass{
+			&tg.InputChannel{
+				ChannelID: mtprotoID,
+			},
+		},
+	)
+	if err != nil || len(channelInfos.GetChats()) == 0 {
+		return
+	}
+
+	channelChat, ok := channelInfos.GetChats()[0].(*tg.Channel)
+	if !ok {
+		return
+	}
+	inputChannel := channelChat.AsInput()
+
+	selfParticipant, err := mainBot.Client.API().ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{
+		Channel:     inputChannel,
+		Participant: &tg.InputPeerSelf{},
+	})
+	if err != nil {
+		return
+	}
+
+	canAddAdmins := false
+	switch p := selfParticipant.Participant.(type) {
+	case *tg.ChannelParticipantCreator:
+		canAddAdmins = true
+	case *tg.ChannelParticipantAdmin:
+		canAddAdmins = p.AdminRights.AddAdmins
+	}
+
+	if !canAddAdmins {
+		return
+	}
+
+	currentAdmins := map[int64]bool{}
+	admins, err := mainBot.Client.API().ChannelsGetParticipants(ctx, &tg.ChannelsGetParticipantsRequest{
+		Channel: inputChannel,
+		Filter:  &tg.ChannelParticipantsAdmins{},
+		Offset:  0,
+		Limit:   100,
+	})
+	if err == nil {
+		if adminList, ok := admins.(*tg.ChannelsChannelParticipants); ok {
+			for _, admin := range adminList.Participants {
+				switch a := admin.(type) {
+				case *tg.ChannelParticipantAdmin:
+					currentAdmins[a.UserID] = true
+				case *tg.ChannelParticipantCreator:
+					currentAdmins[a.UserID] = true
+				}
+			}
+		}
+	}
+
+	for i := 1; i < len(Workers.Bots); i++ {
+		bot := Workers.Bots[i]
+		if currentAdmins[bot.Self.ID] {
+			continue
+		}
+
+		botInfo, err := ctx.ResolveUsername(bot.Self.Username)
+		if err != nil {
+			continue
+		}
+
+		_, err = mainBot.Client.API().ChannelsEditAdmin(
+			ctx.Context,
+			&tg.ChannelsEditAdminRequest{
+				Channel: inputChannel,
+				UserID:  botInfo.GetInputUser(),
+				AdminRights: tg.ChatAdminRights{
+					PostMessages: true,
+					EditMessages: true,
+					DeleteMessages: true,
+				},
+				Rank: "worker",
+			},
+		)
+		if err == nil {
+			log.Sugar().Infof("MainBot promoted worker @%s as admin in channel %d", bot.Self.Username, channelID)
+		}
+	}
 }

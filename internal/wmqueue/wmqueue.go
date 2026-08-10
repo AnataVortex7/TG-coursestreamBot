@@ -19,11 +19,15 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/db"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 // ── Job Status ────────────────────────────────────────────────────────────────
@@ -58,6 +62,10 @@ type WatermarkJob struct {
 	// त्यामुळे same WatermarkJob / same worker code वापरूनही दोन्ही cases
 	// वेगळं वागतात.
 	ProtectContent bool   `json:"protect_content,omitempty"`
+	// LogOnly — [NEW] true असेल तर worker फक्त LOG_CHANNEL ला video पाठवतो
+	// (unprotected master), student ला काहीच पाठवत नाही. Admin च्या silent
+	// pre-download साठी — user ला annoy न करता cache आधीच भरून ठेवायला.
+	LogOnly        bool   `json:"log_only,omitempty"`
 	Caption        string `json:"caption"`
 	// ── Direct-download fields (course offline-token flow only) ────────────
 	// हे दोन्ही set असतील तरच worker main server च्या pipe/file_url ऐवजी
@@ -72,6 +80,15 @@ type WatermarkJob struct {
 	Error             string    `json:"error,omitempty"`
 	UpdatedAt         time.Time `json:"updated_at"`
 	WorkerID          string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
+
+	// Bulk — [NEW] true असेल तरच per-worker concurrency cap (MaxJobsPerWorker)
+	// लागू होतो. /predownload सारख्या admin bulk-batch मधून येणाऱ्या jobs साठी
+	// true — जेणेकरून एकाच worker वर सगळे jobs गर्दी करून, त्याच वेळी येणाऱ्या
+	// live/normal (course lecture, /userbotdl single-file) requests साठी queue
+	// busy होणार नाही. Live/normal request cha job हा false (default) राहतो —
+	// त्याला cap लागू होत नाही, तो नेहमी लगेच कुठल्याही free worker ला जातो,
+	// जुन्या behavior प्रमाणेच fully parallel.
+	Bulk bool `json:"-"`
 
 	// SentMessageID — Colab ने प्रत्यक्ष पाठवलेल्या message चा ID (student
 	// offline-download साठी 48hr auto-delete schedule करायला लागतो). Colab
@@ -97,6 +114,24 @@ type WatermarkJob struct {
 	// खरं असेल तर पुढचा progress update तो complete होईपर्यंत skip होतो —
 	// त्यामुळे एका वेळी फक्त एकच edit Telegram कडे जातो, ordering राहतं.
 	progressBusy bool `json:"-"`
+
+	// lastEditAttempt — शेवटचा edit attempt कधी केला (यशस्वी असो वा नसो).
+	// TryProgress यावरून minimum spacing (baseEditGap) लागू करतो — प्रत्येक
+	// progress tick ला लगेच Telegram ला hit न करता, थोडा वेळ थांबतो.
+	lastEditAttempt time.Time `json:"-"`
+
+	// editFailStreak — सलग किती edit attempts (MTProto + HTTP दोन्ही) fail
+	// झाले. वाढत गेल्यास exponential backoff लागू होतो (कॅप्ड) — त्यामुळे
+	// FLOOD_WAIT सारख्या दीर्घ बंदी दरम्यान दर काही सेकंदाला निष्फळ TLS
+	// connections उघडत राहणं थांबतं. एक edit यशस्वी झाला की 0 वर reset होतो.
+	editFailStreak int `json:"-"`
+
+	// LastProgressMsg — [NEW] worker ने पाठवलेला सर्वात अलीकडचा free-text
+	// stage/percent update (उदा. "📥 Downloading 63%..."). हा नेहमी साठवला
+	// जातो — job.ProgressMsgID==0 असला (उदा. silent /predownload) तरी सुद्धा,
+	// जेणेकरून कुठलाही caller (Telegram edit न करताही) सध्याचा stage वाचू
+	// शकेल — उदा. admin च्या predownload progress-bar साठी.
+	LastProgressMsg string `json:"-"`
 }
 
 // ── Colab Worker Online Tracker (per-worker) ──────────────────────────────────
@@ -105,7 +140,7 @@ type WatermarkJob struct {
 // नवीन) असतो. प्रत्येक poll मध्ये worker_id येतो — त्याचा lastPollTime track
 // करतो. 10 sec (2 missed polls @ 5s) मध्ये poll आला नाही → तो worker offline.
 
-const workerOfflineThreshold = 30 * time.Second // 6 missed polls @ 5s — network lag/processing veles khota offline tick na yenya sathi
+const workerOfflineThreshold = 35 * time.Second // 7 missed polls @ 5s — clean active worker count without ghost workers
 
 // [FIX] आधी हे फक्त एका process cha in-memory map मध्ये track व्हायचं —
 // main-server एकापेक्षा जास्त replicas/containers वर चालत असेल (उदा. काही
@@ -253,19 +288,113 @@ var Default = &Queue{
 	pending: []string{},
 }
 
+func saveJobToDB(job *WatermarkJob) {
+	if db.ColWMJobs == nil || job == nil || job.JobID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	opts := options.Update().SetUpsert(true)
+	_, _ = db.ColWMJobs.UpdateOne(ctx,
+		bson.M{"job_id": job.JobID},
+		bson.M{"$set": job},
+		opts,
+	)
+}
+
+func deleteJobFromDB(jobID string) {
+	if db.ColWMJobs == nil || jobID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = db.ColWMJobs.DeleteOne(ctx, bson.M{"job_id": jobID})
+}
+
+func loadUnfinishedJobsFromDB() {
+	if db.ColWMJobs == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cursor, err := db.ColWMJobs.Find(ctx, bson.M{
+		"status": bson.M{"$in": []string{StatusPending, StatusProcessing}},
+	})
+	if err != nil {
+		return
+	}
+	defer cursor.Close(ctx)
+
+	var loadedJobs []*WatermarkJob
+	if err := cursor.All(ctx, &loadedJobs); err == nil && len(loadedJobs) > 0 {
+		Default.mu.Lock()
+		for _, job := range loadedJobs {
+			if _, exists := Default.jobs[job.JobID]; !exists {
+				job.Status = StatusPending
+				Default.jobs[job.JobID] = job
+				Default.pending = append(Default.pending, job.JobID)
+			}
+		}
+		Default.mu.Unlock()
+		log.Printf("[wmqueue] Recovered %d unfinished jobs from MongoDB", len(loadedJobs))
+	}
+}
+
 func (q *Queue) Enqueue(job *WatermarkJob) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	job.Status = StatusPending
 	job.CreatedAt = time.Now()
 	job.UpdatedAt = time.Now()
 	q.jobs[job.JobID] = job
 	q.pending = append(q.pending, job.JobID)
+	q.mu.Unlock()
+
+	saveJobToDB(job)
 }
+
+// MaxJobsPerWorker — एका Colab worker कडे एकाच वेळी जास्तीत जास्त इतकेच
+// "processing" *Bulk* jobs असू शकतात (उदा. /predownload). Poll() मध्ये याच
+// cap वर आधारित तो worker आधीच busy (cap इतके किंवा जास्त bulk jobs घेऊन
+// बसलाय) असेल तर पुढचा bulk job देत नाही — तो skip करून queue मध्ये पुढे
+// कुठे non-bulk (live/normal) job pending असेल तर तो लगेच देतो. cap फक्त
+// bulk jobs साठीच लागू होतो — live requests कधीच cap मध्ये अडकत नाहीत.
+//
+// [FIX #1] आधी हा cap कुठेच नव्हता — फक्त admin_stream.go मधला jobsPerWorker
+// batch-submit वेळचा total concurrency budget ठरवायचा, पण प्रत्यक्ष Poll()
+// पूर्णपणे FIFO होता (worker सध्या किती jobs घेऊन बसलाय हे कधीच बघत नव्हता).
+// त्यामुळे जो worker जास्त वेळा/लवकर poll करायचा (network latency मुळे)
+// त्यालाच वारंवार नवीन job मिळायचा, आणि हळू poll करणाऱ्या worker ला कधी
+// एकही job मिळायचा नाही किंवा एकच मिळायचा — हाच "random एका worker कडे
+// multiple job, दुसऱ्याला एकच" bug होता.
+//
+// [FIX #2] cap फक्त Bulk jobs (predownload सारख्या batch) वरच लागू केला —
+// live/normal (course lecture, single /userbotdl वगैरे) requests च्या jobs
+// Bulk=false असतात, त्यामुळे त्या नेहमी parallel + cap-free राहतात.
+const MaxJobsPerWorker = 2
 
 func (q *Queue) Poll(workerID string) *WatermarkJob {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	// worker आधीच cap इतके (किंवा जास्त) *bulk* jobs process करतोय का —
+	// live/normal jobs या count मध्ये धरले जात नाहीत, त्यामुळे live traffic
+	// कधीच bulk cap मुळे अडत नाही.
+	bulkActiveForWorker := 0
+	if workerID != "" {
+		for _, job := range q.jobs {
+			if job.Status == StatusProcessing && job.WorkerID == workerID && job.Bulk {
+				bulkActiveForWorker++
+			}
+		}
+	}
+
+	var skipped []string // cap मुळे skip केलेले bulk job IDs — शेवटी परत pending मध्ये टाकायला
+	defer func() {
+		if len(skipped) > 0 {
+			q.pending = append(q.pending, skipped...)
+		}
+	}()
+
 	for len(q.pending) > 0 {
 		id := q.pending[0]
 		q.pending = q.pending[1:]
@@ -273,6 +402,15 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 		if !ok || job.Status != StatusPending {
 			continue
 		}
+
+		if job.Bulk && workerID != "" && bulkActiveForWorker >= MaxJobsPerWorker {
+			// हा worker आधीच cap इतके bulk jobs घेऊन बसलाय — हा bulk job
+			// skip करून पुढचा (शक्यतो non-bulk/live) job बघतो. cap मुळे
+			// skip केलेला job हरवू नये म्हणून queue च्या शेवटी परत टाकतो.
+			skipped = append(skipped, id)
+			continue
+		}
+
 		job.Status = StatusProcessing
 		job.WorkerID = workerID
 		job.UpdatedAt = time.Now()
@@ -283,11 +421,19 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 
 func (q *Queue) UpdateStatus(jobID, status, errMsg string) {
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	var targetJob *WatermarkJob
 	if job, ok := q.jobs[jobID]; ok {
 		job.Status = status
 		job.Error = errMsg
 		job.UpdatedAt = time.Now()
+		targetJob = job
+	}
+	q.mu.Unlock()
+
+	if status == StatusDone || status == StatusFailed {
+		deleteJobFromDB(jobID)
+	} else if targetJob != nil {
+		saveJobToDB(targetJob)
 	}
 }
 
@@ -311,6 +457,40 @@ func (q *Queue) SetLogChannelMsgID(jobID string, msgID int) {
 	}
 }
 
+// SetProgressMessage — [NEW] worker कडून आलेला latest stage/percent text
+// साठवतो (Telegram edit होवो अथवा न होवो — ProgressMsgID शी संबंधित नाही).
+func (q *Queue) SetProgressMessage(jobID, msg string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if job, ok := q.jobs[jobID]; ok {
+		job.LastProgressMsg = msg
+	}
+}
+
+// SetProgressMessage — [NEW] package-level wrapper (Default queue साठी), बाकी
+// package-level helpers (ActiveWorkers, IsColabOnline, वगैरे) सारखाच पॅटर्न.
+func SetProgressMessage(jobID, msg string) {
+	Default.SetProgressMessage(jobID, msg)
+}
+
+// ProgressMessage — [NEW] एखाद्या jobID चा सध्याचा latest stage/percent text
+// वाचतो (उदा. admin च्या predownload progress-bar साठी per-job detail).
+func (q *Queue) ProgressMessage(jobID string) (string, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	job, ok := q.jobs[jobID]
+	if !ok || job.LastProgressMsg == "" {
+		return "", false
+	}
+	return job.LastProgressMsg, true
+}
+
+// ProgressMessage — [NEW] package-level wrapper (Default queue साठी), बाकी
+// package-level helpers (ActiveWorkers, IsColabOnline, वगैरे) सारखाच पॅटर्न.
+func ProgressMessage(jobID string) (string, bool) {
+	return Default.ProgressMessage(jobID)
+}
+
 // ── TryProgress ───────────────────────────────────────────────────────────────
 // एका वेळी फक्त एक progress edit Telegram कडे जावा यासाठी ordering+lock:
 //   - seq <= LastProgressSeq → stale (out-of-order/late) update, skip करा.
@@ -319,6 +499,15 @@ func (q *Queue) SetLogChannelMsgID(jobID string, msgID int) {
 //
 // दोन्ही cases मध्ये ok=false. ok=true असेल तर caller ने edit सुरू केल्यावर
 // FinishProgress() call करून busy flag clear करावा.
+// baseEditGap — दोन Telegram edit attempts मध्ये minimum अंतर (जरी progress
+// खूप वेगात येत असला तरी). maxEditBackoff — सलग failures वर backoff याच्या
+// पुढे कधीच जात नाही (job कायमचा "silently stuck" वाटू नये म्हणून periodic
+// retry चालूच राहतो, फक्त हळू).
+const (
+	baseEditGap    = 3 * time.Second
+	maxEditBackoff = 2 * time.Minute
+)
+
 func (q *Queue) TryProgress(jobID string, seq int64) (job *WatermarkJob, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -332,18 +521,43 @@ func (q *Queue) TryProgress(jobID string, seq int64) (job *WatermarkJob, ok bool
 	if j.progressBusy {
 		return nil, false // mागcha edit chalu ahe, ha update skip
 	}
+	// [FIX] Minimum spacing — आधी फक्त concurrency check होता, त्यामुळे edit
+	// अयशस्वी होऊन लगेच परत मोकळा (progressBusy=false) झाला की पुढचा update
+	// लगेच पुन्हा प्रयत्न करायचा — जलद progress ticks (उदा. दर 1 sec) वर हे
+	// प्रत्यक्षात दर काही sec ला Telegram ला hit करत राहायचं (FLOOD_WAIT
+	// दरम्यानही निष्फळ HTTP fallback attempts सुरूच राहायचे). आता:
+	// सलग failures वाढले की gap वाढतो (capped), यशस्वी edit वर परत base gap.
+	gap := baseEditGap
+	if j.editFailStreak > 0 {
+		backoff := time.Duration(j.editFailStreak) * baseEditGap * 2
+		if backoff > maxEditBackoff {
+			backoff = maxEditBackoff
+		}
+		gap = backoff
+	}
+	if !j.lastEditAttempt.IsZero() && time.Since(j.lastEditAttempt) < gap {
+		return nil, false // too soon — पुढच्या tick ला परत प्रयत्न होईल
+	}
 	j.LastProgressSeq = seq
 	j.progressBusy = true
+	j.lastEditAttempt = time.Now()
 	return j, true
 }
 
 // FinishProgress — TryProgress नंतर edit complete/fail झाल्यावर busy flag clear
-// करतो, taki पुढचा progress update pick होऊ शकेल.
-func (q *Queue) FinishProgress(jobID string) {
+// करतो, taki पुढचा progress update pick होऊ शकेल. success सांगतो actual edit
+// (MTProto किंवा HTTP, कुठलाही मार्ग) यशस्वी झाला का — त्यावरून editFailStreak
+// reset/increment होतो, जो पुढच्या backoff gap साठी वापरला जातो.
+func (q *Queue) FinishProgress(jobID string, success bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if j, ok := q.jobs[jobID]; ok {
 		j.progressBusy = false
+		if success {
+			j.editFailStreak = 0
+		} else {
+			j.editFailStreak++
+		}
 	}
 }
 
@@ -382,10 +596,10 @@ func (q *Queue) RequeueStaleProcessingForWorker(workerID string) []*WatermarkJob
 	defer q.mu.Unlock()
 	var affected []*WatermarkJob
 	for _, job := range q.jobs {
-		if job.Status == StatusProcessing && job.WorkerID == workerID {
+		if job.Status == StatusProcessing && job.WorkerID == workerID && time.Since(job.UpdatedAt) > 3*time.Minute {
 			job.Status = StatusPending
 			job.WorkerID = ""
-			job.LastProgressSeq = 0 // navin worker cha seq counter 1 pasun suru hoईl
+			job.LastProgressSeq = 0
 			job.progressBusy = false
 			job.UpdatedAt = time.Now()
 			q.pending = append([]string{job.JobID}, q.pending...)
@@ -408,10 +622,10 @@ func (q *Queue) RequeueOrphanedProcessing(onlineSet map[string]bool) []*Watermar
 	defer q.mu.Unlock()
 	var affected []*WatermarkJob
 	for _, job := range q.jobs {
-		if job.Status == StatusProcessing && !onlineSet[job.WorkerID] {
+		if job.Status == StatusProcessing && !onlineSet[job.WorkerID] && time.Since(job.UpdatedAt) > 3*time.Minute {
 			job.Status = StatusPending
 			job.WorkerID = ""
-			job.LastProgressSeq = 0 // navin worker cha seq counter 1 pasun suru hoईl
+			job.LastProgressSeq = 0
 			job.progressBusy = false
 			job.UpdatedAt = time.Now()
 			q.pending = append([]string{job.JobID}, q.pending...)
@@ -575,9 +789,11 @@ func SubmitJob(
 	caption string,
 	srcMsgID int,
 	protectContent bool,
+	logOnly bool, // [NEW] true = फक्त LOG_CHANNEL ला पाठव, student ला काहीच नाही
 	channelID int64, // 0 असेल तर pipe/file_url mode (जुना, /userbotdl साठी)
 	channelAccessHash int64, // worker ला Pyrogram peer-cache seed करण्यासाठी लागतो
 	downloadBotToken string, // "" असेल तर pipe/file_url mode
+	bulk bool, // [NEW] true = /predownload सारखा admin bulk-batch job — फक्त यालाच per-worker cap (MaxJobsPerWorker) लागू होतो
 ) (string, error) {
 	jobID := fmt.Sprintf("wm-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
 	job := &WatermarkJob{
@@ -597,9 +813,11 @@ func SubmitJob(
 		LogAccessHash:     logAccessHash,
 		Caption:           caption,
 		ProtectContent:    protectContent,
+		LogOnly:           logOnly,
 		ChannelID:         channelID,
 		ChannelAccessHash: channelAccessHash,
 		DownloadBotToken:  downloadBotToken,
+		Bulk:              bulk,
 	}
 	Default.Enqueue(job)
 	return jobID, nil
@@ -647,6 +865,10 @@ func WaitForDone(ctx context.Context, jobID string) (success bool, errMsg string
 // जुन्या HTTP Bot API मार्गावर fallback होतो.
 var MTProtoEdit func(botToken string, chatID int64, msgID int, text string) bool
 
+// MTProtoNotify — MTProto (gotgproto) connection चा वापर करून admin ला notification पाठवतो
+// Hugging Face / shared hosting कडून HTTP api.telegram.org block/timeout (context deadline exceeded) बायपास करण्यासाठी.
+var MTProtoNotify func(text string) bool
+
 // ── EditTgMessage ─────────────────────────────────────────────────────────────
 //
 // आधी parse_mode:"Markdown" कायम वापरत होतो आणि response कधीच check करत
@@ -662,16 +884,89 @@ var MTProtoEdit func(botToken string, chatID int64, msgID int, text string) bool
 // (1) Markdown सकट HTTP Bot API प्रयत्न करतो, (2) Telegram ने parse-error
 // दिला तर plain text (parse_mode शिवाय) retry करतो — म्हणजे formatting शक्य
 // असेल तिथे मिळतं, नसेल तिथे edit तरी होतोच. (3) failure असेल तर log होतो.
-func EditTgMessage(botToken string, chatID int64, msgID int, text string) {
-	if MTProtoEdit != nil && MTProtoEdit(botToken, chatID, msgID, text) {
+// ── Edit Flood-Wait Guard ──────────────────────────────────────────────────
+// Telegram चा FLOOD_WAIT (rpc 420) एका बॉट session ला ठराविक काळासाठी (कधी
+// कधी तासांसाठी) messages.editMessage करण्यापासून पूर्ण रोखतो. आधी असं होत
+// होतं की FLOOD_WAIT आल्यावरही EditTgMessage दर काही सेकंदांनी परत MTProto +
+// नंतर HTTP दोन्ही मार्गांनी प्रयत्न करत राहायचं — दोन्ही निष्फळ, आणि HTTP
+// कडे तर प्रत्येक वेळी नवीन TLS connection उघडायचा प्रयत्न (costly + slow).
+// इथे botToken नुसार "किती वेळ थांबायचं" साठवतो — run.go मधला MTProtoEdit
+// wiring FLOOD_WAIT सेकंद parse करून SetEditFloodWait ला कळवतो. जोपर्यंत ती
+// वेळ संपत नाही, तोपर्यंत EditTgMessage दोन्ही मार्ग (MTProto आणि HTTP)
+// पूर्णपणे skip करतो — नुसता false return करतो, network ला हातही लावत नाही.
+var editFloodWait = struct {
+	mu    sync.Mutex
+	until map[string]time.Time
+}{until: make(map[string]time.Time)}
+
+// SetEditFloodWait — botToken साठी FLOOD_WAIT expiry नोंदवतो. run.go च्या
+// MTProtoEdit closure मधून, FLOOD_WAIT error parse केल्यावर call होतो.
+func SetEditFloodWait(botToken string, until time.Time) {
+	if botToken == "" {
 		return
 	}
-	if editTgMessageAttempt(botToken, chatID, msgID, text, true) {
+	editFloodWait.mu.Lock()
+	defer editFloodWait.mu.Unlock()
+	// जुनी expiry नवीनपेक्षा नंतरची असेल तर तीच ठेवा (overwrite करून वेळ
+	// कमी करू नये — अनेक goroutines एकाच वेळी वेगवेगळे FLOOD_WAIT parse
+	// करत असतील तर सगळ्यात मोठा wait जिंकतो).
+	if existing, ok := editFloodWait.until[botToken]; ok && existing.After(until) {
 		return
+	}
+	editFloodWait.until[botToken] = until
+}
+
+// inEditFloodWait — सध्या या botToken साठी FLOOD_WAIT active आहे का.
+func inEditFloodWait(botToken string) (time.Time, bool) {
+	editFloodWait.mu.Lock()
+	defer editFloodWait.mu.Unlock()
+	until, ok := editFloodWait.until[botToken]
+	if !ok {
+		return time.Time{}, false
+	}
+	if time.Now().After(until) {
+		delete(editFloodWait.until, botToken) // expired — साफ करा
+		return time.Time{}, false
+	}
+	return until, true
+}
+
+// EditTgMessage — return value सांगतो edit प्रत्यक्षात यशस्वी झाला का (कुठल्याही
+// मार्गाने — MTProto, Markdown HTTP, किंवा plain-text HTTP fallback). Caller
+// (उदा. progress-update handler) हे FinishProgress(jobID, success) ला पास
+// करून editFailStreak/backoff चालवतो — त्यामुळे सलग failures (FLOOD_WAIT सकट)
+// आपोआप कमी वारंवार retry होतात, प्रत्येक tick ला निष्फळ प्रयत्न होत नाही.
+func EditTgMessage(botToken string, chatID int64, msgID int, text string) bool {
+	if until, waiting := inEditFloodWait(botToken); waiting {
+		log.Printf("[wmqueue] EditTgMessage: skipping (FLOOD_WAIT active until %s, botToken=...%s)",
+			until.Format(time.RFC3339), lastN(botToken, 6))
+		return false
+	}
+	if MTProtoEdit != nil && MTProtoEdit(botToken, chatID, msgID, text) {
+		return true
+	}
+	// [FIX] MTProtoEdit ने आत्ताच FLOOD_WAIT नोंदवला असेल (वरचा if fail झाला
+	// त्यामुळे इथे पोहोचलो) तर लगेच परत तपासा — नाहीतर हाच call पुढे HTTP
+	// (Markdown + plain, प्रत्येकी ~15 sec TLS timeout) दोन्ही निष्फळ प्रयत्न
+	// करत बसतो, जरी आपल्याला आत्ताच कळलं की पुढचे 15+ तास काहीही उपयोग नाही.
+	if _, waiting := inEditFloodWait(botToken); waiting {
+		return false
+	}
+	if editTgMessageAttempt(botToken, chatID, msgID, text, true) {
+		return true
 	}
 	// Markdown parse fail झाला असेल — plain text ने retry (हमखास यशस्वी होईल,
 	// फक्त *bold*/`code` literal दिसेल, edit तरी होईल).
-	editTgMessageAttempt(botToken, chatID, msgID, text, false)
+	return editTgMessageAttempt(botToken, chatID, msgID, text, false)
+}
+
+// lastN — log मध्ये पूर्ण bot token न दाखवता फक्त शेवटची काही अक्षरं (debugging
+// साठी पुरेसं, token leak होण्याचा धोका नाही).
+func lastN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[len(s)-n:]
 }
 
 func editTgMessageAttempt(botToken string, chatID int64, msgID int, text string, useMarkdown bool) bool {
@@ -689,7 +984,7 @@ func editTgMessageAttempt(botToken string, chatID int64, msgID int, text string,
 		log.Printf("[wmqueue] EditTgMessage: marshal error: %v", err)
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -697,7 +992,7 @@ func editTgMessageAttempt(botToken string, chatID int64, msgID int, text string,
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := wmHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] EditTgMessage: request failed (chatID=%d, msgID=%d): %v", chatID, msgID, err)
@@ -747,12 +1042,14 @@ func StartCleanupLoop() {
 // online/offline notifications साठी. Message 30 sec नंतर auto-delete होतो.
 
 func notifyAllowedUsers(text string) {
+	if MTProtoNotify != nil && MTProtoNotify(text) {
+		return
+	}
 	botToken := config.ValueOf.BotToken
 	for _, uid := range config.ValueOf.AllowedUsers {
 		go func(chatID int64) {
 			msgID := sendTgMessage(botToken, chatID, text)
 			if msgID == 0 {
-				log.Printf("[wmqueue] notifyAllowedUsers: sendTgMessage failed chatID=%d", chatID)
 				return
 			}
 			time.Sleep(30 * time.Second)
@@ -762,6 +1059,10 @@ func notifyAllowedUsers(text string) {
 }
 
 func sendTgMessage(botToken string, chatID int64, text string) int64 {
+	if botToken == "" || chatID == 0 || strings.TrimSpace(text) == "" {
+		log.Printf("[wmqueue] sendTgMessage: empty botToken, chatID, or text provided (skip)")
+		return 0
+	}
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	payload, err := json.Marshal(map[string]interface{}{
 		"chat_id":    chatID,
@@ -772,38 +1073,49 @@ func sendTgMessage(botToken string, chatID int64, text string) int64 {
 		log.Printf("[wmqueue] sendTgMessage: marshal error: %v", err)
 		return 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
-	if err != nil {
-		log.Printf("[wmqueue] sendTgMessage: request build error: %v", err)
-		return 0
+
+	for attempt := 1; attempt <= 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+		if err != nil {
+			cancel()
+			log.Printf("[wmqueue] sendTgMessage: request build error: %v", err)
+			return 0
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := wmHTTPClient.Do(req)
+		if err != nil {
+			cancel()
+			if attempt < 3 {
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+				continue
+			}
+			log.Printf("[wmqueue] sendTgMessage: http error (after 3 attempts): %v", err)
+			return 0
+		}
+		
+		var result struct {
+			OK          bool   `json:"ok"`
+			Description string `json:"description"`
+			Result      struct {
+				MessageID int64 `json:"message_id"`
+			} `json:"result"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		cancel()
+
+		if err != nil {
+			log.Printf("[wmqueue] sendTgMessage: decode error: %v", err)
+			return 0
+		}
+		if !result.OK {
+			log.Printf("[wmqueue] sendTgMessage: API error chatID=%d desc=%s — retrying without markdown", chatID, result.Description)
+			return sendTgMessagePlain(botToken, chatID, text)
+		}
+		return result.Result.MessageID
 	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[wmqueue] sendTgMessage: http error: %v", err)
-		return 0
-	}
-	defer resp.Body.Close()
-	var result struct {
-		OK          bool   `json:"ok"`
-		Description string `json:"description"`
-		Result      struct {
-			MessageID int64 `json:"message_id"`
-		} `json:"result"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		log.Printf("[wmqueue] sendTgMessage: decode error: %v", err)
-		return 0
-	}
-	if !result.OK {
-		// Markdown parse error किंवा इतर Telegram API error असल्यास plain text retry करतो
-		log.Printf("[wmqueue] sendTgMessage: API error chatID=%d desc=%s — retrying without markdown", chatID, result.Description)
-		return sendTgMessagePlain(botToken, chatID, text)
-	}
-	return result.Result.MessageID
+	return 0
 }
 
 // sendTgMessagePlain — Markdown parse fail झाल्यास plain text ने retry (escape issue मुळे
@@ -817,14 +1129,14 @@ func sendTgMessagePlain(botToken string, chatID int64, text string) int64 {
 	if err != nil {
 		return 0
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
 		return 0
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := wmHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] sendTgMessagePlain: http error: %v", err)
@@ -855,7 +1167,7 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 		log.Printf("[wmqueue] deleteTgMessage: marshal error: %v", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
 	if err != nil {
@@ -863,7 +1175,7 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := wmHTTPClient
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[wmqueue] deleteTgMessage: http error: %v", err)
@@ -895,8 +1207,9 @@ func deleteTgMessage(botToken string, chatID int64, msgID int64) {
 // state वर काम करणारा independent goroutine आहे.
 
 func StartColabWatcher() {
+	loadUnfinishedJobsFromDB()
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
+		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		previouslyOnline := make(map[string]bool)
 		for range ticker.C {
@@ -905,35 +1218,19 @@ func StartColabWatcher() {
 			// ── नवीन online झालेले / पहिल्यांदा दिसलेले workers ──────────────
 			for id := range nowOnline {
 				if !previouslyOnline[id] {
-					// नवीन worker च्या स्वतःच्या (नवीन) WorkerID शी जुने
-					// processing jobs कधीच match होणार नाहीत (notebook
-					// restart वर uuid बदलतो) — त्यामुळे सध्या कुठल्याही
-					// online worker ला assign नसलेले सगळे "processing"
-					// jobs orphaned समजून requeue करतो.
 					affected := Default.RequeueOrphanedProcessing(nowOnline)
 					for _, job := range affected {
 						if job.ProgressMsgID > 0 {
 							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID,
-								fmt.Sprintf("🔄 *Colab worker online झालं*\n📄 `%s`\n♻️ Job पुन्हा सुरुवातीपासून सुरू होतोय...", job.FileName))
+								fmt.Sprintf("🔄 *Colab worker online झालं*\n📄 `%s`\n♻️ Job पुन्हा सुरू होतोय...", job.FileName))
 						}
-					}
-					if len(affected) > 0 {
-						notifyAllowedUsers(fmt.Sprintf("✅ *Colab worker online झालं* (`%s`)\n♻️ %d job(s) resume होत आहेत.", shortID(id), len(affected)))
-					} else {
-						notifyAllowedUsers(fmt.Sprintf("✅ *Colab worker online झालं* (`%s`)", shortID(id)))
 					}
 				}
 			}
 
 			// ── आता offline झालेले workers ───────────────────────────────────
-			// ── आता offline झालेले workers ───────────────────────────────────
 			for id := range previouslyOnline {
 				if !nowOnline[id] {
-					// [FIX] Job लगेच pending मध्ये requeue करा —
-					// दुसरा online worker असेल तर तो लगेच pick करेल.
-					// Bug: आधी फक्त message edit होत होतं, job StatusProcessing मध्येच
-					// stuck राहायचं. नवीन worker "नवीन नाही" म्हणून RequeueOrphaned
-					// trigger होत नव्हतं — आता offline च्या वेळीच requeue करतो.
 					requeuedJobs := Default.RequeueStaleProcessingForWorker(id)
 					for _, job := range requeuedJobs {
 						if job.ProgressMsgID > 0 {
@@ -947,8 +1244,6 @@ func StartColabWatcher() {
 							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID, statusMsg)
 						}
 					}
-					notifyAllowedUsers(fmt.Sprintf("⚠️ *Colab worker offline झालं* (`%s`)\nProcessing jobs pending मध्ये टाकले — available worker लगेच pick करेल.", shortID(id)))
-					forgetWorker(id)
 				}
 			}
 
@@ -963,4 +1258,14 @@ func shortID(id string) string {
 		return id[:8]
 	}
 	return id
+}
+
+var wmHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 30 * time.Second,
+	},
+	Timeout: 35 * time.Second,
 }

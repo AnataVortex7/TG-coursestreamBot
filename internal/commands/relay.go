@@ -46,8 +46,9 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.ContinueGroups
 	}
 
-	// Commands (/start, /register वगैरे) — relay skip, command handlers (group 0) ला जाऊ देतो
-	if strings.HasPrefix(msg.Text, "/") {
+	// Commands (/start, /register वगैरे) व Menu Buttons — relay skip, command handlers ला जाऊ देतो
+	txt := strings.TrimSpace(msg.Text)
+	if strings.HasPrefix(txt, "/") || isMenuButtonText(txt) {
 		return dispatcher.ContinueGroups
 	}
 
@@ -87,6 +88,20 @@ func handleRelay(ctx *ext.Context, u *ext.Update) error {
 
 	// ── Allowed user → normal bot flow ──────────────────────────────────────
 	if isAdmin || utils.Contains(config.ValueOf.AllowedUsers, senderID) {
+		return dispatcher.ContinueGroups
+	}
+
+	// [FIX] userbotDL किंवा इतर कोणताही prompt pending असेल तर relay करायचा नाही!
+	if p := getPending(senderID); p != nil {
+		return dispatcher.ContinueGroups
+	}
+
+	if st := getGiftPending(senderID); st != nil {
+		return dispatcher.ContinueGroups
+	}
+
+	// [FIX] userbot login flow सुरू असेल तर relay करायचा नाही!
+	if ls := getUserbotLogin(senderID); ls != nil {
 		return dispatcher.ContinueGroups
 	}
 
@@ -197,4 +212,8 @@ func sendReplyToUser(ctx *ext.Context, u *ext.Update, userID int64, msg *tg.Mess
 			RandomID: rand.Int63(),
 		})
 	}
+}
+
+func isMenuButtonText(txt string) bool {
+	return txt == "📚 Courses" || txt == "⭐ Userbot Settings" || txt == "⭐ Premium Menu" || txt == "⭐ Premium" || txt == "💻 CMD" || txt == "💻 Commands" || txt == "⚡ Pre-download" || txt == "📥 Userbot Download" || txt == "📊 Bot Status" || txt == "❓ My ID" || txt == "ℹ️ Help"
 }

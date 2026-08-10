@@ -1,0 +1,2 @@
+fsb.exe filter=lfs diff=lfs merge=lfs -text
+photo_1785729924.jpg filter=lfs diff=lfs merge=lfs -text

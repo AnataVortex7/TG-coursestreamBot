@@ -7,12 +7,15 @@ package db
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
+
+
 
 const userbotSessionKey = "main"
 
@@ -81,5 +84,54 @@ func DeleteUserBotSession() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, err := colUserbot().DeleteOne(ctx, bson.M{"key": userbotSessionKey})
+	return err
+}
+
+
+
+func userbotKey(ownerID int64) string {
+	if ownerID == 0 {
+		return userbotSessionKey
+	}
+	return "user_" + strconv.FormatInt(ownerID, 10)
+}
+
+func SaveUserBotSessionForUser(sessionStr, phone, firstName, lastName, username string, userID int64, ownerID int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	key := userbotKey(ownerID)
+	doc := bson.M{
+		"key":        key,
+		"session":    sessionStr,
+		"phone":      phone,
+		"first_name": firstName,
+		"last_name":  lastName,
+		"username":   username,
+		"user_id":    userID,
+		"saved_at":   time.Now(),
+	}
+	filter := bson.M{"key": key}
+	opts := options.Replace().SetUpsert(true)
+	_, err := colUserbot().ReplaceOne(ctx, filter, doc, opts)
+	return err
+}
+
+func GetUserBotSessionDocForUser(ownerID int64) (*UserBotSessionDoc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	key := userbotKey(ownerID)
+	var doc UserBotSessionDoc
+	err := colUserbot().FindOne(ctx, bson.M{"key": key}).Decode(&doc)
+	if err != nil {
+		return nil, nil
+	}
+	return &doc, nil
+}
+
+func DeleteUserBotSessionForUser(ownerID int64) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	key := userbotKey(ownerID)
+	_, err := colUserbot().DeleteOne(ctx, bson.M{"key": key})
 	return err
 }

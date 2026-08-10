@@ -47,14 +47,18 @@ import (
 // मध्येच fail/timeout झाला तर watermark टाळून, original video जसाच्या तसा
 // (unwatermarked) student ला पाठवायला सांगतो (skipWatermark=true).
 //
+// silent — true असेल तर (admin silent pre-download साठी) worker फक्त
+// LOG_CHANNEL ला video पाठवतो, student ला काहीच पाठवत नाही (studentChatID
+// फक्त progress-tracking साठी वापरला जातो, प्रत्यक्ष delivery नाही).
+//
 // Returns:
 //
 //	uploadedFile     — (यापुढे कायम nil — local upload path आता अस्तित्वात नाही)
-//	sentMessageID    — colab path असेल तर आधीच पाठवलेल्या message चा ID (48hr auto-delete साठी)
+//	sentMessageID    — colab path असेल तर आधीच पाठवलेल्या message चा ID (48hr auto-delete साठी). silent मोड मध्ये नेहमी 0.
 //	logChannelMsgID  — worker ने LOG_CHANNEL ला पाठवलेल्या master copy चा msg ID (0 = नाही मिळाला —
 //	                    DeliveredCache fast-path साठी caller ने वापरायचा, logChatID दिलेला नसेल तर नेहमी 0)
-//	viaColab         — true असेल तर worker ने आधीच थेट student ला पाठवलंय, caller ने परत पाठवायची गरज नाही
-//	skipWatermark    — true असेल तर caller ने plain (unwatermarked) copy-forward करायचा
+//	viaColab         — true असेल तर worker ने आधीच थेट student ला पाठवलंय (silent मोड मध्ये "स्वतःच काम पूर्ण केलं" असा अर्थ), caller ने परत पाठवायची गरज नाही
+//	skipWatermark    — true असेल तर caller ने plain (unwatermarked) copy-forward करायचा (silent मोड मध्ये लागू नाही — silent+worker-offline असेल तर पूर्ण delivery skip होते, काहीच पाठवलं जात नाही)
 func deliverVideoToUser(
 	botClient *gotgproto.Client,
 	channelID int64,
@@ -66,26 +70,47 @@ func deliverVideoToUser(
 	caption string,
 	logChatID int64, // 0 = LOG_CHANNEL backup नको (offline-download flow साठी, स्पॅम टाळायला)
 	logAccessHash int64,
+	silent bool, // [NEW] true = फक्त LOG_CHANNEL ला, student ला काहीच नाही
 	editProgress func(string),
 ) (uploadedFile tg.InputFileClass, sentMessageID int, logChannelMsgID int, viaColab bool, skipWatermark bool, err error) {
 
+	if silent && logChatID == 0 {
+		// Silent pre-download साठी LOG_CHANNEL compulsory आहे — तोच एकमेव
+		// destination आहे. नसेल तर काहीच करण्यासारखं नाही.
+		return nil, 0, 0, false, false, errors.New("silent pre-download साठी LOG_CHANNEL configure असायलाच हवा")
+	}
+
 	if os.Getenv("KOYEB_URL") != "" && wmqueue.IsColabOnline() {
+		// [NEW] bulk — फक्त /predownload च्या silent pre-download batch साठीच
+		// true (silent==true तिथूनच येतो) — त्यामुळे फक्त त्याच jobs वर
+		// per-worker cap (wmqueue.MaxJobsPerWorker) लागू होतो. Normal/live
+		// lecture request (silent==false) कायम cap-free, fully parallel राहतो.
+		bulk := silent
 		msgID, logMsgID, colabErr := deliverViaColab(
 			botClient, channelID, messageID, fileName, watermarkText,
-			studentChatID, progressMsgID, caption, logChatID, logAccessHash, editProgress,
+			studentChatID, progressMsgID, caption, logChatID, logAccessHash, silent, bulk, editProgress,
 		)
 		if colabErr == nil {
 			return nil, msgID, logMsgID, true, false, nil
 		}
-		utils.Logger.Sugar().Warnw("watermark worker delivery failed — sending original (unwatermarked) copy", "err", colabErr)
-		editProgress("⚠️ Processing server सध्या busy आहे — original video पाठवत आहोत...")
-		return nil, 0, 0, false, true, nil
+		if silent {
+			// Silent मोडमध्ये worker fail झाला तर काहीच पाठवायचं नाही (student
+			// ला unwatermarked पाठवणं इथे चुकीचं ठरेल — तो अजून काही मागतच
+			// नाहीये). Caller ला स्पष्ट error कळवतो, तो फक्त log करून सोडून देईल.
+			return nil, 0, 0, false, false, colabErr
+		}
+		utils.Logger.Sugar().Errorw("watermark worker delivery failed", "err", colabErr)
+		return nil, 0, 0, false, false, fmt.Errorf("watermark worker delivery failed: %w", colabErr)
 	}
 
-	// कोणताही watermark worker/Colab online नाही — main server वर local FFmpeg
-	// आता कधीच चालत नाही, त्यामुळे थेट unwatermarked forward करतो.
-	editProgress("ℹ️ Watermark server सध्या offline आहे — original video पाठवत आहोत...")
-	return nil, 0, 0, false, true, nil
+	if silent {
+		// Worker offline असेल तर silent pre-download साठी काहीच करण्यासारखं
+		// नाही (student ला अनपेक्षित unwatermarked पाठवणं चुकीचं ठरेल).
+		return nil, 0, 0, false, false, errors.New("watermark worker offline आहे — silent pre-download आत्ता शक्य नाही")
+	}
+
+	// कोणताही watermark worker/Colab online नाही — unwatermarked copy पाठवणे आता पूर्णपणे बंद केले आहे.
+	return nil, 0, 0, false, false, errors.New("watermark server currently offline — please try again later")
 }
 
 // deliverViaColab — main server इथे कुठलाही file download/pipe करत नाही.
@@ -93,9 +118,9 @@ func deliverVideoToUser(
 // job म्हणून submit करतो. Worker स्वतःच्या Pyrogram session ने (त्याच
 // download-bot token ने) थेट त्या channel मधून file fetch करतो, FFmpeg ने
 // watermark burn करतो, आणि मुख्य BOT_TOKEN ने (upload साठी, job मध्ये वेगळा
-// पाठवलेला) थेट studentChatID ला पाठवतो. Main server ला processed file
-// कधीच परत येत नाही — फक्त success/fail, sent message ID, आणि (असल्यास)
-// log-channel master copy चा msg ID कळतो.
+// पाठवलेला) थेट studentChatID ला पाठवतो (silent असेल तर फक्त LOG_CHANNEL ला).
+// Main server ला processed file कधीच परत येत नाही — फक्त success/fail, sent
+// message ID, आणि (असल्यास) log-channel master copy चा msg ID कळतो.
 func deliverViaColab(
 	botClient *gotgproto.Client,
 	channelID int64,
@@ -107,6 +132,8 @@ func deliverViaColab(
 	caption string,
 	logChatID int64,
 	logAccessHash int64,
+	silent bool,
+	bulk bool, // [NEW] true = /predownload batch job — per-worker cap लागू होतो
 	editProgress func(string),
 ) (sentMessageID int, logChannelMsgID int, err error) {
 
@@ -158,21 +185,28 @@ func deliverViaColab(
 		uploadBotToken,
 		studentChatID, // adminChatID param — progress-edit इथेच होतो (student ची चॅट)
 		progressMsgID,
-		studentChatID, // sendToChatID — student ला थेट पाठवायचा
+		studentChatID, // sendToChatID — student ला थेट पाठवायचा (silent असेल तर worker वापरणारच नाही)
 		0,             // sendToAccessHash — private chat, worker च्या entity cache वर (admin flow सारखाच पॅटर्न)
 		0,             // sendToTopicID
 		logChatID,     // logChatID — caller ठरवतो (offline-download: 0/स्पॅम टाळायला, bot Watch: LOG_CHANNEL)
 		logAccessHash, // logAccessHash
 		caption,
 		messageID,
-		true, // protectContent — offline course student copy: forward/save block
+		!silent, // protectContent — silent pre-download मध्ये student ला पाठवतच नाही, त्यामुळे protect करायचं काही नाही
+		silent,  // logOnly — [NEW] silent pre-download चा गाभा
 		channelID,
 		channelAccessHash,
 		downloadBotToken,
+		bulk, // [NEW] silent pre-download (/predownload) असेल तरच true — फक्त तिथेच per-worker cap लागू होतो
 	)
 	if err != nil {
 		return 0, 0, fmt.Errorf("submit job failed: %w", err)
 	}
+
+	// [NEW] कुणी (उदा. /predownload) OnJobSubmitted hook set केला असेल तर
+	// त्याला कळवतो — यामुळे तो त्याच्या स्वतःच्या msgID→jobID मॅपिंग ठेवून,
+	// नंतर wmqueue.ProgressMessage(jobID) वापरून live stage/percent वाचू शकतो.
+	NotifyJobSubmitted(messageID, jobID)
 
 	waitCtx, waitCancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer waitCancel()

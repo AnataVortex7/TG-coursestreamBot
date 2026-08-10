@@ -37,6 +37,7 @@ var (
 	ColUserMessages     *mongo.Collection // admin → user in-app messages (email सोबत, read status sकट)
 	ColTGLoginTokens    *mongo.Collection // Telegram OTP-login deep-link tokens (TTL: 10 min)
 	ColDeliveredCache   *mongo.Collection // in-bot watch: per-user watermarked-copy cache (log channel msg ref)
+	ColWMJobs           *mongo.Collection // temporary active watermark jobs queue (deleted on completion)
 )
 
 // ─── Models ──────────────────────────────────────────────────────────────────
@@ -283,6 +284,7 @@ func Connect() {
 	ColUserMessages = Database.Collection("user_messages")          // ← admin → user in-app messages
 	ColTGLoginTokens = Database.Collection("tg_login_tokens")       // ← Telegram OTP-login deep-link tokens
 	ColDeliveredCache = Database.Collection("delivered_cache")      // ← in-bot watch: per-user watermarked-copy cache
+	ColWMJobs = Database.Collection("wm_jobs")              // ← temporary active watermark jobs queue
 
 	createIndexes()
 	log.Printf("[db] connected to MongoDB — database: %s", dbName)

@@ -61,6 +61,11 @@ func ActiveColabWorkersDB(threshold time.Duration) ([]string, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
 
+	// Clean up stale ghost worker records older than threshold
+	_, _ = colColabWorkerPolls().DeleteMany(ctx, bson.M{
+		"last_poll": bson.M{"$lte": time.Now().Add(-threshold)},
+	})
+
 	cursor, err := colColabWorkerPolls().Find(ctx, bson.M{
 		"last_poll": bson.M{"$gt": time.Now().Add(-threshold)},
 	})

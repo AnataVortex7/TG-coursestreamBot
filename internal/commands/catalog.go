@@ -13,7 +13,9 @@
 package commands
 
 import (
+	"context"
 	"fmt"
+	"hash/fnv"
 	"math/rand"
 	"os"
 	"strconv"
@@ -26,6 +28,7 @@ import (
 	"EverythingSuckz/fsb/internal/email"
 	"EverythingSuckz/fsb/internal/utils"
 
+	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/dispatcher/handlers/filters"
@@ -39,15 +42,75 @@ import (
 // Load — /courses command + wc: callback prefix
 // ═══════════════════════════════════════════════════════════════════════════
 
-// coursesButtonMarkup — /start च्या welcome messages वर लगेच "📚 Courses" बटण
-// दाखवण्यासाठी (start.go वापरतो). दाबल्यावर wc:root कडेच जातो — म्हणजे
-// /courses टाईप न करताही user ला लगेच course list दिसते.
+// mainReplyKeyboardForUser — युझरच्या रोलनुसार (Admin / Userbot Access / Normal Student)
+// चॅट बारमध्ये फक्त तेवढीच बटने दाखवतो जी त्याला वापराची परवानगी आहे.
+func mainReplyKeyboardForUser(chatID int64) tg.ReplyMarkupClass {
+	isAdmin := len(config.ValueOf.AllowedUsers) == 0 || utils.Contains(config.ValueOf.AllowedUsers, chatID)
+	hasUserbot := db.HasUserbotAccess(chatID)
+
+	if isAdmin {
+		return &tg.ReplyKeyboardMarkup{
+			Resize: true,
+			Rows: []tg.KeyboardButtonRow{
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButton{Text: "📚 Courses"},
+					&tg.KeyboardButton{Text: "⭐ Userbot Settings"},
+				}},
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButton{Text: "💻 CMD"},
+					&tg.KeyboardButton{Text: "⚡ Pre-download"},
+				}},
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButton{Text: "📥 Userbot Download"},
+					&tg.KeyboardButton{Text: "📊 Bot Status"},
+				}},
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButton{Text: "❓ My ID"},
+				}},
+			},
+		}
+	}
+
+	if hasUserbot {
+		return &tg.ReplyKeyboardMarkup{
+			Resize: true,
+			Rows: []tg.KeyboardButtonRow{
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButton{Text: "📚 Courses"},
+					&tg.KeyboardButton{Text: "⭐ Userbot Settings"},
+				}},
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButton{Text: "📥 Userbot Download"},
+					&tg.KeyboardButton{Text: "❓ My ID"},
+				}},
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButton{Text: "ℹ️ Help"},
+				}},
+			},
+		}
+	}
+
+	// Normal Student (No Userbot Access):
+	return &tg.ReplyKeyboardMarkup{
+		Resize: true,
+		Rows: []tg.KeyboardButtonRow{
+			{Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButton{Text: "📚 Courses"},
+				&tg.KeyboardButton{Text: "❓ My ID"},
+			}},
+			{Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButton{Text: "ℹ️ Help"},
+			}},
+		},
+	}
+}
+
+func mainReplyKeyboard() tg.ReplyMarkupClass {
+	return mainReplyKeyboardForUser(0)
+}
+
 func coursesButtonMarkup() tg.ReplyMarkupClass {
-	return &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
-		{Buttons: []tg.KeyboardButtonClass{
-			&tg.KeyboardButtonCallback{Text: "📚 Courses पहा", Data: []byte("wc:root")},
-		}},
-	}}
+	return mainReplyKeyboardForUser(0)
 }
 
 func (m *command) LoadCatalog(d dispatcher.Dispatcher) {
@@ -139,6 +202,40 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 
 	switch parts[0] {
 	case "noop":
+
+	case "premium_menu":
+		if !db.HasUserbotAccess(chatID) {
+			editCatalogMessage(ctx, u, fmt.Sprintf("⛔ तुम्हाला Userbot Features चा ॲक्सेस नाही.\n\nAdmin कडून तुमच्या Telegram ID (`%d`) ला ॲक्सेस मिळवा.", chatID), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+			return dispatcher.EndGroups
+		}
+		text, markup := renderPremiumMenuView(chatID)
+		editCatalogMessage(ctx, u, text, markup)
+
+	case "userbot_status":
+		if !db.HasUserbotAccess(chatID) {
+			editCatalogMessage(ctx, u, fmt.Sprintf("⛔ तुम्हाला Userbot Features चा ॲक्सेस नाही.\n\nAdmin कडून तुमच्या Telegram ID (`%d`) ला ॲक्सेस मिळवा.", chatID), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+			return dispatcher.EndGroups
+		}
+		text, markup := renderUserbotStatusDetailView(chatID)
+		editCatalogMessage(ctx, u, text, markup)
+
+	case "userbot_dl":
+		setPendingUserbotDLPrompt(ctx, u, chatID)
+
+	case "userbot_login":
+		cmdUserbotLoginStart(ctx, u)
+
+	case "userbot_sendchannel":
+		setPendingSendChannelPrompt(ctx, u, chatID)
+
+	case "userbot_watermark":
+		setPendingWatermarkPrompt(ctx, u, chatID)
+
+	case "userbot_logout":
+		_ = db.DeleteUserBotSessionForUser(chatID)
+		text, markup := renderPremiumMenuView(chatID)
+		editCatalogMessage(ctx, u, "🚪 Userbot Account Logout केला!\n\n"+text, markup)
+
 		// फक्त page-indicator बटण ("📄 2/5") — काहीच करायचं नाही, already answered वर.
 
 	case "root":
@@ -234,7 +331,35 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		if err1 != nil {
 			return dispatcher.EndGroups
 		}
-		handlePlayLecture(ctx, u, chatID, courseID, msgID)
+		_ = handlePlayLecture(ctx, u, chatID, courseID, msgID, false)
+
+	case "dlfolder":
+		if len(parts) < 3 {
+			return dispatcher.EndGroups
+		}
+		courseID, err1 := primitive.ObjectIDFromHex(parts[1])
+		if err1 != nil {
+			return dispatcher.EndGroups
+		}
+		folderID := primitive.NilObjectID
+		if parts[2] != "ungrouped" {
+			fid, err2 := primitive.ObjectIDFromHex(parts[2])
+			if err2 != nil {
+				return dispatcher.EndGroups
+			}
+			folderID = fid
+		}
+		handlePlayFolder(ctx, u, chatID, courseID, folderID)
+
+	case "dlcourse":
+		if len(parts) < 2 {
+			return dispatcher.EndGroups
+		}
+		courseID, err1 := primitive.ObjectIDFromHex(parts[1])
+		if err1 != nil {
+			return dispatcher.EndGroups
+		}
+		handlePlayCourse(ctx, u, chatID, courseID)
 	}
 	return dispatcher.EndGroups
 }
@@ -267,39 +392,122 @@ func extractNewMessageID(updates *tg.Updates) int {
 	return 0
 }
 
+// extractSentMessageID — [FIX] MessagesSendMessage च्या response मधून नवीन
+// पाठवलेल्या message चा ID काढतो — private chat (user ला direct) आणि
+// channel/group दोन्हीसाठी काम करतो.
+//
+// [BUG] आधी फक्त extractNewMessageID(toUpdates(resp)) वापरत होतो — पण
+// toUpdates() फक्त *tg.Updates टाईप कडे cast करतो. Private chat (positive
+// chatID, म्हणजे user ला थेट पाठवलेला message) मध्ये Telegram
+// messages.sendMessage चं उत्तर *tg.Updates ऐवजी *tg.UpdateShortSentMessage
+// असं वेगळंच (हलकं) टाईप देतो — त्यामुळे cast नेहमी fail व्हायचा, newMsgID
+// नेहमी 0 यायचा, आणि handlePlayCourse मधला folder-name pin कधीच trigger
+// व्हायचा नाही — तेही कुठलाही error न दाखवता (कारण "ID सापडला नाही" ही आपली
+// स्वतःची अंतर्गत skip-condition होती, error case नाही).
+func extractSentMessageID(v tg.UpdatesClass) int {
+	switch m := v.(type) {
+	case *tg.UpdateShortSentMessage:
+		return m.ID
+	case *tg.Updates:
+		return extractNewMessageID(m)
+	default:
+		return 0
+	}
+}
+
 func answerCatalogError(ctx *ext.Context, u *ext.Update, err error) {
+	if isMessageNotModifiedErr(err) {
+		return
+	}
 	editCatalogMessage(ctx, u, "❌ Error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
 		{Buttons: []tg.KeyboardButtonClass{&tg.KeyboardButtonCallback{Text: "⬅️ Courses", Data: []byte("wc:root")}}},
 	}})
 }
 
+// editCatalogMessage — catalog navigation साठी in-place message edit करतो.
+//
+// [FIX] आधी FLOOD_WAIT error सुद्धा "कुठलाही edit-fail" म्हणून treat व्हायचा —
+// लगेच fallback म्हणून नवीन message पाठवायचा. bulk delivery (handlePlayCourse
+// — "संपूर्ण course download") मध्ये हेच progress-message प्रत्येक lecture
+// नंतर edit होतं (सेकंदाला एकदा) — त्यामुळे पहिल्याच FLOOD_WAIT नंतर, actual
+// wait न करता, दर काही सेकंदांनी परत तोच edit + fallback-send दोन्ही होत
+// राहायचे. Telegram कडून प्रत्येक वेळी नवीन (पण कमी होत जाणारा) FLOOD_WAIT
+// यायचा — कारण खरा wait अजून संपलेलाच नव्हता, आणि दरम्यान आणखी नवीन spam
+// messages (fallback) पाठवले जात राहिल्याने flood आणखी वाढायचा.
+//
+// आता: FLOOD_WAIT आढळला तर सेकंद parse करून तेवढा (जास्तीत जास्त
+// floodEditWaitCap इतका, म्हणजे bulk loop मध्ये एका lecture साठी अनंत काळ
+// block होत नाही) प्रत्यक्ष थांबतो, मग एकदाच retry करतो. अजूनही FLOOD_WAIT
+// असेल तर fallback-spam न करता फक्त skip करतो (warn log सह) — पुढच्या
+// lectures कडे continue होतं, आणि flood आणखी वाढत नाही. FLOOD_WAIT नसलेला
+// इतर कुठलाही error असेल तरच जुनीच पद्धत (log + एकच fallback message).
+const floodEditWaitCap = 15 * time.Second
+
+
+var (
+	suppressEditMu    sync.Mutex
+	suppressEditUntil = make(map[int]time.Time)
+)
+
+func suppressMessageEdit(msgID int, waitSecs int) {
+	if msgID == 0 {
+		return
+	}
+	suppressEditMu.Lock()
+	defer suppressEditMu.Unlock()
+	suppressEditUntil[msgID] = time.Now().Add(time.Duration(waitSecs) * time.Second)
+}
+
+func isMessageEditSuppressed(msgID int) bool {
+	if msgID == 0 {
+		return false
+	}
+	suppressEditMu.Lock()
+	defer suppressEditMu.Unlock()
+	until, ok := suppressEditUntil[msgID]
+	if !ok {
+		return false
+	}
+	if time.Now().Before(until) {
+		return true
+	}
+	delete(suppressEditUntil, msgID)
+	return false
+}
+
 func editCatalogMessage(ctx *ext.Context, u *ext.Update, text string, markup tg.ReplyMarkupClass) {
 	cbq := u.CallbackQuery
 	if cbq == nil {
-		// Callback context नाही (उदा. registration पूर्ण झाल्यावर plain-text
-		// reply मधून थेट पुढच्या step कडे resume करताना) — edit करायला काही
-		// नाही, त्यामुळे नवीन message म्हणून पाठवतो.
 		_, _ = ctx.Reply(u, ext.ReplyTextString(text), &ext.ReplyOpts{Markup: markup})
 		return
 	}
 	chatID := u.EffectiveUser().GetID()
+	if isMessageEditSuppressed(cbq.MsgID) {
+		return
+	}
+
 	_, err := ctx.EditMessage(chatID, &tg.MessagesEditMessageRequest{
 		ID:          cbq.MsgID,
 		Message:     text,
 		ReplyMarkup: markup,
 	})
-	if err != nil {
-		// आधी हा error silently discard व्हायचा — म्हणजे edit fail झालं तरी
-		// console वर काहीच दिसायचं नाही आणि screen वरही काही बदलायचं नाही
-		// (button दाबल्यासारखं वाटायचं, पण पुढे काहीच व्हायचं नाही).
-		// आता: 1) नेमकं कारण log होतं, 2) edit-in-place जमलं नाही तरी
-		// खाली नवीन message म्हणून तेच content पाठवतो — user ला निदान
-		// काहीतरी दिसेल.
-		utils.Logger.Sugar().Errorw("catalog: EditMessage failed, sending fallback message",
-			"chat_id", chatID, "msg_id", cbq.MsgID, "err", err)
-		if _, sendErr := ctx.Reply(u, ext.ReplyTextString(text), &ext.ReplyOpts{Markup: markup}); sendErr != nil {
-			utils.Logger.Sugar().Errorw("catalog: fallback message send also failed", "chat_id", chatID, "err", sendErr)
-		}
+	if err == nil {
+		return
+	}
+	if isMessageNotModifiedErr(err) {
+		return
+	}
+	if waitSecs, isFlood := extractFloodWaitSeconds(err); isFlood {
+		suppressMessageEdit(cbq.MsgID, waitSecs)
+		utils.Logger.Sugar().Warnw("catalog: EditMessage FLOOD_WAIT detected — suppressing edits for this message",
+			"chat_id", chatID, "msg_id", cbq.MsgID, "wait_secs", waitSecs)
+		return
+	}
+
+	utils.Logger.Sugar().Errorw("catalog: EditMessage failed, sending fallback message",
+		"chat_id", chatID, "msg_id", cbq.MsgID, "err", err)
+	if _, sendErr := ctx.Reply(u, ext.ReplyTextString(text), &ext.ReplyOpts{Markup: markup}); sendErr != nil {
+		utils.Logger.Sugar().Errorw("catalog: fallback message send also failed", "chat_id", chatID, "err", sendErr)
 	}
 }
 
@@ -381,6 +589,13 @@ func renderCourseDetailView(chatID int64, courseID primitive.ObjectID) (string, 
 		rows = append(rows, tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "ℹ️ अजून content upload झालेला नाही", Data: []byte("wc:root")},
 		}})
+	} else {
+		// [NEW] संपूर्ण course एका टॅपमध्ये डाउनलोड — folders असो वा नसो,
+		// आतले सगळे files (video/PDF/image) मिळतात. handlePlayCourse हेच
+		// फोल्डर-नावासकट पाठवतो.
+		rows = append(rows, tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: fmt.Sprintf("📥 पूर्ण Course Download करा (%d)", len(files)), Data: []byte("wc:dlcourse:" + courseID.Hex())},
+		}})
 	}
 	rows = append(rows, backOnlyRow("wc:root")...)
 	return fmt.Sprintf("✅ *%s*\n\n📂 Folder निवडा:", course.Title), &tg.ReplyInlineMarkup{Rows: rows}, nil
@@ -401,7 +616,7 @@ func backOnlyRow(data string) []tg.KeyboardButtonRow {
 // प्रयत्न केला की reply-markup खूप मोठं होतं आणि Telegram edit/send
 // तिथेच silently fail व्हायचं (folder "उघडायचंच नाही" असं दिसायचं) —
 // pagination नी हे कायमचं टाळलं जातं, folder मध्ये कितीही lectures असोत.
-const lecturesPerPage = 12
+const lecturesPerPage = 5
 
 func renderFolderContentsView(chatID int64, courseID, folderID primitive.ObjectID, page int) (string, tg.ReplyMarkupClass, error) {
 	dbUser, _ := db.GetUserByTelegramID(chatID)
@@ -498,6 +713,14 @@ func renderFolderContentsView(chatID int64, courseID, folderID primitive.ObjectI
 	if len(rows) == 0 {
 		rows = append(rows, tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "ℹ️ या folder मध्ये काही नाही", Data: []byte("wc:course:" + courseID.Hex())},
+		}})
+	} else {
+		// [NEW] संपूर्ण folder एका टॅपमध्ये डाउनलोड करायचं बटण — प्रत्येक lecture
+		// साठी हाच fast-path/cache/watermark logic वापरतो (handlePlayLecture),
+		// त्यामुळे आधीच पाठवलेले (✅) परत log-channel वरून लगेच येतात, नवीन
+		// तेच नव्याने watermark होऊन जातात.
+		rows = append(rows, tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: fmt.Sprintf("📥 संपूर्ण Folder Download करा (%d)", len(matched)), Data: []byte(fmt.Sprintf("wc:dlfolder:%s:%s", courseID.Hex(), folderRef))},
 		}})
 	}
 
@@ -870,61 +1093,174 @@ func alertAdminsUnwatermarkedDelivery(ctx *ext.Context, dbUser *db.User, course 
 	}
 }
 
-func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID primitive.ObjectID, messageID int) {
+func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID primitive.ObjectID, messageID int, isBulk bool) error {
 	busyKey := fmt.Sprintf("%d:%d", chatID, messageID)
 	if !lockPlay(busyKey) {
-		if u.CallbackQuery != nil {
+		if u.CallbackQuery != nil && !isBulk {
 			_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{
 				QueryID: u.CallbackQuery.QueryID,
 				Message: "⏳ आधीच पाठवत आहोत, थोडं थांबा...",
 			})
 		}
-		return
+		return fmt.Errorf("आधीच पाठवत आहोत")
 	}
 	defer unlockPlay(busyKey)
 
-	if u.CallbackQuery != nil {
+	if u.CallbackQuery != nil && !isBulk {
 		_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{QueryID: u.CallbackQuery.QueryID})
 	}
 
 	dbUser, err := db.GetUserByTelegramID(chatID)
 	if err != nil || dbUser == nil {
-		editCatalogMessage(ctx, u, "❌ तुमचा Telegram account link केलेला नाही.\n\n`/register <mobile_or_email>` वापरा.",
-			&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
-		return
+		if !isBulk {
+			editCatalogMessage(ctx, u, "❌ तुमचा Telegram account link केलेला नाही.\n\n`/register <mobile_or_email>` वापरा.",
+				&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
+		}
+		return fmt.Errorf("account not linked")
 	}
 	if blocked, until, reason := db.IsUserBlocked(dbUser.ID); blocked {
-		editCatalogMessage(ctx, u, fmt.Sprintf("⛔ Account suspended.\n📅 Until: %s IST\n📝 Reason: %s",
-			until.In(istLoc()).Format("02 Jan 2006, 3:04 PM"), reason),
-			&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
-		return
+		if !isBulk {
+			editCatalogMessage(ctx, u, fmt.Sprintf("⛔ Account suspended.\n📅 Until: %s IST\n📝 Reason: %s",
+				until.In(istLoc()).Format("02 Jan 2006, 3:04 PM"), reason),
+				&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+		}
+		return fmt.Errorf("account suspended")
 	}
 	hasAccess, _ := db.HasAccess(dbUser.ID, courseID)
 	if !hasAccess {
-		editCatalogMessage(ctx, u, "⛔ या course चा access नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
-		return
+		if !isBulk {
+			editCatalogMessage(ctx, u, "⛔ या course चा access नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
+		}
+		return fmt.Errorf("no access")
 	}
 
 	course, err := db.GetCourseByID(courseID)
 	if err != nil || course == nil {
-		editCatalogMessage(ctx, u, "❌ Course सापडला नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
-		return
+		if !isBulk {
+			editCatalogMessage(ctx, u, "❌ Course सापडला नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+		}
+		return fmt.Errorf("course not found")
 	}
 
 	backRow := backOnlyRow("wc:course:" + courseID.Hex())
-	editCatalogMessage(ctx, u, "⏳ Lecture तयार करत आहोत...", &tg.ReplyInlineMarkup{Rows: backRow})
+	if !isBulk {
+		editCatalogMessage(ctx, u, "⏳ Lecture तयार करत आहोत...", &tg.ReplyInlineMarkup{Rows: backRow})
+	}
 
+	botClient := MainBotClient
+	if botClient == nil {
+		if !isBulk {
+			editCatalogMessage(ctx, u, "❌ Bot सध्या तयार नाही. थोड्या वेळाने प्रयत्न करा.", &tg.ReplyInlineMarkup{Rows: backRow})
+		}
+		return fmt.Errorf("bot not ready")
+	}
+
+	progressMsgID := 0
+	if u.CallbackQuery != nil && !isBulk {
+		progressMsgID = u.CallbackQuery.MsgID
+	}
+	editProgress := func(text string) { 
+		if !isBulk {
+			editCatalogMessage(ctx, u, text, &tg.ReplyInlineMarkup{Rows: backRow}) 
+		}
+	}
+
+	delivered, dErr := deliverLectureCore(ctx, botClient, dbUser, course, courseID, messageID, chatID, progressMsgID, false, editProgress)
+	if dErr != nil {
+		if !isBulk {
+			editCatalogMessage(ctx, u, "❌ "+dErr.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
+		}
+		return dErr
+	}
+	if delivered && !isBulk {
+		editCatalogMessage(ctx, u, "✅ लेक्चर खाली पाठवलं आहे 👇", &tg.ReplyInlineMarkup{Rows: backRow})
+	}
+	return nil
+}
+
+// deliverLectureCore — [NEW, refactored out of handlePlayLecture] एका lecture
+// (messageID) ची delivery करणारा मुख्य engine — cache-hit fast-path, video
+// watermark (targetUser च्या mobile/email सह), PDF/इतर फाईल्स, LOG_CHANNEL
+// backup, DeliveredCache save — सगळं इथे आहे. `u *ext.Update`/callback वर
+// अवलंबून नाही (फक्त `progressMsgID` + `editProgress` callback घेतो), त्यामुळे
+// callback-driven (handlePlayLecture) आणि command-driven (admin bulk
+// pre-download) दोन्हीकडून सारखंच वापरता येतं.
+//
+// targetChatID — video प्रत्यक्ष कोणाला पाठवायचं (विनंती करणारा user, किंवा
+// admin pre-download असेल तर target user).
+// dbUser — watermark text (mobile/email) आणि DeliveredCache key यासाठी —
+// नेहमी targetChatID शीच जोडलेला असायला हवा (admin bulk मध्ये target user
+// चाच dbUser पास करायचा, admin चा नाही).
+// progressMsgID — watermark worker च्या live progress-edit साठी (0 चालतं,
+// तेव्हा फक्त skip होतं).
+// silent — [NEW] true असेल तर (admin चा silent pre-download) video/file फक्त
+// LOG_CHANNEL मध्ये (cache साठी) जातं — targetChatID ला काहीच पाठवलं जात
+// नाही. आधीच cache असेल तर काहीच करावं लागत नाही (already-cached मानतो).
+//
+// Returns delivered=true आणि err=nil म्हणजे यशस्वी (नवीन असो किंवा cache-hit).
+// deterministicRandomID — Telegram च्या MessagesSendMedia/SendMessage चा
+// RandomID field हा duplicate-detection साठी असतो: same RandomID सोबत same
+// request परत पाठवली (उदा. network timeout नंतर retry, किंवा पूर्ण delivery
+// परत चालवली) तर Telegram नवीन message न बनवता आधीचीच (असल्यास) परत देतो.
+//
+// [FIX] आधी प्रत्येक send attempt साठी rand.Int63() (कायम नवीन, random) वापरत
+// होतो — त्यामुळे हे duplicate-protection कधीच काम करत नव्हतं: जर पहिला
+// LOG_CHANNEL upload सर्व्हरवर प्रत्यक्ष यशस्वी झाला पण response client कडे
+// पोहोचेपर्यंत network glitch/timeout आला (client ला error दिसला), तरी
+// DeliveredCache save होत नाही (कारण आपल्याला यशस्वी झाल्याचं कळलंच नाही) —
+// आणि पुढच्या वेळी (retry, किंवा /predownload परत चालवलं) तेच lecture परत नवीन
+// (वेगळा) RandomID घेऊन पाठवलं जायचं — परिणामी तेच PDF/photo LOG_CHANNEL मध्ये
+// डुप्लिकेट होत राहायचं, तरी वरचा counter मात्र "failed" च दाखवायचा.
+//
+// आता प्रत्येक (user, course, lecture) साठी हाच RandomID कायम सारखाच
+// (deterministic — hash वरून) असतो, त्यामुळे कितीही वेळा retry/re-run झालं तरी
+// Telegram स्वतःच duplicate ला रोखतो — एकच खरी copy तयार होते.
+func deterministicRandomID(parts ...string) int64 {
+	h := fnv.New64a()
+	for _, p := range parts {
+		_, _ = h.Write([]byte(p))
+		_, _ = h.Write([]byte{0})
+	}
+	v := h.Sum64()
+	v &= 0x7FFFFFFFFFFFFFFF // sign bit clear — Telegram ला positive/non-zero int64 लागतो
+	if v == 0 {
+		v = 1
+	}
+	return int64(v)
+}
+
+func deliverLectureCore(
+	ctx *ext.Context,
+	botClient *gotgproto.Client,
+	dbUser *db.User,
+	course *db.Course,
+	courseID primitive.ObjectID,
+	messageID int,
+	targetChatID int64,
+	progressMsgID int,
+	silent bool,
+	editProgress func(string),
+) (delivered bool, err error) {
 	// ── Cache hit — आधीच watermark लावलेली copy LOG_CHANNEL मध्ये आहे ─────
-	if cached, cErr := db.GetDeliveredCache(dbUser.ID, courseID, messageID); cErr == nil && cached != nil {
+	if cached, cErr := db.GetDeliveredCache(dbUser.ID, courseID, messageID); cErr == nil && cached != nil && cached.LogChannelMsgID != 0 {
+		if silent {
+			// आधीच cache मध्ये आहे — silent pre-download साठी इतकंच पुरेसं,
+			// targetChatID ला काहीही पाठवायची गरज नाही.
+			utils.Logger.Sugar().Infow("catalog: silent pre-download — already cached, skipping", "messageID", messageID)
+			return true, nil
+		}
 		utils.Logger.Sugar().Infow("catalog: DeliveredCache hit — trying fast-path forward",
-			"logChannelMsgID", cached.LogChannelMsgID, "chatID", chatID)
-		if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, cached.LogChannelMsgID, chatID); fErr == nil {
+			"logChannelMsgID", cached.LogChannelMsgID, "chatID", targetChatID)
+		if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, cached.LogChannelMsgID, targetChatID); fErr == nil {
 			if newMsgID := extractNewMessageID(fwdUpdates); newMsgID != 0 {
-				_ = db.RecordSentLectureMsg(dbUser.ID, courseID, chatID, newMsgID)
+				_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, newMsgID)
 			}
-			editCatalogMessage(ctx, u, "✅ लेक्चर खाली पाठवलं आहे 👇", &tg.ReplyInlineMarkup{Rows: backRow})
-			return
+			return true, nil
 		} else {
+			if waitSecs, isFlood := extractFloodWaitSeconds(fErr); isFlood {
+				utils.Logger.Sugar().Warnw("catalog: fast-path forward failed with FLOOD_WAIT — aborting delivery", "waitSecs", waitSecs)
+				return false, fErr
+			}
 			utils.Logger.Sugar().Warnw("catalog: fast-path forward failed — falling back to fresh delivery", "err", fErr)
 		}
 		// Cache forward fail झालं (log channel मधून message delete झाला असेल) —
@@ -936,38 +1272,27 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 			"userID", dbUser.ID.Hex(), "courseID", courseID.Hex(), "messageID", messageID)
 	}
 
-	botClient := MainBotClient
-	if botClient == nil {
-		editCatalogMessage(ctx, u, "❌ Bot सध्या तयार नाही. थोड्या वेळाने प्रयत्न करा.", &tg.ReplyInlineMarkup{Rows: backRow})
-		return
-	}
-
 	channelPeer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, course.ChannelID)
 	if err != nil {
-		editCatalogMessage(ctx, u, "❌ Channel access error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
-		return
+		return false, fmt.Errorf("Channel access error: %s", err.Error())
 	}
 	res, err := botClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 		Channel: channelPeer,
 		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: messageID}},
 	})
 	if err != nil {
-		editCatalogMessage(ctx, u, "❌ Message fetch error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
-		return
+		return false, fmt.Errorf("Message fetch error: %s", err.Error())
 	}
 	messages, ok := res.(*tg.MessagesChannelMessages)
 	if !ok || len(messages.Messages) == 0 {
-		editCatalogMessage(ctx, u, "❌ Lecture सापडली नाही.", &tg.ReplyInlineMarkup{Rows: backRow})
-		return
+		return false, fmt.Errorf("Lecture सापडली नाही.")
 	}
 	msg, ok := messages.Messages[0].(*tg.Message)
 	if !ok || msg.Media == nil {
-		editCatalogMessage(ctx, u, "❌ Media सापडला नाही.", &tg.ReplyInlineMarkup{Rows: backRow})
-		return
+		return false, fmt.Errorf("Media सापडला नाही.")
 	}
 
-	toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
-	editProgress := func(text string) { editCatalogMessage(ctx, u, text, &tg.ReplyInlineMarkup{Rows: backRow}) }
+	toPeer := ctx.PeerStorage.GetInputPeerById(targetChatID)
 
 	var inputMedia tg.InputMediaClass
 	isVideo := false
@@ -977,16 +1302,28 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	// Lecture cha exact naav — तेच जे folder list मध्ये button वर दिसलं होतं
 	// (actual file name — CachedFile.FileName), जेणेकरून user ला लगेच कळेल हा तोच video/file आहे.
 	lectureName := course.Title
+	// [FIX] cf.Caption असेल (म्हणजे admin ने त्या file साठी खरा caption सेव्ह
+	// केलाय) तर तोच — word-replace rules (applyReplaces) लावून — प्रत्यक्ष
+	// file सोबत पाठवला जातो. आधी हे कायम "🎬 "+lectureName असायचं, त्यामुळे
+	// caption मध्ये admin ने केलेला कुठलाही word-change कधीच student ला दिसत
+	// नव्हता. Listing/button वर मात्र फाइलचं नावच (lectureName) दाखवत राहतो —
+	// तो वेगळा behavior आहे, इथे बदलेला नाही.
+	var caption string
 	if cf, cfErr := db.GetCachedFile(messageID, course.ChannelID); cfErr == nil && cf != nil {
 		if cf.FileName != "" {
 			lectureName = cf.FileName
 		} else if cf.Title != "" {
 			lectureName = cf.Title
 		}
+		if cf.Caption != "" {
+			caption = applyReplaces(cf.Caption)
+		}
 	} else if msg.Message != "" {
 		lectureName = msg.Message
 	}
-	caption := "🎬 " + lectureName
+	if caption == "" {
+		caption = "🎬 " + lectureName
+	}
 	sentMessageID := 0
 	logChannelMsgID := 0 // viaColab path मध्ये worker कडून मिळालेला LOG_CHANNEL master msg ID (असल्यास)
 	// [FIX] Python worker "sent_message_id" हा field कधीच पाठवत नाही (फक्त
@@ -1001,8 +1338,7 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	case *tg.MessageMediaDocument:
 		doc, ok := m.Document.(*tg.Document)
 		if !ok {
-			editCatalogMessage(ctx, u, "❌ Document read error.", &tg.ReplyInlineMarkup{Rows: backRow})
-			return
+			return false, fmt.Errorf("Document read error.")
 		}
 		for _, attr := range doc.Attributes {
 			if _, ok := attr.(*tg.DocumentAttributeVideo); ok {
@@ -1026,6 +1362,10 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 			if watermarkText == "" {
 				watermarkText = dbUser.Email
 			}
+			// [NEW] Naav pn watermark madhe — mobile/email cha varchya oli var.
+			if dbUser.FullName != "" {
+				watermarkText = dbUser.FullName + "\n" + watermarkText
+			}
 			var logChatID, logAccessHash int64
 			if config.ValueOf.LogChannelID != 0 {
 				if logPeer, lpErr := utils.GetLogChannelPeer(ctx, botClient.API(), botClient.PeerStorage); lpErr == nil && logPeer != nil {
@@ -1041,16 +1381,24 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 			}
 			uploaded, colabMsgID, colabLogMsgID, viaColab, skipWM, wmErr := deliverVideoToUser(
 				botClient, course.ChannelID, messageID, fileName, watermarkText,
-				chatID, u.CallbackQuery.MsgID, caption+"\n💧 Protected copy", logChatID, logAccessHash, editProgress,
+				targetChatID, progressMsgID, caption+"\n💧 Protected copy", logChatID, logAccessHash, silent, editProgress,
 			)
 			if wmErr != nil {
-				editCatalogMessage(ctx, u, "❌ Video process करताना error. पुन्हा प्रयत्न करा.", &tg.ReplyInlineMarkup{Rows: backRow})
-				return
+				// [FIX] आधी इथे खरं कारण (wmErr) पूर्णपणे टाकून दिलं जायचं
+				// आणि सगळ्यांना एकच generic message दिसायचं — त्यामुळे
+				// /predownload summary मध्ये ❌ Err असलेल्या सगळ्या lectures
+				// साठी "Video process करताना error. पुन्हा प्रयत्न करा."
+				// हेच एकच दिसायचं, खरं कारण (FLOOD_WAIT, timeout, worker
+				// crash, इ.) कधीच कळायचं नाही. आता तेच पुढे पाठवतो.
+				return false, fmt.Errorf("Video process करताना error: %s", wmErr.Error())
 			}
 			if skipWM {
+				if wmEnabled {
+					return false, fmt.Errorf("Watermark server is offline or busy — unwatermarked video send is blocked")
+				}
 				watermarked = false
 				inputMedia = &tg.InputMediaDocument{ID: &tg.InputDocument{ID: doc.ID, AccessHash: doc.AccessHash, FileReference: doc.FileReference}}
-				alertAdminsUnwatermarkedDelivery(ctx, dbUser, course, chatID)
+				alertAdminsUnwatermarkedDelivery(ctx, dbUser, course, targetChatID)
 			} else {
 				watermarked = true
 				if viaColab {
@@ -1067,13 +1415,11 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	case *tg.MessageMediaPhoto:
 		photo, ok := m.Photo.(*tg.Photo)
 		if !ok {
-			editCatalogMessage(ctx, u, "❌ Photo read error.", &tg.ReplyInlineMarkup{Rows: backRow})
-			return
+			return false, fmt.Errorf("Photo read error.")
 		}
 		inputMedia = &tg.InputMediaPhoto{ID: &tg.InputPhoto{ID: photo.ID, AccessHash: photo.AccessHash, FileReference: photo.FileReference}}
 	default:
-		editCatalogMessage(ctx, u, "❌ हा media type supported नाही.", &tg.ReplyInlineMarkup{Rows: backRow})
-		return
+		return false, fmt.Errorf("हा media type supported नाही.")
 	}
 
 	if watermarked {
@@ -1087,23 +1433,92 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	// backup कधीच व्हायचा नाही. आता उलट क्रम: आधी LOG_CHANNEL ला (unprotected
 	// master copy म्हणून) पाठवतो, मग तिथूनच student ला protected म्हणून
 	// forward करतो — हेच copy पुढच्या वेळीही fast-path साठी वापरता येतं.
+	// [FIX] PDF/photo/इतर non-video documents "reference-copy" पद्धतीने
+	// (download-reupload न करता, फक्त ID+AccessHash+FileReference वापरून)
+	// पाठवले जातात — हा FileReference काही सेकंदातच शिळा (stale) होऊ शकतो
+	// आणि Telegram तेव्हा "FILE_REFERENCE_EXPIRED" देतं. Video कधीच हा error
+	// दाखवत नाही कारण तो नेहमी fresh bytes download+reupload करतो (किंवा
+	// colab worker तेच करतो) — फक्त हा reference-copy मार्ग (PDF/photo/
+	// skip-watermark video) यावर अवलंबून आहे. admin_stream.go मध्ये आधीच
+	// याच class च्या error साठी जड fallback pipeline आहे (fastCopyMessage
+	// + download-fallback) — इथे तितकं जड लागत नाही, फक्त message परत ताजं
+	// fetch करून नवीन reference घेतला की एकदा retry पुरेसं आहे.
+	refreshInputMedia := func() (tg.InputMediaClass, error) {
+		res2, err2 := botClient.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+			Channel: channelPeer,
+			ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: messageID}},
+		})
+		if err2 != nil {
+			return nil, err2
+		}
+		msgs2, ok := res2.(*tg.MessagesChannelMessages)
+		if !ok || len(msgs2.Messages) == 0 {
+			return nil, fmt.Errorf("re-fetch: message सापडला नाही")
+		}
+		m2, ok := msgs2.Messages[0].(*tg.Message)
+		if !ok || m2.Media == nil {
+			return nil, fmt.Errorf("re-fetch: media सापडला नाही")
+		}
+		switch mm := m2.Media.(type) {
+		case *tg.MessageMediaDocument:
+			d2, ok := mm.Document.(*tg.Document)
+			if !ok {
+				return nil, fmt.Errorf("re-fetch: document read error")
+			}
+			return &tg.InputMediaDocument{ID: &tg.InputDocument{ID: d2.ID, AccessHash: d2.AccessHash, FileReference: d2.FileReference}}, nil
+		case *tg.MessageMediaPhoto:
+			p2, ok := mm.Photo.(*tg.Photo)
+			if !ok {
+				return nil, fmt.Errorf("re-fetch: photo read error")
+			}
+			return &tg.InputMediaPhoto{ID: &tg.InputPhoto{ID: p2.ID, AccessHash: p2.AccessHash, FileReference: p2.FileReference}}, nil
+		default:
+			return nil, fmt.Errorf("re-fetch: unsupported media type")
+		}
+	}
+	isFileRefError := func(e error) bool {
+		return e != nil && strings.Contains(strings.ToUpper(e.Error()), "FILE_REFERENCE")
+	}
+
 	if sentMessageID == 0 && inputMedia != nil {
 		editProgress("📨 पाठवत आहोत...")
 
 		if config.ValueOf.LogChannelID != 0 {
 			if logPeer, lpErr := utils.GetLogChannelPeer(ctx, botClient.API(), botClient.PeerStorage); lpErr == nil && logPeer != nil {
 				logPeerInput := &tg.InputPeerChannel{ChannelID: logPeer.ChannelID, AccessHash: logPeer.AccessHash}
+				// [FIX] कायम सारखाच RandomID (देखील retry मध्ये) — वरचं
+				// deterministicRandomID doc-comment बघा.
+				logRandomID := deterministicRandomID("log", dbUser.ID.Hex(), courseID.Hex(), strconv.Itoa(messageID))
 				logSent, logErr := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 					Peer:     logPeerInput,
 					Media:    inputMedia,
 					Message:  caption,
-					RandomID: rand.Int63(),
+					RandomID: logRandomID,
 				})
+				if logErr != nil && isFileRefError(logErr) {
+					utils.Logger.Sugar().Warnw("catalog: FILE_REFERENCE error on log-channel upload — fresh reference घेऊन retry करतोय", "err", logErr, "messageID", messageID)
+					if freshMedia, rfErr := refreshInputMedia(); rfErr == nil {
+						inputMedia = freshMedia
+						logSent, logErr = botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+							Peer: logPeerInput, Media: inputMedia, Message: caption, RandomID: logRandomID,
+						})
+					}
+				}
+				if logErr != nil {
+					if waitSecs, isFlood := extractFloodWaitSeconds(logErr); isFlood {
+						utils.Logger.Sugar().Warnw("catalog: log-channel upload failed with FLOOD_WAIT — aborting", "waitSecs", waitSecs)
+						return false, logErr
+					}
+				}
 				if logErr == nil {
 					logMsgID := extractNewMessageID(toUpdates(logSent))
 					if logMsgID != 0 {
 						logChannelMsgID = logMsgID
-						if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, logMsgID, chatID); fErr == nil {
+						if silent {
+							// Silent pre-download — LOG_CHANNEL मध्ये गेलं इतकंच
+							// पुरेसं आहे, targetChatID ला काहीही पाठवायचं नाही.
+							deliveredOK = true
+						} else if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, logMsgID, targetChatID); fErr == nil {
 							sentMessageID = extractNewMessageID(fwdUpdates)
 						} else {
 							utils.Logger.Sugar().Warnw("catalog: forward from log-channel to student failed", "err", fErr)
@@ -1117,20 +1532,37 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 
 		// LOG_CHANNEL configure नसेल, किंवा वरचा मार्ग काही कारणाने जमला
 		// नाही — तरी student ला video मिळायलाच हवं, थेट पाठवतो (backup/cache
-		// न होता, आधीसारखंच).
-		if sentMessageID == 0 {
+		// न होता, आधीसारखंच). Silent मोडमध्ये मात्र targetChatID ला कधीच थेट
+		// पाठवायचं नाही (तो user काही मागतच नाहीये) — LOG_CHANNEL मध्येच गेलं
+		// नसेल तर silent pre-download साठी हे lecture फक्त अयशस्वी मानायचं.
+		if sentMessageID == 0 && !silent {
+			directRandomID := deterministicRandomID("direct", dbUser.ID.Hex(), courseID.Hex(), strconv.Itoa(messageID))
 			sentMedia, sendErr := botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 				Peer:       toPeer,
 				Media:      inputMedia,
 				Message:    caption,
 				Noforwards: true,
-				RandomID:   rand.Int63(),
+				RandomID:   directRandomID,
 			})
+			if sendErr != nil && isFileRefError(sendErr) {
+				utils.Logger.Sugar().Warnw("catalog: FILE_REFERENCE error on direct send — fresh reference घेऊन retry करतोय", "err", sendErr, "messageID", messageID)
+				if freshMedia, rfErr := refreshInputMedia(); rfErr == nil {
+					inputMedia = freshMedia
+					sentMedia, sendErr = botClient.API().MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
+						Peer: toPeer, Media: inputMedia, Message: caption, Noforwards: true, RandomID: directRandomID,
+					})
+				}
+			}
 			if sendErr != nil {
-				editCatalogMessage(ctx, u, "❌ पाठवताना error: "+sendErr.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
-				return
+				if waitSecs, isFlood := extractFloodWaitSeconds(sendErr); isFlood {
+					utils.Logger.Sugar().Warnw("catalog: direct send failed with FLOOD_WAIT — aborting", "waitSecs", waitSecs)
+					return false, sendErr
+				}
+				return false, fmt.Errorf("पाठवताना error: %s", sendErr.Error())
 			}
 			sentMessageID = extractNewMessageID(toUpdates(sentMedia))
+		} else if sentMessageID == 0 && silent && !deliveredOK {
+			return false, fmt.Errorf("silent pre-download: LOG_CHANNEL upload अयशस्वी")
 		}
 	}
 
@@ -1154,9 +1586,517 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 		utils.Logger.Sugar().Warnw("catalog: sentMessageID is 0 and delivery not confirmed — DeliveredCache NOT saved (tick/cache won't work for this delivery)")
 	}
 
-	editCatalogMessage(ctx, u, "✅ लेक्चर खाली पाठवलं आहे 👇", &tg.ReplyInlineMarkup{Rows: backRow})
-
 	if sentMessageID != 0 {
-		_ = db.RecordSentLectureMsg(dbUser.ID, courseID, chatID, sentMessageID)
+		_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, sentMessageID)
 	}
+	return true, nil
+}
+
+// handlePlayFolder — [NEW] संपूर्ण folder एका टॅपमध्ये user ला पाठवतो. प्रत्येक
+// lecture साठी हुबेहूब तोच handlePlayLecture() call करतो (loop मध्ये) —
+// त्यामुळे प्रत्येक lecture साठी वेगळा code लिहावा लागत नाही, आणि सगळे फायदे
+// आपोआप मिळतात: cache-hit fast-path (आधीच पाठवलेलं लगेच log-channel वरून),
+// per-user watermark (mobile/email), DeliveredCache save (✅ mark), इ.
+// User ने delete केलं तरी परत request केल्यावर fast येतं (हेच handlePlayLecture
+// च्या cache-hit मार्गामुळे) — त्यामुळे इथेही तेच आपोआप लागू होतं.
+func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, folderID primitive.ObjectID) {
+	dbUser, err := db.GetUserByTelegramID(chatID)
+	if err != nil || dbUser == nil {
+		editCatalogMessage(ctx, u, "❌ तुमचा Telegram account link केलेला नाही.\n\n`/register <mobile_or_email>` वापरा.",
+			&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
+		return
+	}
+	if blocked, until, reason := db.IsUserBlocked(dbUser.ID); blocked {
+		editCatalogMessage(ctx, u, fmt.Sprintf("⛔ Account suspended.\n📅 Until: %s IST\n📝 Reason: %s",
+			until.In(istLoc()).Format("02 Jan 2006, 3:04 PM"), reason),
+			&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+		return
+	}
+	hasAccess, _ := db.HasAccess(dbUser.ID, courseID)
+	if !hasAccess {
+		editCatalogMessage(ctx, u, "⛔ या course चा access नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
+		return
+	}
+
+	folderRef := "ungrouped"
+	isUngrouped := folderID == primitive.NilObjectID
+	if !isUngrouped {
+		folderRef = folderID.Hex()
+	}
+	backRow := backOnlyRow("wc:folder:" + courseID.Hex() + ":" + folderRef + ":0")
+
+	// renderFolderContentsView सारखीच matching logic — folder मधले सगळे
+	// messageIDs (pagination शिवाय, पूर्ण यादी) काढतो.
+	folders, err := db.GetFoldersForCourse(courseID)
+	if err != nil {
+		editCatalogMessage(ctx, u, "❌ Error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+	files, err := db.FilesForCourse(courseID)
+	if err != nil {
+		editCatalogMessage(ctx, u, "❌ Error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+	var msgIDs []int
+	for _, f := range files {
+		fo := db.FolderForSortOrder(folders, f.SortOrder)
+		if isUngrouped {
+			if fo != nil {
+				continue
+			}
+		} else {
+			if fo == nil || fo.ID != folderID {
+				continue
+			}
+		}
+		msgIDs = append(msgIDs, f.MessageID)
+	}
+
+	if len(msgIDs) == 0 {
+		editCatalogMessage(ctx, u, "ℹ️ या folder मध्ये काही नाही.", &tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+
+	total := len(msgIDs)
+	editCatalogMessage(ctx, u, fmt.Sprintf("📥 Folder मधले %d lectures पाठवायला सुरुवात करत आहोत...\n(एकावेळी एक — थोडा वेळ लागू शकतो)", total),
+		&tg.ReplyInlineMarkup{Rows: backRow})
+
+	go func() {
+		sent, failed := 0, 0
+		for i, msgID := range msgIDs {
+			retry := true
+			for retry {
+				retry = false
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							utils.Logger.Sugar().Errorw("handlePlayFolder: panic in single-lecture delivery recovered",
+								"panic", r, "messageID", msgID)
+							failed++
+						}
+					}()
+					err := handlePlayLecture(ctx, u, chatID, courseID, msgID, true)
+					if err != nil {
+						if waitSecs, isFlood := extractFloodWaitSeconds(err); isFlood {
+							utils.Logger.Sugar().Warnw("handlePlayFolder: FLOOD_WAIT hit, sleeping and retrying", "waitSecs", waitSecs)
+							time.Sleep(time.Duration(waitSecs+2) * time.Second)
+							retry = true
+						} else {
+							failed++
+						}
+					} else {
+						sent++
+					}
+				}()
+			}
+			// Rate-limit टाळायला lectures मध्ये छोटा delay.
+			if i < len(msgIDs)-1 {
+				time.Sleep(3 * time.Second)
+			}
+		}
+
+		summaryText := fmt.Sprintf("✅ *Folder Download पूर्ण!*\n📦 एकूण: %d\n📤 पाठवले: %d", total, sent)
+		if failed > 0 {
+			summaryText += fmt.Sprintf("\n❌ अयशस्वी: %d (यांच्यासाठी वेगळं try कर)", failed)
+		}
+		sumCtx, sumCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer sumCancel()
+		toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
+		_, _ = ctx.Raw.MessagesSendMessage(sumCtx, &tg.MessagesSendMessageRequest{
+			Peer: toPeer, Message: summaryText, RandomID: rand.Int63(),
+			ReplyMarkup: &tg.ReplyInlineMarkup{Rows: backRow},
+		})
+	}()
+}
+
+// handlePlayCourse — [NEW] संपूर्ण course एका टॅपमध्ये user ला पाठवतो. प्रत्येक
+// folder साठी आधी त्याचं naav plain text message म्हणून पाठवतो, मग त्या
+// folder मधल्या सगळ्या files (video/PDF/image — कुठलाही media type) एका
+// मागून एक पाठवतो — तेच handlePlayLecture() वापरून (cache-hit fast-path,
+// watermark, DeliveredCache — सगळे फायदे handlePlayFolder सारखेच आपोआप
+// मिळतात). शेवटी Ungrouped files (कुठल्याही folder मध्ये नसलेले) असतील तर
+// तेही "📄 Ungrouped" नावाखाली त्याच पद्धतीने पाठवतो.
+func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID primitive.ObjectID) {
+	dbUser, err := db.GetUserByTelegramID(chatID)
+	if err != nil || dbUser == nil {
+		editCatalogMessage(ctx, u, "❌ तुमचा Telegram account link केलेला नाही.\n\n`/register <mobile_or_email>` वापरा.",
+			&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
+		return
+	}
+	if blocked, until, reason := db.IsUserBlocked(dbUser.ID); blocked {
+		editCatalogMessage(ctx, u, fmt.Sprintf("⛔ Account suspended.\n📅 Until: %s IST\n📝 Reason: %s",
+			until.In(istLoc()).Format("02 Jan 2006, 3:04 PM"), reason),
+			&tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+		return
+	}
+	hasAccess, _ := db.HasAccess(dbUser.ID, courseID)
+	if !hasAccess {
+		editCatalogMessage(ctx, u, "⛔ या course चा access नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:course:" + courseID.Hex())})
+		return
+	}
+
+	backRow := backOnlyRow("wc:course:" + courseID.Hex())
+
+	folders, err := db.GetFoldersForCourse(courseID)
+	if err != nil {
+		editCatalogMessage(ctx, u, "❌ Error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+	files, err := db.FilesForCourse(courseID)
+	if err != nil {
+		editCatalogMessage(ctx, u, "❌ Error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+
+	// Folder-order राखत, प्रत्येक folder-ID खाली त्याचे messageIDs गोळा करतो.
+	// Ungrouped साठी वेगळी bucket (शेवटी पाठवायला).
+	type folderGroup struct {
+		name   string
+		msgIDs []int
+	}
+	groups := make([]*folderGroup, 0, len(folders)+1)
+	groupByFolderID := make(map[primitive.ObjectID]*folderGroup, len(folders))
+	for _, fo := range folders {
+		g := &folderGroup{name: fo.Name}
+		groups = append(groups, g)
+		groupByFolderID[fo.ID] = g
+	}
+	var ungrouped folderGroup
+	ungrouped.name = "Ungrouped"
+
+	total := 0
+	for _, f := range files {
+		fo := db.FolderForSortOrder(folders, f.SortOrder)
+		if fo == nil {
+			ungrouped.msgIDs = append(ungrouped.msgIDs, f.MessageID)
+		} else if g, ok := groupByFolderID[fo.ID]; ok {
+			g.msgIDs = append(g.msgIDs, f.MessageID)
+		} else {
+			ungrouped.msgIDs = append(ungrouped.msgIDs, f.MessageID)
+		}
+		total++
+	}
+	if len(ungrouped.msgIDs) > 0 {
+		groups = append(groups, &ungrouped)
+	}
+
+	if total == 0 {
+		editCatalogMessage(ctx, u, "ℹ️ या course मध्ये अजून काही upload झालेलं नाही.", &tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+
+	// File lookup map बनवतो — MessageID वरून Title/FileName मिळवण्यासाठी
+	fileMap := make(map[int]db.CachedFile, len(files))
+	for _, f := range files {
+		fileMap[f.MessageID] = f
+	}
+
+	editCatalogMessage(ctx, u, fmt.Sprintf("📥 संपूर्ण course पाठवायला सुरुवात करत आहोत...\n📦 एकूण: %d फाईल्स, %d folders\n(एकावेळी एक — वेळ लागू शकतो)", total, len(groups)),
+		&tg.ReplyInlineMarkup{Rows: backRow})
+
+	go func() {
+		toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
+		sent, failed := 0, 0
+		first := true
+
+		type failedCourseItem struct {
+			folderName string
+			msgID      int
+			title      string
+			errText    string
+		}
+		var failedItems []failedCourseItem
+
+		for _, g := range groups {
+			if len(g.msgIDs) == 0 {
+				continue
+			}
+			if !first {
+				time.Sleep(2 * time.Second)
+			}
+			first = false
+			nameCtx, nameCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			nameResp, nameErr := ctx.Raw.MessagesSendMessage(nameCtx, &tg.MessagesSendMessageRequest{
+				Peer: toPeer, Message: "📁 " + g.name, RandomID: rand.Int63(),
+			})
+			nameCancel()
+
+			if nameErr == nil {
+				newMsgID := extractSentMessageID(nameResp)
+				if newMsgID != 0 {
+					pinCtx, pinCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					_, pinErr := ctx.Raw.MessagesUpdatePinnedMessage(pinCtx, &tg.MessagesUpdatePinnedMessageRequest{
+						Peer:   toPeer,
+						ID:     newMsgID,
+						Silent: true,
+					})
+					pinCancel()
+					if pinErr != nil {
+						if waitSecs, isFlood := extractFloodWaitSeconds(pinErr); isFlood {
+							utils.Logger.Sugar().Warnw("handlePlayCourse: pin FLOOD_WAIT — skipping pin for this folder",
+								"chat_id", chatID, "msg_id", newMsgID, "wait_secs", waitSecs)
+						} else {
+							utils.Logger.Sugar().Warnw("handlePlayCourse: pin folder-name message failed (permission?)",
+								"chat_id", chatID, "msg_id", newMsgID, "err", pinErr)
+						}
+					}
+				} else {
+					utils.Logger.Sugar().Warnw("handlePlayCourse: could not determine sent message ID — skipping pin",
+						"chat_id", chatID, "resp_type", fmt.Sprintf("%T", nameResp))
+				}
+			} else {
+				utils.Logger.Sugar().Warnw("handlePlayCourse: folder-name message send failed, skipping pin",
+					"chat_id", chatID, "err", nameErr)
+			}
+
+			for i, msgID := range g.msgIDs {
+				retry := true
+				for retry {
+					retry = false
+					func() {
+						defer func() {
+							if r := recover(); r != nil {
+								utils.Logger.Sugar().Errorw("handlePlayCourse: panic in single-lecture delivery recovered",
+									"panic", r, "messageID", msgID)
+								failed++
+								title := fmt.Sprintf("Msg #%d", msgID)
+								if cf, ok := fileMap[msgID]; ok {
+									if cf.Title != "" {
+										title = cf.Title
+									} else if cf.FileName != "" {
+										title = cf.FileName
+									} else if cf.Caption != "" {
+										title = cf.Caption
+									}
+								}
+								failedItems = append(failedItems, failedCourseItem{
+									folderName: g.name,
+									msgID:      msgID,
+									title:      title,
+									errText:    fmt.Sprintf("panic: %v", r),
+								})
+							}
+						}()
+						err := handlePlayLecture(ctx, u, chatID, courseID, msgID, true)
+						if err != nil {
+							if waitSecs, isFlood := extractFloodWaitSeconds(err); isFlood {
+								utils.Logger.Sugar().Warnw("handlePlayCourse: FLOOD_WAIT hit, sleeping and retrying", "waitSecs", waitSecs)
+								time.Sleep(time.Duration(waitSecs+2) * time.Second)
+								retry = true
+							} else {
+								failed++
+								title := fmt.Sprintf("Msg #%d", msgID)
+								if cf, ok := fileMap[msgID]; ok {
+									if cf.Title != "" {
+										title = cf.Title
+									} else if cf.FileName != "" {
+										title = cf.FileName
+									} else if cf.Caption != "" {
+										title = cf.Caption
+									}
+								}
+								failedItems = append(failedItems, failedCourseItem{
+									folderName: g.name,
+									msgID:      msgID,
+									title:      title,
+									errText:    err.Error(),
+								})
+							}
+						} else {
+							sent++
+						}
+					}()
+				}
+				if i < len(g.msgIDs)-1 {
+					time.Sleep(3 * time.Second)
+				}
+			}
+		}
+
+		summaryText := fmt.Sprintf("✅ *Course Download पूर्ण!*\n📦 एकूण: %d\n📤 पाठवले: %d", total, sent)
+		if failed > 0 {
+			summaryText += fmt.Sprintf("\n❌ अयशस्वी: %d", failed)
+		}
+
+		// ── Error summary formatting (Folder + Title/Caption + Full Error) ─────
+		if len(failedItems) > 0 {
+			var errLines []string
+			currFolder := ""
+			for _, item := range failedItems {
+				if item.folderName != currFolder {
+					currFolder = item.folderName
+					errLines = append(errLines, fmt.Sprintf("\n📁 *Folder:* `%s`", currFolder))
+				}
+				errLines = append(errLines, fmt.Sprintf("• 📌 Msg `%d` — `%s`\n  └ ❌ `%s`", item.msgID, item.title, item.errText))
+			}
+
+			fullDetails := strings.Join(errLines, "\n")
+			fullSummaryMsg := summaryText + "\n\n📋 *अयशस्वी फाईल्सचा रिपोर्ट:*" + fullDetails
+
+			// Telegram 4096 character limit Check
+			if len(fullSummaryMsg) <= 3800 {
+				summaryText = fullSummaryMsg
+			} else {
+				// 3800 पात्रांपेक्षा जास्त किंवा खूप मोठे एरर्स असतील तर multiple msgs मध्ये पाठवतो
+				summaryText += "\n\n📋 *अयशस्वी फाईल्सची माहिती खालीलप्रमाणे:*"
+				sumCtx, sumCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				_, _ = ctx.Raw.MessagesSendMessage(sumCtx, &tg.MessagesSendMessageRequest{
+					Peer: toPeer, Message: summaryText, RandomID: rand.Int63(),
+					ReplyMarkup: &tg.ReplyInlineMarkup{Rows: backRow},
+				})
+				sumCancel()
+
+				// Chunk करून पाठवतो
+				currChunk := ""
+				for _, line := range errLines {
+					if len(currChunk)+len(line)+2 > 3500 {
+						cCtx, cCancel := context.WithTimeout(context.Background(), 10*time.Second)
+						_, _ = ctx.Raw.MessagesSendMessage(cCtx, &tg.MessagesSendMessageRequest{
+							Peer: toPeer, Message: currChunk, RandomID: rand.Int63(),
+						})
+						cCancel()
+						time.Sleep(1 * time.Second)
+						currChunk = line
+					} else {
+						if currChunk != "" {
+							currChunk += "\n" + line
+						} else {
+							currChunk = line
+						}
+					}
+				}
+				if currChunk != "" {
+					cCtx, cCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					_, _ = ctx.Raw.MessagesSendMessage(cCtx, &tg.MessagesSendMessageRequest{
+						Peer: toPeer, Message: currChunk, RandomID: rand.Int63(),
+					})
+					cCancel()
+				}
+				return
+			}
+		}
+
+		sumCtx, sumCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer sumCancel()
+		_, _ = ctx.Raw.MessagesSendMessage(sumCtx, &tg.MessagesSendMessageRequest{
+			Peer: toPeer, Message: summaryText, RandomID: rand.Int63(),
+			ReplyMarkup: &tg.ReplyInlineMarkup{Rows: backRow},
+		})
+	}()
+}
+
+func isMessageNotModifiedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "message_not_modified") || strings.Contains(s, "not modified")
+}
+
+func renderPremiumMenuView(userID int64) (string, tg.ReplyMarkupClass) {
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
+
+	statusStr := "❌ Not Connected (Login Required)"
+	if doc, _ := db.GetUserBotSessionDocForUser(userID); doc != nil && doc.Session != "" && doc.Key == fmt.Sprintf("user_%d", userID) {
+		statusStr = fmt.Sprintf("✅ Connected (%s)", doc.Phone)
+	} else if isAdmin {
+		if docAdmin, _ := db.GetUserBotSessionDoc(); docAdmin != nil && docAdmin.Session != "" {
+			statusStr = fmt.Sprintf("⚙️ Admin System Userbot Connected (%s)", docAdmin.Phone)
+		}
+	}
+
+	wm, wmOk := getWatermarkTextForUser(userID)
+	if !wmOk || wm == "" {
+		wm = "(Not Set)"
+	}
+	scID, scOk := getSendChannelIDForUser(userID)
+	scStr := "(Direct Bot Chat)"
+	if scOk && scID != 0 {
+		scStr = fmt.Sprintf("`%d`", scID)
+	}
+
+	text := fmt.Sprintf(
+		"⭐ *Premium Features & Userbot Tools*\n\n"+
+			"👤 Userbot Status: %s\n"+
+			"💧 Custom Watermark: `%s`\n"+
+			"📢 Destination Channel: %s\n\n"+
+			"खालीलपैकी पर्याय निवडा:",
+		statusStr, wm, scStr,
+	)
+
+	rows := []tg.KeyboardButtonRow{
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "⬇️ Userbot Download", Data: []byte("wc:userbot_dl")},
+		}},
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "🔑 Connect Userbot Account", Data: []byte("wc:userbot_login")},
+			&tg.KeyboardButtonCallback{Text: "ℹ️ Status", Data: []byte("wc:userbot_status")},
+		}},
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "📢 Set Destination Channel", Data: []byte("wc:userbot_sendchannel")},
+		}},
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "💧 Set Watermark Text", Data: []byte("wc:userbot_watermark")},
+		}},
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "🚪 Logout Userbot", Data: []byte("wc:userbot_logout")},
+		}},
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "⬅️ Back to Main Menu", Data: []byte("wc:root")},
+		}},
+	}
+	return text, &tg.ReplyInlineMarkup{Rows: rows}
+}
+
+func renderUserbotStatusDetailView(userID int64) (string, tg.ReplyMarkupClass) {
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
+
+	statusStr := "❌ Not Connected (Login Required)"
+	phoneStr := "(None)"
+	nameStr := "(Not Logged In)"
+
+	doc, _ := db.GetUserBotSessionDocForUser(userID)
+	if doc != nil && doc.Session != "" {
+		statusStr = "✅ Connected & Active"
+		phoneStr = doc.Phone
+		nameStr = fmt.Sprintf("%s %s", doc.FirstName, doc.LastName)
+		if doc.Username != "" {
+			nameStr = fmt.Sprintf("%s (@%s)", nameStr, doc.Username)
+		}
+	} else if isAdmin {
+		if docAdmin, _ := db.GetUserBotSessionDoc(); docAdmin != nil && docAdmin.Session != "" {
+			statusStr = "⚙️ Admin System Userbot Active"
+			phoneStr = docAdmin.Phone
+			nameStr = fmt.Sprintf("%s %s", docAdmin.FirstName, docAdmin.LastName)
+		}
+	}
+
+	wm, wmOk := getWatermarkTextForUser(userID)
+	if !wmOk || wm == "" {
+		wm = "(Not Set)"
+	}
+	scID, scOk := getSendChannelIDForUser(userID)
+	scStr := "(Direct Bot Chat)"
+	if scOk && scID != 0 {
+		scStr = fmt.Sprintf("`%d`", scID)
+	}
+
+	text := fmt.Sprintf(
+		"ℹ️ *Userbot & Settings Detailed Status*\n\n"+
+			"👤 *Account Status:* %s\n"+
+			"📞 *Phone:* `%s`\n"+
+			"📛 *Account Name:* %s\n"+
+			"🆔 *Telegram User ID:* `%d`\n\n"+
+			"⚙️ *Your Settings:*\n"+
+			"💧 *Watermark Text:* `%s`\n"+
+			"📢 *Destination Channel:* %s\n"+
+			"⚡ *Concurrency:* Parallel Enabled",
+		statusStr, phoneStr, nameStr, userID, wm, scStr,
+	)
+
+	return text, &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "⬅️ Back to Userbot Menu", Data: []byte("wc:premium_menu")},
+		}},
+	}}
 }

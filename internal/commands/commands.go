@@ -25,20 +25,15 @@ var MainUserbotClient *gotgproto.Client
 // Nil असेल (userbot kadhi load nahi zala) tar caller ne skip karaycha.
 var SyncChannelAdmins func(channelID int64) error
 
-// ─── Userbot login/logout/status hooks (menu.go वापरतो) ────────────────────
-// bot package direct import करू शकत नाही (वरचंच import-cycle कारण), म्हणून
-// run.go हे सगळे bot.UserBot.* वर wire करतो.
 var (
-	UserbotStatus           func() (running bool, firstName, lastName, username, phone string, userID int64)
-	UserbotSendCode         func(phone string) (phoneHash string, err error)
-	UserbotVerifyCode       func(phone, phoneHash, code, password string) (sessionStr, firstName, lastName, username, phoneOut string, userID int64, err error)
-	UserbotStop             func()
-	UserbotStartFromSession func(sessionStr string)
+	UserbotStatus            func() (running bool, firstName, lastName, username, phone string, userID int64)
+	UserbotSendCode          func(phone string) (phoneHash string, err error)
+	UserbotVerifyCode        func(phone, phoneHash, code, password string) (sessionStr, firstName, lastName, username, phoneOut string, userID int64, err error)
+	UserbotStop              func()
+	UserbotStartFromSession  func(sessionStr string)
+	SendTelegramDMWithMarkup func(userID int64, text string, markup interface{}) error
 )
 
-// GetLiveUserbotClient — MainUserbotClient (वर) फक्त startup वेळचा snapshot आहे;
-// नंतर login/logout (button menu) झाल्यास तो stale राहतो. हा bridge नेहमी
-// bot.UserBot चा सध्याचा live client देतो (नसेल तर nil).
 var GetLiveUserbotClient func() *gotgproto.Client
 
 // GetDownloadBotForChannel — bot pool (MultiTokens) मधून round-robin एक worker
@@ -57,6 +52,20 @@ var GetLiveUserbotClient func() *gotgproto.Client
 // वर wire करतो. Pool रिकामा/wire न झालेला असेल तर ("", 0, err) देतो — caller
 // ने त्यावेळी मुख्य BOT_TOKEN (आणि त्याच client चा access_hash) वर fallback करायचा.
 var GetDownloadBotForChannel func(ctx context.Context, channelID int64) (botToken string, accessHash int64, err error)
+
+// GetNextUploadBotToken — bot pool (MultiTokens + main bot) मधून round-robin
+// एक bot token देतो, फक्त upload साठी (access_hash लागत नाही — worker Bot API
+// ने सरळ chat_id वर पाठवतो, MTProto channel access_hash सारखं काही लागत
+// नाही). सध्या फक्त silent pre-download (/predownload) साठी वापरतो — जेणेकरून
+// एकाच वेळी अनेक lectures upload होताना मुख्य BOT_TOKEN वरच FLOOD_WAIT येऊ
+// नये, तो load सगळ्या bots मध्ये विभागला जावा. Normal (student-facing)
+// delivery मध्ये हे वापरलं जात नाही — तिथे कायम मुख्य BOT_TOKEN नेच होतं.
+//
+// bot package direct import करू शकत नाही (import cycle — bot ← commands
+// आधीच import करतो), म्हणून run.go हे bot.GetNextWorker() वर wire करतो. Pool
+// रिकामा/wire न झालेला असेल तर ("", err) देतो — caller ने मुख्य BOT_TOKEN वर
+// fallback करायचा.
+var GetNextUploadBotToken func() (botToken string, err error)
 
 func Load(log *zap.Logger, dispatcher dispatcher.Dispatcher) {
 	log = log.Named("commands")

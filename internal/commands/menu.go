@@ -205,26 +205,35 @@ type category struct {
 }
 
 var categories = []category{
-	{"users", "👥 Users", []string{"listusers", "adduser", "deluser"}},
-	{"course", "📚 Course", []string{
-		"listcourses", "addcourse", "delcourse", "setdlimit",
-		"grantaccess", "revokeaccess", "addvideo", "syncchannel",
-		"regstatus", "regopen", "regclose",
-		"offlinewmstatus", "offlinewmon", "offlinewmoff",
-		"setpaymentmode",
+	{"course", "📚 Course Management", []string{
+		"listcourses", "addcourse", "delcourse", "grantaccess", "revokeaccess",
+		"predownload", "userbotdl", "stopuserbotdl", "setdlimit",
+		"addvideo", "syncchannel", "regstatus", "regopen", "regclose",
+		"offlinewmstatus", "offlinewmon", "offlinewmoff", "setpaymentmode",
 	}},
-	{"userbot", "🤖 Userbot", []string{"userbotstatus", "userbotlogin", "userbotlogout", "adminstream", "userbotdl", "stopuserbotdl"}},
-	{"sessions", "📱 Sessions/Devices", []string{"sessions", "kill", "killsession"}},
-	{"stream", "⚙️ Stream Settings", []string{
+	{"userbot", "🤖 Userbot & Downloads", []string{
+		"userbotstatus", "userbotlogin", "userbotlogout", "grantuserbot", "adminstream",
+		"userbotdl", "predownload", "copychannel", "stopuserbotdl",
+		"showwatermark", "setwatermark", "clearwatermark",
+		"showsendchannel", "setsendchannel", "clearsendchannel",
+		"showthumbnail", "setthumbnail", "clearthumbnail",
+		"listreplace", "setreplace", "delreplace", "clearreplace",
+	}},
+	{"users", "👥 Users Management", []string{
+		"listusers", "adduser", "deluser", "grantaccess", "revokeaccess",
+		"userinfo", "suspicious", "blockuser", "unblockuser", "settg", "unlinktg",
+	}},
+	{"sessions", "📱 Active Sessions", []string{"sessions", "kill", "killsession"}},
+	{"stream", "⚙️ Stream & Watermark Settings", []string{
 		"listreplace", "setreplace", "delreplace", "clearreplace",
 		"showsendchannel", "setsendchannel", "clearsendchannel",
 		"showthumbnail", "setthumbnail", "clearthumbnail",
 		"showwatermark", "setwatermark", "clearwatermark",
 	}},
-	{"colab", "🎬 Colab", []string{"colabstatus", "colabstart", "colabstop"}},
-	{"guard", "🛡️ Guard/Security", []string{"suspicious", "userinfo", "blockuser", "unblockuser"}},
-	{"linking", "🔗 Linking", []string{"settg"}},
-	{"stats", "📊 Stats", []string{"stats"}},
+	{"colab", "☁️ Colab Worker", []string{"colabstatus", "colabstart", "colabstop"}},
+	{"guard", "🛡️ Guard & Security", []string{"suspicious", "userinfo", "blockuser", "unblockuser"}},
+	{"linking", "🔗 Account Linking", []string{"settg", "unlinktg"}},
+	{"stats", "📊 Bot Analytics & Stats", []string{"stats"}},
 }
 
 func findCategory(key string) *category {
@@ -261,11 +270,37 @@ func listUsersItems() ([]listItem, string, error) {
 	}
 	items := make([]listItem, 0, len(users))
 	for _, usr := range users {
-		display := usr.Username
-		if usr.Mobile != "" {
-			display = fmt.Sprintf("%s (%s)", usr.Username, usr.Mobile)
+		name := usr.FullName
+		if name == "" {
+			name = usr.Username
 		}
-		items = append(items, listItem{display: display, id: usr.Username})
+		if name == "" {
+			name = "User"
+		}
+		contact := usr.Mobile
+		if contact == "" {
+			contact = usr.Email
+		}
+
+		display := name
+		if contact != "" {
+			display = fmt.Sprintf("%s (%s)", name, contact)
+		} else if usr.TelegramID != 0 {
+			display = fmt.Sprintf("%s (TG: %d)", name, usr.TelegramID)
+		}
+
+		id := usr.Mobile
+		if id == "" {
+			id = usr.Email
+		}
+		if id == "" {
+			id = usr.Username
+		}
+		if id == "" && usr.TelegramID != 0 {
+			id = fmt.Sprintf("%d", usr.TelegramID)
+		}
+
+		items = append(items, listItem{display: display, id: id})
 	}
 	return items, "", nil
 }
@@ -432,21 +467,28 @@ func cmdUserbotLogout(ctx *ext.Context, u *ext.Update) error {
 
 func cmdUserbotLoginStart(ctx *ext.Context, u *ext.Update) error {
 	if UserbotStatus == nil || UserbotSendCode == nil {
-		reply(ctx, u, "❌ Userbot bridge अजून ready नाही (bot restart झाला का ते बघा).")
+		editCatalogMessage(ctx, u, "❌ Userbot bridge अजून ready नाही (bot restart झाला का ते बघा).", premiumCancelMarkup())
 		return dispatcher.EndGroups
 	}
-	running, _, _, username, _, _ := UserbotStatus()
-	if running {
-		reply(ctx, u, fmt.Sprintf("⚠️ Userbot आधीच login आहे (@%s).\n\nआधी 🚪 Userbot Logout करा, मग नवीन account login करा.", username))
-		return dispatcher.EndGroups
+	senderID := u.EffectiveUser().GetID()
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
+
+	if isAdmin {
+		running, _, _, username, _, _ := UserbotStatus()
+		if running {
+			editCatalogMessage(ctx, u, fmt.Sprintf("⚠️ Admin Userbot आधीच login आहे (@%s).\n\nआधी 🚪 Userbot Logout करा, मग नवीन account login करा.", username), premiumCancelMarkup())
+			return dispatcher.EndGroups
+		}
+	} else {
+		doc, _ := db.GetUserBotSessionDocForUser(senderID)
+		if doc != nil && doc.Session != "" {
+			editCatalogMessage(ctx, u, fmt.Sprintf("⚠️ तुमचे Userbot Account आधीच login आहे (%s).\n\nआधी 🚪 Userbot Logout करा, मग नवीन account login करा.", doc.Phone), premiumCancelMarkup())
+			return dispatcher.EndGroups
+		}
 	}
-	adminID := u.EffectiveUser().GetID()
-	setUserbotLogin(adminID, &loginState{phase: loginPhasePhone})
-	webHint := ""
-	if config.ValueOf.Host != "" {
-		webHint = "\n\n💡 पर्यायी: Web panel वरून पण login करता येईल (optional) → " + config.ValueOf.Host + "/admin"
-	}
-	reply(ctx, u, "📱 Phone number टाका (देशाचा code सोबत, उदा. +919876543210):"+webHint)
+
+	setUserbotLogin(senderID, &loginState{phase: loginPhasePhone})
+	editCatalogMessage(ctx, u, "📱 *Connect Userbot Account*\n\nतुमचा Mobile number टाका (देशाच्या code सोबत, उदा: `+919876543210`):", premiumCancelMarkup())
 	return dispatcher.EndGroups
 }
 
@@ -468,7 +510,7 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 			return dispatcher.EndGroups
 		}
 		setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: phone, phoneHash: hash})
-		reply(ctx, u, "✅ OTP पाठवला!\n\n🔢 Telegram वर आलेला OTP code टाका:")
+		reply(ctx, u, "✅ OTP पाठवला!\n\n🔢 Telegram वर आलेला OTP code टाका:\n\n⚠️ *टीप:* Telegram code block करू नये म्हणून code मध्ये space किंवा dash देऊन टाका. (उदा: `9-9-0-8-7` किंवा `9 9 9 9 9`)")
 		return dispatcher.EndGroups
 
 	case loginPhaseCode:
@@ -500,13 +542,20 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 	return dispatcher.EndGroups
 }
 
-func finishUserbotLogin(ctx *ext.Context, u *ext.Update, adminID int64, sessionStr, firstName, lastName, username, phone string, userID int64) {
-	clearUserbotLogin(adminID)
-	if err := db.SaveUserBotSession(sessionStr, phone, firstName, lastName, username, userID); err != nil {
+func finishUserbotLogin(ctx *ext.Context, u *ext.Update, senderID int64, sessionStr, firstName, lastName, username, phone string, userID int64) {
+	clearUserbotLogin(senderID)
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
+	var err error
+	if isAdmin {
+		err = db.SaveUserBotSession(sessionStr, phone, firstName, lastName, username, userID)
+	} else {
+		err = db.SaveUserBotSessionForUser(sessionStr, phone, firstName, lastName, username, userID, senderID)
+	}
+	if err != nil {
 		reply(ctx, u, "⚠️ Login झालं पण session save error: "+err.Error())
 		return
 	}
-	if UserbotStartFromSession != nil {
+	if isAdmin && UserbotStartFromSession != nil {
 		UserbotStartFromSession(sessionStr)
 	}
 	name := strings.TrimSpace(firstName + " " + lastName)
@@ -514,7 +563,7 @@ func finishUserbotLogin(ctx *ext.Context, u *ext.Update, adminID int64, sessionS
 	if username != "" {
 		uname = "@" + username
 	}
-	reply(ctx, u, fmt.Sprintf("✅ Userbot login यशस्वी!\n\n👤 %s\n%s\n📱 %s", name, uname, phone))
+	reply(ctx, u, fmt.Sprintf("✅ Userbot Account Login यशस्वी झाला!\n\n👤 %s\n%s\n📱 %s\n🆔 UserID: %d\n\nआता तुम्ही Premium Tools आणि Userbot DL वापरू शकता.", name, uname, phone, userID))
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -647,6 +696,20 @@ func init() {
 		inputStep("👤 Mobile/email टाका:"),
 	}})
 
+	// ── Grant Userbot Access ──
+	registerCmd(menuCmd{key: "grantuserbot", label: "🔑 Grant Userbot Access", kind: kindFlow, fn: cmdGrantUserbotAccess, steps: []cmdStep{
+		inputStep("🔑 Telegram ID किंवा Mobile / Username टाका (उदा: 1234567890):"),
+	}})
+
+	// ── Pre-Download & Copy Channel ──
+	registerCmd(menuCmd{key: "predownload", label: "⏳ Pre-Download Course", kind: kindFlow, fn: cmdPreDownload, steps: []cmdStep{
+		selectStep("👤 Target User निवडा:", listUsersItems),
+		selectStep("📚 Course निवडा:", listCoursesItems),
+	}})
+	registerCmd(menuCmd{key: "copychannel", label: "📤 Copy Channel", kind: kindFlow, fn: cmdCopyChannel, steps: []cmdStep{
+		inputStep("📤 SourceChatID, DestChatID आणि Range/MsgID टाका\n(उदा: 2479194095 2588123456 1 500):"),
+	}})
+
 	// ── Stats ──
 	registerCmd(menuCmd{key: "stats", label: "📊 Bot Stats", kind: kindView, fn: cmdStats})
 }
@@ -656,11 +719,18 @@ func init() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func buildRootMarkup() tg.ReplyMarkupClass {
-	rows := make([]tg.KeyboardButtonRow, 0, len(categories))
+	var rows []tg.KeyboardButtonRow
+	var currentRow []tg.KeyboardButtonClass
 	for _, c := range categories {
-		rows = append(rows, tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
-			&tg.KeyboardButtonCallback{Text: c.label, Data: []byte("menu:cat:" + c.key)},
-		}})
+		btn := &tg.KeyboardButtonCallback{Text: c.label, Data: []byte("menu:cat:" + c.key)}
+		currentRow = append(currentRow, btn)
+		if len(currentRow) == 2 {
+			rows = append(rows, tg.KeyboardButtonRow{Buttons: currentRow})
+			currentRow = nil
+		}
+	}
+	if len(currentRow) > 0 {
+		rows = append(rows, tg.KeyboardButtonRow{Buttons: currentRow})
 	}
 	return &tg.ReplyInlineMarkup{Rows: rows}
 }
@@ -668,14 +738,21 @@ func buildRootMarkup() tg.ReplyMarkupClass {
 func buildCategoryMarkup(catKey string) tg.ReplyMarkupClass {
 	var rows []tg.KeyboardButtonRow
 	if cat := findCategory(catKey); cat != nil {
+		var currentRow []tg.KeyboardButtonClass
 		for _, key := range cat.cmdKeys {
 			mc, ok := menuRegistry[key]
 			if !ok {
 				continue
 			}
-			rows = append(rows, tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
-				&tg.KeyboardButtonCallback{Text: mc.label, Data: []byte("cmd:" + key)},
-			}})
+			btn := &tg.KeyboardButtonCallback{Text: mc.label, Data: []byte("cmd:" + key)}
+			currentRow = append(currentRow, btn)
+			if len(currentRow) == 2 {
+				rows = append(rows, tg.KeyboardButtonRow{Buttons: currentRow})
+				currentRow = nil
+			}
+		}
+		if len(currentRow) > 0 {
+			rows = append(rows, tg.KeyboardButtonRow{Buttons: currentRow})
 		}
 	}
 	rows = append(rows, tg.KeyboardButtonRow{Buttons: []tg.KeyboardButtonClass{
@@ -719,11 +796,15 @@ func editMenu(ctx *ext.Context, u *ext.Update, text string, markup tg.ReplyMarku
 		return
 	}
 	chatID := u.EffectiveUser().GetID()
-	_, _ = ctx.EditMessage(chatID, &tg.MessagesEditMessageRequest{
+	_, err := ctx.EditMessage(chatID, &tg.MessagesEditMessageRequest{
 		ID:          cbq.MsgID,
 		Message:     text,
 		ReplyMarkup: markup,
 	})
+	if err != nil && isMessageNotModifiedErr(err) {
+		_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{QueryID: cbq.QueryID})
+		return
+	}
 	_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{QueryID: cbq.QueryID})
 }
 
@@ -825,15 +906,32 @@ func renderStepAsMessage(ctx *ext.Context, u *ext.Update, key string, step cmdSt
 // ═══════════════════════════════════════════════════════════════════════════
 
 func handleMenuNav(ctx *ext.Context, u *ext.Update) error {
+	senderID := u.EffectiveUser().GetID()
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
+
 	data := string(u.CallbackQuery.Data)
 	if data == "menu:root" {
-		editMenu(ctx, u, "📋 Admin Menu\n\nCategory निवडा:", buildRootMarkup())
+		if isAdmin {
+			editMenu(ctx, u, "📋 Admin Menu\n\nCategory निवडा:", buildRootMarkup())
+		} else {
+			text, markup, err := renderCourseListView(senderID)
+			if err != nil {
+				answerCatalogError(ctx, u, err)
+				return dispatcher.EndGroups
+			}
+			editCatalogMessage(ctx, u, text, markup)
+		}
 		return dispatcher.EndGroups
 	}
 	catKey := strings.TrimPrefix(data, "menu:cat:")
 	cat := findCategory(catKey)
 	if cat == nil {
-		editMenu(ctx, u, "❌ Category सापडली नाही.", buildRootMarkup())
+		if isAdmin {
+			editMenu(ctx, u, "❌ Category सापडली नाही.", buildRootMarkup())
+		} else {
+			text, markup := renderPremiumMenuView(senderID)
+			editCatalogMessage(ctx, u, text, markup)
+		}
 		return dispatcher.EndGroups
 	}
 	editMenu(ctx, u, cat.label+"\n\nCommand निवडा:", buildCategoryMarkup(cat.key))
@@ -847,12 +945,18 @@ func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
 		editMenu(ctx, u, "❌ Command सापडला नाही.", buildRootMarkup())
 		return dispatcher.EndGroups
 	}
-	adminID := u.EffectiveUser().GetID()
+	senderID := u.EffectiveUser().GetID()
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
+
+	if !isAdmin {
+		if !db.HasUserbotAccess(senderID) {
+			editCatalogMessage(ctx, u, "⛔ तुम्हाला या कमांडचा ॲक्सेस नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+			return dispatcher.EndGroups
+		}
+	}
 
 	switch mc.kind {
 	case kindView, kindToggle:
-		// existing cmd* function थेट call — reply() आत callback-aware असल्याने
-		// आपोआप edit + answer होईल.
 		_ = mc.fn(ctx, u)
 
 	case kindFlow:
@@ -860,14 +964,22 @@ func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
 			editMenu(ctx, u, "❌ Configuration error — steps नाहीत.", backAndRefreshMarkup(key))
 			return dispatcher.EndGroups
 		}
-		startFlowStep(ctx, u, key, mc.steps[0], mc.steps[1:], adminID, nil)
+		startFlowStep(ctx, u, key, mc.steps[0], mc.steps[1:], senderID, nil)
 	}
 	return dispatcher.EndGroups
 }
 
 func handleMenuCancel(ctx *ext.Context, u *ext.Update) error {
-	clearPending(u.EffectiveUser().GetID())
-	editMenu(ctx, u, "❌ Cancel केलं.", buildRootMarkup())
+	senderID := u.EffectiveUser().GetID()
+	clearPending(senderID)
+
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
+	if isAdmin {
+		editMenu(ctx, u, "❌ Cancel केलं.", buildRootMarkup())
+	} else {
+		text, markup := renderPremiumMenuView(senderID)
+		editCatalogMessage(ctx, u, "❌ Cancel केलं.\n\n"+text, markup)
+	}
 	return dispatcher.EndGroups
 }
 
@@ -881,8 +993,11 @@ func handlePendingReply(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.ContinueGroups
 	}
 	senderID := u.EffectiveUser().GetID()
+	// Check if user has pending action or login flow (allowed for all active users)
 	if !utils.Contains(config.ValueOf.AllowedUsers, senderID) {
-		return dispatcher.ContinueGroups
+		if getPending(senderID) == nil && getUserbotLogin(senderID) == nil {
+			return dispatcher.ContinueGroups
+		}
 	}
 
 	// Userbot login flow (phone → OTP → 2FA) — generic pending फ्लो च्याही आधी check.
@@ -893,6 +1008,27 @@ func handlePendingReply(ctx *ext.Context, u *ext.Update) error {
 	p := getPending(senderID)
 	if p == nil {
 		return dispatcher.ContinueGroups
+	}
+
+	if p.key == "setsendchannel_user" {
+		text := strings.TrimSpace(msg.Text)
+		chID, err := strconv.ParseInt(text, 10, 64)
+		if err != nil || chID == 0 {
+			reply(ctx, u, "❌ Invalid Channel ID! पुन्हा प्रयत्न करा (उदा: `-1001234567890`):")
+			return dispatcher.EndGroups
+		}
+		clearPending(senderID)
+		setSendChannelIDForUser(senderID, chID)
+		reply(ctx, u, fmt.Sprintf("✅ Destination Send Channel set झाला: `%d`", chID))
+		return dispatcher.EndGroups
+	}
+
+	if p.key == "setwatermark_user" {
+		text := strings.TrimSpace(msg.Text)
+		clearPending(senderID)
+		setWatermarkTextForUser(senderID, text)
+		reply(ctx, u, fmt.Sprintf("✅ Custom Watermark set झाला: `%s`", text))
+		return dispatcher.EndGroups
 	}
 	mc, ok := menuRegistry[p.key]
 	if !ok {
@@ -943,11 +1079,49 @@ func (m *command) LoadMenu(d dispatcher.Dispatcher) {
 	log := m.log.Named("menu")
 	defer log.Sugar().Info("Loaded button menu")
 
-	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Prefix("menu:"), adminOnly(handleMenuNav)))
-	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Prefix("cmd:"), adminOnly(handleMenuCmd)))
-	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Equal("cancel"), adminOnly(handleMenuCancel)))
+	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Prefix("menu:"), handleMenuNav))
+	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Prefix("cmd:"), handleMenuCmd))
+	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Equal("cancel"), handleMenuCancel))
 
 	// Group -2 — relay(-1) आणि commands(0) च्याही आधी चालतो, जेणेकरून pending
 	// असलेल्या admin चा plain-text reply आधी इथे check होईल.
 	d.AddHandlerToGroup(handlers.NewMessage(nil, handlePendingReply), -2)
+}
+
+
+
+
+
+
+
+func premiumCancelMarkup() tg.ReplyMarkupClass {
+	return &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "⬅️ Back to Userbot Menu", Data: []byte("wc:premium_menu")},
+		}},
+	}}
+}
+
+func setPendingUserbotDLPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
+	setPending(userID, &pendingAction{
+		key: "userbotdl",
+		currentStep: inputStep("📥 *Userbot Download*\n\nChat ID आणि Message Range/ID टाका किंवा Post Link वापरा:\n\n*Examples:*\n`-100123456789 45` (Single message)\n`-100123456789 45 60` (Range of messages)\n`https://t.me/c/4372880940/1687` (Post Link)"),
+	})
+	editCatalogMessage(ctx, u, "📥 *Userbot Download*\n\nChat ID आणि Message Range/ID टाका किंवा Post Link वापरा:\n\n*Examples:*\n`-100123456789 45` (Single message)\n`-100123456789 45 60` (Range of messages)\n`https://t.me/c/4372880940/1687` (Post Link)", premiumCancelMarkup())
+}
+
+func setPendingSendChannelPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
+	setPending(userID, &pendingAction{
+		key: "setsendchannel_user",
+		currentStep: inputStep("📢 *Set Destination Channel*\n\nDownloads पाठवण्यासाठी तुमचा Channel ID टाका (उदा: `-1001234567890`):"),
+	})
+	editCatalogMessage(ctx, u, "📢 *Set Destination Channel*\n\nDownloads पाठवण्यासाठी तुमचा Channel ID टाका (उदा: `-1001234567890`):", premiumCancelMarkup())
+}
+
+func setPendingWatermarkPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
+	setPending(userID, &pendingAction{
+		key: "setwatermark_user",
+		currentStep: inputStep("💧 *Set Watermark Text*\n\nVideos वर दाखवायचा तुमचा Watermark text टाका (उदा: `@mychannel`):"),
+	})
+	editCatalogMessage(ctx, u, "💧 *Set Watermark Text*\n\nVideos वर दाखवायचा तुमचा Watermark text टाका (उदा: `@mychannel`):", premiumCancelMarkup())
 }

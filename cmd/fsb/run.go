@@ -19,6 +19,8 @@ import (
 	"os"
 	"time"
 
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -78,6 +80,10 @@ func runApp(cmd *cobra.Command, args []string) {
 	}
 	workers.AddDefaultClient(mainBot, mainBot.Self)
 	bot.StartUserBotFromDB(log)
+	go func() {
+		time.Sleep(2 * time.Second)
+		bot.NotifyAllowedUsers("🟢 Service restarted successfully!")
+	}()
 	// Userbot client commands package ला द्या (import cycle टाळायला)
 	commands.MainUserbotClient = bot.UserBot.GetClient()
 	// Course channel admin-sync hook — cmdAddCourse use karto (import cycle टाळायला)
@@ -96,6 +102,12 @@ func runApp(cmd *cobra.Command, args []string) {
 	commands.UserbotStop = bot.UserBot.Stop
 	commands.UserbotStartFromSession = bot.UserBot.StartFromSession
 	commands.GetLiveUserbotClient = bot.UserBot.GetClient
+	commands.SendTelegramDMWithMarkup = func(userID int64, text string, markup interface{}) error {
+		if m, ok := markup.(tg.ReplyMarkupClass); ok {
+			return bot.SendTelegramDMWithMarkup(userID, text, m)
+		}
+		return bot.SendTelegramDM(userID, text)
+	}
 	// Watermark worker (course offline-download flow) साठी — download-bot token
 	// आणि त्याच bot च्या स्वतःच्या client मधून resolve केलेला access_hash, दोन्ही
 	// एकत्र (mismatch टाळायला — access_hash प्रत्येक bot साठी वेगळा असतो).
@@ -112,6 +124,18 @@ func runApp(cmd *cobra.Command, args []string) {
 			return "", 0, err
 		}
 		return w.BotToken, inputChannel.AccessHash, nil
+	}
+	// Silent pre-download (/predownload) साठी — upload सुद्धा त्याच bot-pool
+	// मधून round-robin करतो (access_hash लागत नाही, फक्त token हवा).
+	commands.GetNextUploadBotToken = func() (string, error) {
+		if len(bot.Workers.Bots) == 0 {
+			return "", fmt.Errorf("no worker bots configured")
+		}
+		w := bot.GetNextWorker()
+		if w == nil {
+			return "", fmt.Errorf("no worker available")
+		}
+		return w.BotToken, nil
 	}
 	// Watermark progress edits — HTTP Bot API ऐवजी आधी already-चालू असलेल्या
 	// persistent MTProto connection वापरून बघतो (जास्त reliable — विशेषतः
@@ -143,6 +167,19 @@ func runApp(cmd *cobra.Command, args []string) {
 			if strings.Contains(err.Error(), "MESSAGE_NOT_MODIFIED") {
 				return true
 			}
+			// [FIX] FLOOD_WAIT (rpc 420) आधी फक्त log होऊन HTTP fallback कडे
+			// जायचं — पण HTTP fallback सुद्धा त्याच बॉट session साठी अनेकदा
+			// अयशस्वी होतो, आणि पुढच्या progress tick ला परत हेच घडायचं —
+			// परिणाम: तासनतास (FLOOD_WAIT कधी कधी 50000+ सेकंद देतो) दर काही
+			// सेकंदाला निष्फळ MTProto + HTTP दोन्ही प्रयत्न. आता FLOOD_WAIT
+			// सेकंद parse करून wmqueue ला कळवतो — तोपर्यंत EditTgMessage हा
+			// botToken साठी दोन्ही मार्ग (network ला हातही न लावता) skip करतो.
+			if wait, ok := parseFloodWaitSeconds(err.Error()); ok {
+				wmqueue.SetEditFloodWait(botToken, time.Now().Add(wait))
+				log.Sugar().Warnw("wmqueue.MTProtoEdit: FLOOD_WAIT — pausing edits for this bot",
+					"chatID", chatID, "msgID", msgID, "waitSeconds", wait.Seconds())
+				return false
+			}
 			log.Sugar().Warnw("wmqueue.MTProtoEdit failed — falling back to HTTP", "chatID", chatID, "msgID", msgID, "err", err)
 			return false
 		}
@@ -150,11 +187,16 @@ func runApp(cmd *cobra.Command, args []string) {
 	}
 	// Registration Telegram notification hook (import cycle टाळायला — auth ← bot direct import karu shakat nahi)
 	auth.NotifyAdmins = bot.NotifyAllowedUsers
+	wmqueue.MTProtoNotify = func(text string) bool {
+		bot.NotifyAllowedUsers(text)
+		return true
+	}
 	// Bot cha PeerStorage redeploy nantar empty asto (fsb.session ephemeral
 	// container madhe reset hoто) — LOG_CHANNEL members varun ALLOWED_USERS
 	// cha access_hash automatic warm karto, manual "ek message pathवा" lागत nahi.
 	bot.WarmAdminPeerCacheDelayed(log, 3*time.Second)
 	bot.WarmUserPeerCacheDelayed(log, 5*time.Second) // सगळ्या linked users चा peer cache warm करतो
+	bot.SetAttractiveBotMenuCommands(config.ValueOf.BotToken) // Telegram chat bar menu buttons register करतो
 
 	// नवीन deploy असेल तरच (versionString बदलला असेल तरच) सर्व admins + linked
 	// users ला "bug fixed, services working" announcement — crash-restart वर
@@ -180,6 +222,24 @@ func runApp(cmd *cobra.Command, args []string) {
 	if err != nil {
 		mainLogger.Sugar().Fatalf("Server failed to start: %v", err)
 	}
+}
+
+// floodWaitRe — gotd चा rpc error text असा असतो:
+// "rpc error code 420: FLOOD_WAIT (56374)" — कंसातला आकडा seconds आहे.
+var floodWaitRe = regexp.MustCompile(`FLOOD_WAIT\s*\((\d+)\)`)
+
+// parseFloodWaitSeconds — error text मधून FLOOD_WAIT चा seconds काढतो.
+// सापडला नाही तर ok=false (सामान्य error, FLOOD_WAIT नाही).
+func parseFloodWaitSeconds(errText string) (time.Duration, bool) {
+	m := floodWaitRe.FindStringSubmatch(errText)
+	if m == nil {
+		return 0, false
+	}
+	secs, err := strconv.Atoi(m[1])
+	if err != nil || secs <= 0 {
+		return 0, false
+	}
+	return time.Duration(secs) * time.Second, true
 }
 
 // globalSecurityHeaders — सर्व routes वर security headers लावतो.
@@ -293,3 +353,4 @@ func prefixAwareLogger() gin.HandlerFunc {
 		logger(c)
 	}
 }
+

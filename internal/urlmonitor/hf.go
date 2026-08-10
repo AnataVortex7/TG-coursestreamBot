@@ -82,21 +82,6 @@ type hfRuntimeInfo struct {
 // token — per-monitor sathi save kelela HF token (private/gated space sathi).
 // Rikama asel tar HF_TOKEN env var fallback mhanun vaparla jato.
 func pingHuggingFace(rawURL, token string) PingResult {
-	// [FIX] खालचा HF Spaces API call फक्त status accurate मिळवण्यासाठी आहे —
-	// त्याने प्रत्यक्ष Space च्या URL ला कधीच request जात नाही. म्हणजे
-	// target service च्या स्वतःच्या logs मध्ये कधीच traffic दिसत नाही, आणि
-	// निव्वळ API poll केल्याने sleeping space जागी होत नाही (wake trigger
-	// साठी प्रत्यक्ष URL लाच hit करावा लागतो). म्हणून इथे खरा GET सुद्धा
-	// पाठवतो — पण background मध्ये, fire-and-forget (result वापरत नाही,
-	// कारण sleeping space वर तो misleading 200 "loading" page देऊ शकतो) —
-	// जेणेकरून status-check च्या गती/वेळेवर याचा परिणाम होणार नाही.
-	go func() {
-		resp, err := httpClient.Get(rawURL)
-		if err == nil && resp != nil {
-			resp.Body.Close()
-		}
-	}()
-
 	start := time.Now()
 	result := PingResult{Timestamp: start}
 

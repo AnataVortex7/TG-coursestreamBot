@@ -5,6 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"EverythingSuckz/fsb/config"
+	"EverythingSuckz/fsb/internal/utils"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -1660,4 +1663,78 @@ func MarkAllUserMessagesRead(userID primitive.ObjectID) error {
 		bson.M{"$set": bson.M{"read_at": time.Now()}},
 	)
 	return err
+}
+
+func SetUserWatermark(telegramID int64, watermark string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColUsers.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, bson.M{"$set": bson.M{"watermark": watermark}})
+	return err
+}
+
+func GetUserWatermark(telegramID int64) (string, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	var doc struct {
+		Watermark string `bson:"watermark"`
+	}
+	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&doc)
+	if err != nil {
+		return "", err
+	}
+	return doc.Watermark, nil
+}
+
+func SetUserSendChannel(telegramID int64, channelID int64) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColUsers.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, bson.M{"$set": bson.M{"send_channel_id": channelID}})
+	return err
+}
+
+func GetUserSendChannel(telegramID int64) (int64, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	var doc struct {
+		SendChannelID int64 `bson:"send_channel_id"`
+	}
+	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&doc)
+	if err != nil {
+		return 0, err
+	}
+	return doc.SendChannelID, nil
+}
+
+func SetUserbotAccess(telegramID int64, allowed bool) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	opts := options.Update().SetUpsert(true)
+	update := bson.M{
+		"$set": bson.M{
+			"userbot_access": allowed,
+			"telegram_id":    telegramID,
+		},
+		"$setOnInsert": bson.M{
+			"is_active":  true,
+			"created_at": time.Now(),
+		},
+	}
+	_, err := ColUsers.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, update, opts)
+	return err
+}
+
+func HasUserbotAccess(telegramID int64) bool {
+	if utils.Contains(config.ValueOf.AllowedUsers, telegramID) {
+		return true
+	}
+	ctx, cancel := Ctx()
+	defer cancel()
+	var doc struct {
+		UserbotAccess bool `bson:"userbot_access"`
+	}
+	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&doc)
+	if err != nil {
+		return false
+	}
+	return doc.UserbotAccess
 }

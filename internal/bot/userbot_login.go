@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"runtime"
 	"sync"
 	"time"
@@ -279,6 +280,14 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 // ─── VerifyCode ───────────────────────────────────────────────────────────────
 
 func (u *UserBotStruct) VerifyCode(phone, phoneHash, code, password string) (string, UserBotInfo, error) {
+	if code != "" {
+		re := regexp.MustCompile(`\b(\d{5})\b`)
+		if match := re.FindStringSubmatch(code); match != nil {
+			code = match[1]
+		} else {
+			code = regexp.MustCompile(`\D`).ReplaceAllString(code, "")
+		}
+	}
 	loginMu.Lock()
 	p := activePending
 	loginMu.Unlock()

@@ -112,15 +112,25 @@ func handleColabProgress(c *gin.Context) {
 		return
 	}
 
+	// [NEW] Telegram edit (खाली) फक्त ProgressMsgID>0 असेल तरच होतो — पण
+	// stage/percent text इथेच नेहमी साठवतो, जेणेकरून ProgressMsgID==0 असलेल्या
+	// jobs साठी (उदा. silent /predownload) सुद्धा कुणीतरी नंतर वाचू शकेल.
+	wmqueue.SetProgressMessage(req.JobID, req.Message)
+
 	// ── Ordered, serialized edit ─────────────────────────────────────────
 	// seq <= last-applied → stale/out-of-order, skip.
-	// आधीचा edit अजून चालू असेल → हा skip (पुढचा update latest % दाखवेल).
-	// Telegram edit complete झाल्यावरच पुढचा pick होतो (FinishProgress).
+	// आधीचा edit अजून चालू असेल किंवा spacing/backoff gap संपला नसेल →
+	// हा skip (पुढचा update latest % दाखवेल). Telegram edit complete
+	// झाल्यावरच (यशस्वी असो वा नसो) पुढचा pick होतो (FinishProgress).
+	// [FIX] EditTgMessage आता actual success/failure return करतो — तो
+	// FinishProgress ला पास करतो, जेणेकरून सलग failures (उदा. FLOOD_WAIT)
+	// वर wmqueue आपोआप backoff gap वाढवेल, प्रत्येक tick ला निष्फळ प्रयत्न
+	// होणार नाही.
 	if job.ProgressMsgID > 0 {
 		j, proceed := wmqueue.Default.TryProgress(req.JobID, req.Seq)
 		if proceed {
-			wmqueue.EditTgMessage(j.BotToken, j.ChatID, j.ProgressMsgID, req.Message)
-			wmqueue.Default.FinishProgress(req.JobID)
+			success := wmqueue.EditTgMessage(j.BotToken, j.ChatID, j.ProgressMsgID, req.Message)
+			wmqueue.Default.FinishProgress(req.JobID, success)
 		}
 	}
 
@@ -137,7 +147,7 @@ func handleColabDone(c *gin.Context) {
 	var req struct {
 		JobID           string `json:"job_id"`
 		WorkerID        string `json:"worker_id"`
-		SentMessageID   int    `json:"sent_message_id"`      // ← नवीन, optional — जुना Colab script पाठवत नसेल तर 0
+		SentMessageID   int    `json:"sent_message_id"`    // ← नवीन, optional — जुना Colab script पाठवत नसेल तर 0
 		LogChannelMsgID int    `json:"log_channel_msg_id"` // ← worker ने LOG_CHANNEL ला पाठवलेल्या master copy चा msg ID (DeliveredCache fast-path साठी, optional — नसेल तर 0)
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {

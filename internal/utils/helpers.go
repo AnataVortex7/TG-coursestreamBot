@@ -1,6 +1,9 @@
 package utils
 
 import (
+	"strconv"
+	"regexp"
+	"time"
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/cache"
 	"EverythingSuckz/fsb/internal/types"
@@ -54,7 +57,9 @@ func GetTGMessageInChannel(ctx context.Context, client *gotgproto.Client, messag
 		return nil, err
 	}
 	messageRequest := tg.ChannelsGetMessagesRequest{Channel: channel, ID: []tg.InputMessageClass{inputMessageID}}
-	res, err := client.API().ChannelsGetMessages(ctx, &messageRequest)
+	res, err := ExecuteWithFloodWait(ctx, func() (tg.MessagesMessagesClass, error) {
+		return client.API().ChannelsGetMessages(ctx, &messageRequest)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +160,9 @@ func FileFromMessageInChannel(ctx context.Context, client *gotgproto.Client, mes
 		Channel: &tg.InputChannel{ChannelID: channel.ChannelID, AccessHash: channel.AccessHash},
 		ID:      []tg.InputMessageClass{inputMessageID},
 	}
-	res, err := client.API().ChannelsGetMessages(ctx, &messageRequest)
+	res, err := ExecuteWithFloodWait(ctx, func() (tg.MessagesMessagesClass, error) {
+		return client.API().ChannelsGetMessages(ctx, &messageRequest)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +217,9 @@ func GetChannelPeer(ctx context.Context, api *tg.Client, peerStorage *storage.Pe
 	inputChannel := &tg.InputChannel{
 		ChannelID: mtprotoID, // ✅ correct format
 	}
-	channels, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{inputChannel})
+	channels, err := ExecuteWithFloodWait(ctx, func() (tg.MessagesChatsClass, error) {
+		return api.ChannelsGetChannels(ctx, []tg.InputChannelClass{inputChannel})
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -276,4 +285,45 @@ func ForwardMessages(ctx *ext.Context, fromChatId, toChatId int64, messageID int
 		return nil, err
 	}
 	return update.(*tg.Updates), nil
+}
+
+var floodWaitRe = regexp.MustCompile(`FLOOD_WAIT\D*(\d+)`)
+
+func ExtractFloodWaitSeconds(err error) (int, bool) {
+	if err == nil {
+		return 0, false
+	}
+	m := floodWaitRe.FindStringSubmatch(err.Error())
+	if len(m) >= 2 {
+		sec, e := strconv.Atoi(m[1])
+		if e == nil && sec > 0 {
+			return sec, true
+		}
+	}
+	return 0, false
+}
+
+func ExecuteWithFloodWait[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	var zero T
+	maxAttempts := 5
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		res, err := fn()
+		if err == nil {
+			return res, nil
+		}
+		if waitSecs, isFlood := ExtractFloodWaitSeconds(err); isFlood {
+			if waitSecs > 300 {
+				return zero, err
+			}
+			Logger.Warn(fmt.Sprintf("⚡ FloodWait detected: sleeping for %d seconds (attempt %d/%d)", waitSecs, attempt, maxAttempts))
+			select {
+			case <-ctx.Done():
+				return zero, ctx.Err()
+			case <-time.After(time.Duration(waitSecs+1) * time.Second):
+				continue
+			}
+		}
+		return zero, err
+	}
+	return zero, errors.New("max floodwait attempts exceeded")
 }
