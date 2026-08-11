@@ -13,20 +13,21 @@ import (
 	"errors"
 	"time"
 
+	"EverythingSuckz/fsb/config"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type ColabWorkerPoll struct {
-	WorkerID string    `bson:"_id"`
+	ID       string    `bson:"_id"` // botToken + ":" + workerID
+	WorkerID string    `bson:"worker_id"`
+	BotToken string    `bson:"bot_token"`
 	LastPoll time.Time `bson:"last_poll"`
 }
 
 func colColabWorkerPolls() *mongo.Collection { return Database.Collection("colab_worker_polls") }
 
-// RecordColabPoll — प्रत्येक poll ला call करा (best-effort — error आला तरी
-// caller ने HTTP response block करू नये, फक्त log करावं).
 func RecordColabPoll(workerID string) error {
 	if workerID == "" {
 		return nil
@@ -34,20 +35,27 @@ func RecordColabPoll(workerID string) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 
+	botToken := config.ValueOf.BotToken
+	docID := botToken + ":" + workerID
+
 	_, err := colColabWorkerPolls().UpdateOne(ctx,
-		bson.M{"_id": workerID},
-		bson.M{"$set": bson.M{"last_poll": time.Now()}},
+		bson.M{"_id": docID},
+		bson.M{"$set": bson.M{
+			"worker_id": workerID,
+			"bot_token": botToken,
+			"last_poll": time.Now(),
+		}},
 		options.Update().SetUpsert(true),
 	)
 	return err
 }
 
-// IsColabOnlineDB — कुठलाही 1 worker तरी threshold च्या आत poll करून गेला आहे का.
 func IsColabOnlineDB(threshold time.Duration) (bool, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
 
 	count, err := colColabWorkerPolls().CountDocuments(ctx, bson.M{
+		"bot_token": config.ValueOf.BotToken,
 		"last_poll": bson.M{"$gt": time.Now().Add(-threshold)},
 	})
 	if err != nil {
@@ -56,17 +64,17 @@ func IsColabOnlineDB(threshold time.Duration) (bool, error) {
 	return count > 0, nil
 }
 
-// ActiveColabWorkersDB — सध्या online (threshold च्या आत poll केलेले) worker IDs.
 func ActiveColabWorkersDB(threshold time.Duration) ([]string, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
 
-	// Clean up stale ghost worker records older than threshold
+	// Clean up ALL stale ghost worker records older than threshold (cross-bot cleanup)
 	_, _ = colColabWorkerPolls().DeleteMany(ctx, bson.M{
 		"last_poll": bson.M{"$lte": time.Now().Add(-threshold)},
 	})
 
 	cursor, err := colColabWorkerPolls().Find(ctx, bson.M{
+		"bot_token": config.ValueOf.BotToken,
 		"last_poll": bson.M{"$gt": time.Now().Add(-threshold)},
 	})
 	if err != nil {
@@ -92,7 +100,7 @@ func LastColabPollAgoDB() (time.Time, error) {
 
 	opts := options.FindOne().SetSort(bson.D{{Key: "last_poll", Value: -1}})
 	var w ColabWorkerPoll
-	err := colColabWorkerPolls().FindOne(ctx, bson.M{}, opts).Decode(&w)
+	err := colColabWorkerPolls().FindOne(ctx, bson.M{"bot_token": config.ValueOf.BotToken}, opts).Decode(&w)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return time.Time{}, nil
@@ -106,6 +114,9 @@ func LastColabPollAgoDB() (time.Time, error) {
 func ForgetColabWorkerDB(workerID string) error {
 	ctx, cancel := Ctx()
 	defer cancel()
-	_, err := colColabWorkerPolls().DeleteOne(ctx, bson.M{"_id": workerID})
+	
+	botToken := config.ValueOf.BotToken
+	docID := botToken + ":" + workerID
+	_, err := colColabWorkerPolls().DeleteOne(ctx, bson.M{"_id": docID})
 	return err
 }

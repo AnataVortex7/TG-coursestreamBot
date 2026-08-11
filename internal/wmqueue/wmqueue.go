@@ -140,7 +140,7 @@ type WatermarkJob struct {
 // नवीन) असतो. प्रत्येक poll मध्ये worker_id येतो — त्याचा lastPollTime track
 // करतो. 10 sec (2 missed polls @ 5s) मध्ये poll आला नाही → तो worker offline.
 
-const workerOfflineThreshold = 35 * time.Second // 7 missed polls @ 5s — clean active worker count without ghost workers
+const workerOfflineThreshold = 90 * time.Second // 18 missed polls @ 5s — heavy video processing or network lag without false offline
 
 // [FIX] आधी हे फक्त एका process cha in-memory map मध्ये track व्हायचं —
 // main-server एकापेक्षा जास्त replicas/containers वर चालत असेल (उदा. काही
@@ -464,6 +464,7 @@ func (q *Queue) SetProgressMessage(jobID, msg string) {
 	defer q.mu.Unlock()
 	if job, ok := q.jobs[jobID]; ok {
 		job.LastProgressMsg = msg
+		job.UpdatedAt = time.Now()
 	}
 }
 
