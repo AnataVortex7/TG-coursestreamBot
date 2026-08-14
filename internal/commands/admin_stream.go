@@ -1925,7 +1925,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 		if freshConcurrency < 1 {
 			freshConcurrency = 1 // कुठलाही worker online नाही तरी एकेक करून प्रयत्न करत राहतो
 		}
-		const maxFreshConcurrency = 6
+		const maxFreshConcurrency = 50 // [FIX] Increased cap from 6 to 50 to allow multiple Colab workers to run at full capacity
 		if freshConcurrency > maxFreshConcurrency {
 			freshConcurrency = maxFreshConcurrency
 		}

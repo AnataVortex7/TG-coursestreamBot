@@ -8,7 +8,7 @@ import (
 
 // httpClient — shared, with timeout, no redirects followed blindly
 var httpClient = &http.Client{
-	Timeout: 10 * time.Second,
+	Timeout: 30 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return http.ErrUseLastResponse
@@ -114,7 +114,21 @@ func pingHTTP(rawURL string) PingResult {
 		Timestamp: start,
 	}
 
-	resp, err := httpClient.Get(rawURL)
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		result.Error = err.Error()
+		result.IsUp = false
+		result.StatusCode = 0
+		return result
+	}
+
+	// Free hosting providers (Render, Glitch, etc.) bot / default Go clients la ignore kartat
+	// tyamule browser sarakhe headers pathavne garjeche ahe (tarach server wake up hoto).
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+
+	resp, err := httpClient.Do(req)
 	result.LatencyMs = time.Since(start).Milliseconds()
 
 	if err != nil {

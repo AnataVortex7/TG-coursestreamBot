@@ -85,6 +85,26 @@ func pingHuggingFace(rawURL, token string) PingResult {
 	start := time.Now()
 	result := PingResult{Timestamp: start}
 
+	// WAKE UP TICKLE: HF Spaces cha `/runtime` API fakt status check karto, to sleeping
+	// space la wake up karat nahi. Tyamule background madhe ek actual GET mara, 
+	// jyamule space wake up hovu shakto (jar to sleeping asel).
+	go func() {
+		r, err := http.NewRequest(http.MethodGet, rawURL, nil)
+		if err == nil {
+			r.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+			r.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+			if token != "" {
+				r.Header.Set("Authorization", "Bearer "+token)
+			}
+			// httpClient pakadla ahe kiva default client vapara.
+			// apan fakt request pathavto, response chi vaat baghat nahi
+			resp, _ := http.DefaultClient.Do(r)
+			if resp != nil {
+				resp.Body.Close()
+			}
+		}
+	}()
+
 	spaceID, err := hfSpaceID(rawURL)
 	if err != nil {
 		result.LatencyMs = time.Since(start).Milliseconds()
