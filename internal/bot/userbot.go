@@ -34,12 +34,13 @@ func StartUserBot(l *zap.Logger) {
 		&gotgproto.ClientOpts{
 			Session:          sessionMaker.PyrogramSession(config.ValueOf.UserSession),
 			DisableCopyright: true,
+			NoAutoAuth:       true,
 		},
 	)
 	if err != nil {
 		log.Error("Failed to start userbot", zap.Error(err))
-		errStr := err.Error()
-		if strings.Contains(errStr, "AUTH_KEY_UNREGISTERED") || strings.Contains(errStr, "401") || strings.Contains(errStr, "SESSION_REVOKED") {
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "auth_key_unregistered") || strings.Contains(errStr, "401") || strings.Contains(errStr, "session_revoked") || strings.Contains(errStr, "unauthorized") {
 			log.Warn("Expired or revoked userbot session detected in DB — clearing invalid session string")
 			_ = db.DeleteUserBotSession()
 			config.ValueOf.UserSession = ""
