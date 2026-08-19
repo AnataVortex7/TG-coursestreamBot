@@ -384,8 +384,10 @@ func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 				return liveClient, nil
 			}
 		}
-		if MainUserbotClient != nil {
-			return MainUserbotClient, nil
+		if GetUserbotClient != nil {
+			if uc := GetUserbotClient(); uc != nil {
+				return uc, nil
+			}
 		}
 	}
 
@@ -2274,7 +2276,10 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 	// फक्त watermark ON असेल, किंवा fast-path fail होऊन fallback लागला, तरच
 	// खाली userbot lazily वापरला जातो — तेव्हा तो nil असेल तर तिथेच स्पष्ट
 	// error येईल (संपूर्ण command सुरुवातीलाच अडणार नाही).
-	userbotClient := MainUserbotClient
+	var userbotClient *gotgproto.Client
+	if GetUserbotClient != nil {
+		userbotClient = GetUserbotClient()
+	}
 
 	// Destination channel मध्ये bot खरंच admin/access आहे का ते आधीच तपासतो —
 	// नाहीतर हजारो messages नंतर मध्येच fail होत राहील.

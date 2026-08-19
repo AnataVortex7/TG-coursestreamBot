@@ -14,15 +14,9 @@ type command struct {
 
 var MainBotClient *gotgproto.Client  // set from run.go after bot.StartClient
 
-// MainUserbotClient — userbot चा client, bot package import न करता.
-// run.go मध्ये bot.StartUserBotFromDB नंतर set होतो.
-var MainUserbotClient *gotgproto.Client
+// GetUserbotClient — userbot चा client मिळवण्यासाठी
+var GetUserbotClient func() *gotgproto.Client
 
-// SyncChannelAdmins — course channel madhe sagle bots (main bot + worker bots)
-// automatic admin karayla call hoto (cmdAddCourse madhun). bot package madhe
-// run.go ne set kela jato (import cycle टाळायला): commands ← bot already
-// import karte, mhanun commands ne bot direct import karu shakat nahi.
-// Nil असेल (userbot kadhi load nahi zala) tar caller ne skip karaycha.
 var SyncChannelAdmins func(channelID int64) error
 
 var (

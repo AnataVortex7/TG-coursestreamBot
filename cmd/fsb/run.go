@@ -79,13 +79,13 @@ func runApp(cmd *cobra.Command, args []string) {
 		log.Sugar().Fatalf("Failed to start workers: %v", err)
 	}
 	workers.AddDefaultClient(mainBot, mainBot.Self)
-	bot.StartUserBotFromDB(log)
+	go bot.StartUserBotFromDB(log)
 	go func() {
 		time.Sleep(2 * time.Second)
 		bot.NotifyAllowedUsers("🟢 Service restarted successfully!")
 	}()
 	// Userbot client commands package ला द्या (import cycle टाळायला)
-	commands.MainUserbotClient = bot.UserBot.GetClient()
+	commands.GetUserbotClient = bot.UserBot.GetClient
 	// Course channel admin-sync hook — cmdAddCourse use karto (import cycle टाळायला)
 	commands.SyncChannelAdmins = bot.UserBot.AddBotsAsAdminsForChannel
 	// Userbot login/logout/status hooks — menu.go (button menu) वापरतो

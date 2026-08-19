@@ -12,6 +12,7 @@ import (
 	"EverythingSuckz/fsb/internal/utils"
 	tokenpkg "EverythingSuckz/fsb/internal/token"
 
+	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
 	"github.com/celestix/gotgproto/ext"
@@ -67,8 +68,8 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 
 	// ── Private channel URL detection ──────────────────────────────────────────
 	// Bot la ek text message aala aani tyat t.me/c/CHANNELID/MSGID format URL
-	// asel tar → userbot cha MainUserbotClient vaaprun file fetch karto,
-	// log channel la forward na karta directly token banto (channelID pn store).
+	// jar userbot login asel tar → userbot cha GetUserbotClient() vaaprun file fetch karto,
+	// tyamule userbot account block hot nahi.
 	msg := u.EffectiveMessage
 	if msg.Media == nil && msg.Text != "" {
 		text := strings.TrimSpace(msg.Text)
@@ -157,11 +158,15 @@ func sendLink(ctx *ext.Context, u *ext.Update) error {
 }
 
 // handlePrivateChannelURL — t.me/c/<channelID>/<msgID> URL aslyavar:
-// UserBot cha MainUserbotClient vaaprun (private channel access sathi)
+// UserBot cha GetUserbotClient() vaaprun (private channel access sathi)
 // file metadata fetch karto. Forward to log channel hot nahi.
 // Token madhe channelID store hoto — /stream/:token route userbot vaaprun serve karto.
 func handlePrivateChannelURL(ctx *ext.Context, u *ext.Update, rawChannelID int64, channelIDForToken int64, msgID int) error {
-	if MainUserbotClient == nil {
+	var userbotClient *gotgproto.Client
+	if GetUserbotClient != nil {
+		userbotClient = GetUserbotClient()
+	}
+	if userbotClient == nil {
 		ctx.Reply(u, ext.ReplyTextString("❌ Userbot running nahi — private channel streaming available nahi."), nil)
 		return dispatcher.EndGroups
 	}
@@ -171,7 +176,7 @@ func handlePrivateChannelURL(ctx *ext.Context, u *ext.Update, rawChannelID int64
 	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	file, err := utils.FileFromMessageInChannel(fetchCtx, MainUserbotClient, msgID, rawChannelID)
+	file, err := utils.FileFromMessageInChannel(fetchCtx, userbotClient, msgID, rawChannelID)
 	if err != nil {
 		ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
 			"❌ File fetch failed: %s\n\n"+
