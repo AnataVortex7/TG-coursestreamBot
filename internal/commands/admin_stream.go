@@ -531,8 +531,11 @@ func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
 // ── /setreplace <old=new> [old2=new2] ... ─────────────────────────────────────
 
 func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
-	a := args(u)
-	if len(a) < 1 {
+	text := u.EffectiveMessage.Text
+	
+	// Command आणि args वेगळे करणे
+	partsCmd := strings.SplitN(text, " ", 2)
+	if len(partsCmd) < 2 || strings.TrimSpace(partsCmd[1]) == "" {
 		reply(ctx, u,
 			"📝 *Usage:* `/setreplace old_text=new_text`\n\n"+
 				"Examples:\n"+
@@ -543,15 +546,24 @@ func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	fullText := strings.Join(a, " ")
+	// पुढे multiple spaces असल्यास फक्त सुरुवातीचे spaces काढायचे, मधले तसेच ठेवायचे.
+	fullText := strings.TrimLeft(partsCmd[1], " \t")
 	parts := strings.SplitN(fullText, "=", 2)
-	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+	if len(parts) != 2 {
 		reply(ctx, u, "❌ Invalid format. '=' असणे आवश्यक आहे.\nExample: `/setreplace old=new`")
 		return dispatcher.EndGroups
 	}
 
-	oldWord := strings.TrimSpace(parts[0])
-	newWord := strings.TrimSpace(parts[1])
+	// oldWord मध्ये जेवढे spaces असतील (सुरुवात/शेवट सोडून) ते तसेच राहतील.
+	oldWord := parts[0]
+	newWord := parts[1]
+	
+	// जर user ने quotes दिले असतील, तर आपण trimming करू शकतो.
+	// पण तूर्तास सुरळीतपणासाठी आपण फक्त trailing spaces काढूया.
+	// TrimSpace केल्यास oldWord च्या सुरुवातीचे/शेवटचे spaces जातील. जर त्याला तिथे spaces हवे असतील तर?
+	// सहसा ते कॉपी-पेस्ट मध्ये येतात.
+	oldWord = strings.TrimSpace(oldWord)
+	newWord = strings.TrimSpace(newWord)
 	
 	// If the user deliberately provides quotes for exact matching, we can remove them.
 	// But TrimSpace usually handles normal use cases.
@@ -911,7 +923,21 @@ func cmdShowThumbnail(ctx *ext.Context, u *ext.Update) error {
 
 func applyReplaces(caption string) string {
 	captionReplaceStore.Range(func(k, v interface{}) bool {
-		caption = strings.ReplaceAll(caption, k.(string), v.(string))
+		oldStr := k.(string)
+		newStr := v.(string)
+		
+		// Case-insensitive and whitespace-flexible regex replacement
+		escapedOld := regexp.QuoteMeta(oldStr)
+		// Any sequence of whitespace in the user's search string will match ANY sequence of whitespace in the caption
+		escapedOld = regexp.MustCompile(`\s+`).ReplaceAllString(escapedOld, `\s+`)
+		
+		re, err := regexp.Compile("(?i)" + escapedOld)
+		if err == nil {
+			caption = re.ReplaceAllString(caption, newStr)
+		} else {
+			// Fallback if regex fails
+			caption = strings.ReplaceAll(caption, oldStr, newStr)
+		}
 		return true
 	})
 	return caption
