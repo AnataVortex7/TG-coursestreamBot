@@ -198,6 +198,7 @@ func deliverViaColab(
 		channelAccessHash,
 		downloadBotToken,
 		bulk, // [NEW] silent pre-download (/predownload) असेल तरच true — फक्त तिथेच per-worker cap लागू होतो
+		0,    // logTopicID
 	)
 	if err != nil {
 		return 0, 0, fmt.Errorf("submit job failed: %w", err)

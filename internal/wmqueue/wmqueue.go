@@ -88,7 +88,8 @@ type WatermarkJob struct {
 	// busy होणार नाही. Live/normal request cha job हा false (default) राहतो —
 	// त्याला cap लागू होत नाही, तो नेहमी लगेच कुठल्याही free worker ला जातो,
 	// जुन्या behavior प्रमाणेच fully parallel.
-	Bulk bool `json:"-"`
+	Bulk       bool `json:"-"`
+	LogTopicID int  `json:"log_topic_id"` // Topic ID in the Log Channel for isolated downloads
 
 	// SentMessageID — Colab ने प्रत्यक्ष पाठवलेल्या message चा ID (student
 	// offline-download साठी 48hr auto-delete schedule करायला लागतो). Colab
@@ -196,6 +197,18 @@ func isOnlineLocalFallback() bool {
 		}
 	}
 	return false
+}
+
+func countOnlineWorkersLocal() int {
+	localPollCache.mu.Lock()
+	defer localPollCache.mu.Unlock()
+	count := 0
+	for _, t := range localPollCache.lastPoll {
+		if time.Since(t) < workerOfflineThreshold {
+			count++
+		}
+	}
+	return count
 }
 
 // ActiveWorkers — सध्या online असलेले worker IDs (DB-backed).
@@ -380,12 +393,28 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 	// live/normal jobs या count मध्ये धरले जात नाहीत, त्यामुळे live traffic
 	// कधीच bulk cap मुळे अडत नाही.
 	bulkActiveForWorker := 0
+	liveActiveForWorker := 0
+
 	if workerID != "" {
 		for _, job := range q.jobs {
-			if job.Status == StatusProcessing && job.WorkerID == workerID && job.Bulk {
-				bulkActiveForWorker++
+			if job.Status == StatusProcessing && job.WorkerID == workerID {
+				if job.Bulk {
+					bulkActiveForWorker++
+				} else {
+					liveActiveForWorker++
+				}
 			}
 		}
+	}
+
+	// [FIX] User-suggested Logic:
+	// जर या वर्करकडे आधीपासूनच एखादा Live job चालू असेल, तर त्याला नवीन Bulk job
+	// देऊ नका (maxBulkForThisWorker = 0). यामुळे Live job चालू असताना हा वर्कर
+	// त्याचे जुने Bulk jobs पूर्ण करेल, पण नवीन Bulk jobs घेणार नाही, आणि Live job 
+	// ला जास्तीत जास्त CPU स्पीड मिळेल. जर Live job नसेल तरच नेहमीचे 2 bulk jobs घेईल.
+	maxBulkForThisWorker := MaxJobsPerWorker
+	if liveActiveForWorker > 0 {
+		maxBulkForThisWorker = 0
 	}
 
 	var skipped []string // cap मुळे skip केलेले bulk job IDs — शेवटी परत pending मध्ये टाकायला
@@ -403,12 +432,12 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 			continue
 		}
 
-		if job.Bulk && workerID != "" && bulkActiveForWorker >= MaxJobsPerWorker {
-			// हा worker आधीच cap इतके bulk jobs घेऊन बसलाय — हा bulk job
-			// skip करून पुढचा (शक्यतो non-bulk/live) job बघतो. cap मुळे
-			// skip केलेला job हरवू नये म्हणून queue च्या शेवटी परत टाकतो.
-			skipped = append(skipped, id)
-			continue
+		if job.Bulk && workerID != "" {
+			// Per-Worker Cap तपासा (Live job चालू असेल तर cap = 0)
+			if bulkActiveForWorker >= maxBulkForThisWorker {
+				skipped = append(skipped, id)
+				continue
+			}
 		}
 
 		job.Status = StatusProcessing
@@ -795,6 +824,7 @@ func SubmitJob(
 	channelAccessHash int64, // worker ला Pyrogram peer-cache seed करण्यासाठी लागतो
 	downloadBotToken string, // "" असेल तर pipe/file_url mode
 	bulk bool, // [NEW] true = /predownload सारखा admin bulk-batch job — फक्त यालाच per-worker cap (MaxJobsPerWorker) लागू होतो
+	logTopicID int,
 ) (string, error) {
 	jobID := fmt.Sprintf("wm-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
 	job := &WatermarkJob{
@@ -819,6 +849,7 @@ func SubmitJob(
 		ChannelAccessHash: channelAccessHash,
 		DownloadBotToken:  downloadBotToken,
 		Bulk:              bulk,
+		LogTopicID:        logTopicID,
 	}
 	Default.Enqueue(job)
 	return jobID, nil
