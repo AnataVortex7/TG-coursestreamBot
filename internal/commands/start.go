@@ -226,7 +226,7 @@ func processDLToken(ctx *ext.Context, u *ext.Update, chatID int64, tokenStr stri
 		editMu.Unlock()
 		editCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, _ = botClient.API().MessagesEditMessage(editCtx, &tg.MessagesEditMessageRequest{
+		go botClient.API().MessagesEditMessage(editCtx, &tg.MessagesEditMessageRequest{
 			Peer:    toPeer,
 			ID:      sentMsg.ID,
 			Message: text,

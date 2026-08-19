@@ -1161,7 +1161,7 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 	}
 	editProgress := func(text string) { 
 		if !isBulk {
-			editCatalogMessage(ctx, u, text, &tg.ReplyInlineMarkup{Rows: backRow}) 
+			go editCatalogMessage(ctx, u, text, &tg.ReplyInlineMarkup{Rows: backRow}) 
 		}
 	}
 

@@ -112,6 +112,11 @@ func hasThumbnailStored() bool {
 // /setwatermark ने set केलेला text — video वर bottom-right corner मध्ये overlay
 // Server restart वर reset होतो (in-memory only)
 
+type processInfo struct {
+	cancel context.CancelFunc
+	userID int64
+}
+
 var watermarkStore sync.Map // key: "text", value: string
 
 func getWatermarkText() (string, bool) {
@@ -132,13 +137,13 @@ func hasWatermark() bool {
 // Multiple processes समांतराने (parallel) चालू राहू शकतात.
 
 var (
-	activeProcessStore sync.Map // key: uint64, value: context.CancelFunc
+	activeProcessStore sync.Map // uint64 -> processInfo
 	activeProcessSeq   uint64
 )
 
-func addActiveProcess(cancel context.CancelFunc) uint64 {
+func addActiveProcess(userID int64, cancel context.CancelFunc) uint64 {
 	id := atomic.AddUint64(&activeProcessSeq, 1)
-	activeProcessStore.Store(id, cancel)
+	activeProcessStore.Store(id, processInfo{cancel: cancel, userID: userID})
 	return id
 }
 
@@ -146,24 +151,29 @@ func removeActiveProcess(id uint64) {
 	activeProcessStore.Delete(id)
 }
 
-func stopAllActiveProcesses() int {
+func stopAllActiveProcessesForUser(userID int64) int {
 	count := 0
 	activeProcessStore.Range(func(key, value any) bool {
-		if cancel, ok := value.(context.CancelFunc); ok && cancel != nil {
-			cancel()
-			count++
+		if pInfo, ok := value.(processInfo); ok {
+			if pInfo.userID == userID && pInfo.cancel != nil {
+				pInfo.cancel()
+				count++
+				activeProcessStore.Delete(key)
+			}
 		}
-		activeProcessStore.Delete(key)
 		return true
 	})
 	return count
 }
 
-func hasActiveProcess() bool {
+func hasActiveProcessForUser(userID int64) bool {
 	hasAny := false
 	activeProcessStore.Range(func(key, value any) bool {
-		hasAny = true
-		return false
+		if pInfo, ok := value.(processInfo); ok && pInfo.userID == userID {
+			hasAny = true
+			return false
+		}
+		return true
 	})
 	return hasAny
 }
@@ -176,7 +186,8 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 
 	d.AddHandler(handlers.NewCommand("adminstream", adminOnly(cmdAdminStream)))
 	d.AddHandler(handlers.NewCommand("userbotdl", cmdUserbotDL))
-	d.AddHandler(handlers.NewCommand("stopuserbotdl", adminOnly(cmdStopUserbotDL)))
+	d.AddHandler(handlers.NewCommand("stopuserbotdl", cmdStopUserbotDL))
+	d.AddHandler(handlers.NewCommand("stop", cmdStopUserbotDL))
 	d.AddHandler(handlers.NewCommand("copychannel", adminOnly(cmdCopyChannel)))
 	d.AddHandler(handlers.NewCommand("predownload", adminOnly(cmdPreDownload)))
 	d.AddHandler(handlers.NewCommand("setreplace", adminOnly(cmdSetReplace)))
@@ -368,6 +379,11 @@ var (
 func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
 	if isAdmin {
+		if GetLiveUserbotClient != nil {
+			if liveClient := GetLiveUserbotClient(); liveClient != nil {
+				return liveClient, nil
+			}
+		}
 		if MainUserbotClient != nil {
 			return MainUserbotClient, nil
 		}
@@ -439,11 +455,12 @@ func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, chan
 // सध्या चालू असलेल्या सगळ्या background processes cancel करतो.
 
 func cmdStopUserbotDL(ctx *ext.Context, u *ext.Update) error {
-	if !hasActiveProcess() {
-		reply(ctx, u, "⚠️ सध्या कोणताही process चालू नाही.")
+	senderID := u.EffectiveUser().GetID()
+	if !hasActiveProcessForUser(senderID) {
+		reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
 		return dispatcher.EndGroups
 	}
-	stopped := stopAllActiveProcesses()
+	stopped := stopAllActiveProcessesForUser(senderID)
 	if stopped > 0 {
 		reply(ctx, u, fmt.Sprintf("🛑 एकूण %d चालू batch processes stop केले!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.", stopped))
 	} else {
@@ -514,45 +531,46 @@ func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
 // ── /setreplace <old=new> [old2=new2] ... ─────────────────────────────────────
 
 func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
-	a := args(u)
-	if len(a) < 1 {
+	text := u.EffectiveMessage.Text
+	
+	// Command आणि args वेगळे करणे
+	partsCmd := strings.SplitN(text, " ", 2)
+	if len(partsCmd) < 2 || strings.TrimSpace(partsCmd[1]) == "" {
 		reply(ctx, u,
-			"📝 *Usage:* `/setreplace old=new [old2=new2 ...]`\n\n"+
+			"📝 *Usage:* `/setreplace old_text=new_text`\n\n"+
 				"Examples:\n"+
 				"`/setreplace hello=नमस्ते`\n"+
-				"`/setreplace Course=कोर्स Bot=बॉट`\n\n"+
-				"Caption मधील 'old' word आढळल्यास 'new' ने replace होईल.\n"+
-				"एकावेळी multiple pairs देता येतात.\n"+
+				"`/setreplace Please subscribe to my channel.= ` (काढून टाकण्यासाठी)\n\n"+
+				"Caption मधील 'old_text' आढळल्यास 'new_text' ने replace होईल.\n"+
 				"सध्याचे rules बघायला: /listreplace")
 		return dispatcher.EndGroups
 	}
 
-	added := []string{}
-	invalid := []string{}
-
-	for _, pair := range a {
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
-			invalid = append(invalid, pair)
-			continue
-		}
-		oldWord := strings.TrimSpace(parts[0])
-		newWord := strings.TrimSpace(parts[1])
-		captionReplaceStore.Store(oldWord, newWord)
-		added = append(added, fmt.Sprintf("`%s` → `%s`", oldWord, newWord))
+	// पुढे multiple spaces असल्यास फक्त सुरुवातीचे spaces काढायचे, मधले तसेच ठेवायचे.
+	fullText := strings.TrimLeft(partsCmd[1], " \t")
+	parts := strings.SplitN(fullText, "=", 2)
+	if len(parts) != 2 {
+		reply(ctx, u, "❌ Invalid format. '=' असणे आवश्यक आहे.\nExample: `/setreplace old=new`")
+		return dispatcher.EndGroups
 	}
 
-	msg := ""
-	if len(added) > 0 {
-		msg += fmt.Sprintf("✅ Replace rules set (%d):\n%s", len(added), strings.Join(added, "\n"))
-	}
-	if len(invalid) > 0 {
-		msg += fmt.Sprintf("\n\n❌ Invalid pairs (= नाही):\n%s", strings.Join(invalid, ", "))
-	}
-	if msg == "" {
-		msg = "❌ कोणताही valid pair नाही."
-	}
-	reply(ctx, u, msg)
+	// oldWord मध्ये जेवढे spaces असतील (सुरुवात/शेवट सोडून) ते तसेच राहतील.
+	oldWord := parts[0]
+	newWord := parts[1]
+	
+	// जर user ने quotes दिले असतील, तर आपण trimming करू शकतो.
+	// पण तूर्तास सुरळीतपणासाठी आपण फक्त trailing spaces काढूया.
+	// TrimSpace केल्यास oldWord च्या सुरुवातीचे/शेवटचे spaces जातील. जर त्याला तिथे spaces हवे असतील तर?
+	// सहसा ते कॉपी-पेस्ट मध्ये येतात.
+	oldWord = strings.TrimSpace(oldWord)
+	newWord = strings.TrimSpace(newWord)
+	
+	// If the user deliberately provides quotes for exact matching, we can remove them.
+	// But TrimSpace usually handles normal use cases.
+	
+	captionReplaceStore.Store(oldWord, newWord)
+
+	reply(ctx, u, fmt.Sprintf("✅ Replace rule set:\n\n`%s`\n⬇️\n`%s`", oldWord, newWord))
 	return dispatcher.EndGroups
 }
 
@@ -905,7 +923,21 @@ func cmdShowThumbnail(ctx *ext.Context, u *ext.Update) error {
 
 func applyReplaces(caption string) string {
 	captionReplaceStore.Range(func(k, v interface{}) bool {
-		caption = strings.ReplaceAll(caption, k.(string), v.(string))
+		oldStr := k.(string)
+		newStr := v.(string)
+		
+		// Case-insensitive and whitespace-flexible regex replacement
+		escapedOld := regexp.QuoteMeta(oldStr)
+		// Any sequence of whitespace in the user's search string will match ANY sequence of whitespace in the caption
+		escapedOld = regexp.MustCompile(`\s+`).ReplaceAllString(escapedOld, `\s+`)
+		
+		re, err := regexp.Compile("(?i)" + escapedOld)
+		if err == nil {
+			caption = re.ReplaceAllString(caption, newStr)
+		} else {
+			// Fallback if regex fails
+			caption = strings.ReplaceAll(caption, oldStr, newStr)
+		}
 		return true
 	})
 	return caption
@@ -1006,16 +1038,8 @@ func cmdAdminStream(ctx *ext.Context, u *ext.Update) error {
 // ══════════════════════════════════════════════════════════════════════════════
 
 func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
-	sender := u.EffectiveUser()
-	if sender == nil {
-		reply(ctx, u, "❌ User not found.")
-		return dispatcher.EndGroups
-	}
-	senderID := sender.GetID()
+	senderID := u.EffectiveUser().GetID()
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
-
-	// Fetch or Create Log Topic for this user
-	senderLogTopicID := getOrCreateUserLogTopicID(context.Background(), sender)
 
 	if !isAdmin {
 		if !db.HasUserbotAccess(senderID) {
@@ -1238,7 +1262,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	go func() {
 		// [NEW] Cancel context — /stopuserbotdl ने cancel करता येतो
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(bgCancel)
+		pID := addActiveProcess(senderID, bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -1259,7 +1283,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			lastEdit = time.Now()
 			editMu.Unlock()
 			botToken := os.Getenv("BOT_TOKEN")
-			_ = wmqueue.EditTgMessage(botToken, chatID, sentMsgID, text)
+			go wmqueue.EditTgMessage(botToken, chatID, sentMsgID, text)
 		}
 
 		deleteProgress := func() {
@@ -1370,7 +1394,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					chatIDRaw,
 					msgID,
 					topicID,
-					senderLogTopicID,
 					botPeer,
 					sourcePeerForSend,
 					sendChannelPeer,
@@ -1492,7 +1515,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					sendChannelPeer,
 					editProgress,
 					pm,
-					senderLogTopicID,
 				)
 			}(phA.pm)
 
@@ -1533,7 +1555,11 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			updateSummary()
 
 			if totalMsgs > 1 && msgIdx < len(msgIDList)-1 {
-				time.Sleep(1 * time.Second)
+				time.Sleep(3 * time.Second)
+				if successCount > 0 && successCount%10 == 0 {
+					editProgress("⏳ Anti-Spam Delay: Telegram limits टाळण्यासाठी 15 सेकंद थांबतोय...")
+					time.Sleep(15 * time.Second)
+				}
 			}
 		}
 
@@ -1696,6 +1722,7 @@ func fastCopyMessage(
 // lecture परत मागेल तेव्हा (delete केली असली तरी) — fast-path (cache-hit)
 // मुळे लगेच log-channel वरून forward होतं, नवीन watermark job चालतच नाही.
 func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
+	senderID := u.EffectiveUser().GetID()
 	a := args(u)
 	if len(a) < 2 {
 		reply(ctx, u,
@@ -1777,7 +1804,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 
 	go func() {
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(bgCancel)
+		pID := addActiveProcess(senderID, bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -1935,7 +1962,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 		if freshConcurrency < 1 {
 			freshConcurrency = 1 // कुठलाही worker online नाही तरी एकेक करून प्रयत्न करत राहतो
 		}
-		const maxFreshConcurrency = 6
+		const maxFreshConcurrency = 50 // [FIX] Increased cap from 6 to 50 to allow multiple Colab workers to run at full capacity
 		if freshConcurrency > maxFreshConcurrency {
 			freshConcurrency = maxFreshConcurrency
 		}
@@ -2168,6 +2195,7 @@ func runWithFloodRetryGeneric(bgCtx context.Context, maxFloodRetries int, fn fun
 // admin-दिलेला arbitrary channel पास केलाय (globally-configured SendChannel
 // ऐवजी). /stopuserbotdl नेच हे पण थांबवता येतं (तोच shared cancel-state).
 func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
+	senderID := u.EffectiveUser().GetID()
 	a := args(u)
 
 	if len(a) < 3 {
@@ -2286,7 +2314,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 
 	go func() {
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(bgCancel)
+		pID := addActiveProcess(senderID, bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -2305,11 +2333,8 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			}
 			lastEdit = time.Now()
 			editMu.Unlock()
-			editCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			_, _ = botClient.API().MessagesEditMessage(editCtx, &tg.MessagesEditMessageRequest{
-				Peer: botPeer, ID: sentMsgID, Message: text,
-			})
+			botToken := os.Getenv("BOT_TOKEN")
+			go wmqueue.EditTgMessage(botToken, adminChatID, sentMsgID, text)
 		}
 		deleteProgress := func() {
 			if sentMsgID == 0 {
@@ -2399,7 +2424,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 				// channel मध्ये परत डुप्लिकेट नको. sendChannelPeer = destPeer.
 				pm, err = prepareMessage(
 					bgCtx, userbotClient, botClient, sourceChatID, srcRaw, msgID, 0,
-					0, botPeer, nil, destPeer, editProgress, adminChatID, sentMsgID,
+					botPeer, nil, destPeer, editProgress, adminChatID, sentMsgID,
 				)
 				if err == nil {
 					return pm, nil
@@ -2471,7 +2496,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 							pmErr = runWithFloodRetry(bgCtx, editProgress, msgID, 8, func() error {
 								return sendPreparedMessage(
 									bgCtx, userbotClient, botClient, sourceChatID, srcRaw, 0,
-									botPeer, nil, destPeer, editProgress, pm, 0,
+									botPeer, nil, destPeer, editProgress, pm,
 								)
 							})
 						}
@@ -2542,7 +2567,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 				phaseBErr = runWithFloodRetry(bgCtx, editProgress, msgID, 8, func() error {
 					return sendPreparedMessage(
 						bgCtx, userbotClient, botClient, sourceChatID, srcRaw, 0,
-						botPeer, nil, destPeer, editProgress, pm, 0,
+						botPeer, nil, destPeer, editProgress, pm,
 					)
 				})
 			}(phA.pm)
@@ -2725,7 +2750,6 @@ func prepareMessage(
 	chatIDRaw int64,
 	msgID int,
 	topicID int,
-	logTopicID int,
 	botPeer tg.InputPeerClass,
 	sourcePeer *tg.InputPeerChannel,
 	sendChannelPeer *tg.InputPeerChannel,
@@ -2946,7 +2970,6 @@ func prepareMessage(
 			colabLogChatID,
 			colabLogAccessHash,
 			finalCaptionForColab,
-			logTopicID,
 		)
 	} else {
 		if colabConfigured && wmOk {
@@ -3041,7 +3064,6 @@ func sendPreparedMessage(
 	sendChannelPeer *tg.InputPeerChannel,
 	editProgress func(string),
 	pm *preparedMessage,
-	logTopicID int,
 ) error {
 
 	if pm.textOnly || pm.colabSent {
@@ -3202,7 +3224,7 @@ func sendPreparedMessage(
 				if dm := inputMediaDocFromUpdates(scResult); dm != nil {
 					logMedia = dm
 				}
-				copyToLogChannelUploaded(tgMsg, logMedia, logTopicID)
+				copyToLogChannelUploaded(tgMsg, logMedia)
 			}()
 		}
 	} else {
@@ -3232,7 +3254,7 @@ func sendPreparedMessage(
 				if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
 					logMedia = dm
 				}
-				copyToLogChannelUploaded(tgMsg, logMedia, logTopicID)
+				copyToLogChannelUploaded(tgMsg, logMedia)
 			}()
 		}
 
@@ -3314,7 +3336,6 @@ func downloadWatermarkAndReupload(
 	logChatID int64,
 	logAccessHash int64,
 	caption string,
-	logTopicID int,
 ) (tg.InputFileClass, bool, error) {
 
 	// ── Colab Queue: KOYEB_URL set asel tar ───────────────────────────────
@@ -3372,7 +3393,6 @@ func downloadWatermarkAndReupload(
 			0,     // channelAccessHash — pipe mode मध्ये लागत नाही
 			"",    // downloadBotToken — रिकामा = जुना pipe/file_url mode (unchanged)
 			false, // bulk — [NEW] /userbotdl चे jobs cap-free राहतात, फक्त /predownload cap केला जातो
-			logTopicID,
 		)
 		if submitErr == nil {
 			editProgress(fmt.Sprintf(
@@ -3788,66 +3808,6 @@ func progressBar(pct int) string {
 	return bar
 }
 
-// ── getOrCreateUserLogTopicID ──────────────────────────────────────────────
-
-func getOrCreateUserLogTopicID(ctx context.Context, sender *tg.User) int {
-	botClient := MainBotClient
-	if botClient == nil || sender == nil {
-		return 0
-	}
-	
-	dbUser, err := db.GetUserByTelegramID(sender.ID)
-	if err == nil && dbUser != nil && dbUser.LogTopicID > 0 {
-		return dbUser.LogTopicID
-	}
-
-	logCh, err := utils.GetLogChannelPeer(ctx, botClient.API(), botClient.PeerStorage)
-	if err != nil {
-		utils.Logger.Error("getOrCreateUserLogTopicID: failed to get log channel peer", zap.Error(err))
-		return 0
-	}
-
-	title := sender.FirstName
-	if sender.Username != "" {
-		title = fmt.Sprintf("@%s - %s", sender.Username, sender.FirstName)
-	} else if sender.LastName != "" {
-		title = fmt.Sprintf("%s %s", sender.FirstName, sender.LastName)
-	}
-	if len(title) > 128 {
-		title = title[:128]
-	}
-
-	req := &tg.MessagesCreateForumTopicRequest{
-		Peer:     &tg.InputPeerChannel{ChannelID: logCh.ChannelID, AccessHash: logCh.AccessHash},
-		Title:    title,
-		RandomID: rand.Int63(),
-	}
-
-	res, err := botClient.API().MessagesCreateForumTopic(ctx, req)
-	if err != nil {
-		utils.Logger.Error("getOrCreateUserLogTopicID: failed to create forum topic", zap.Error(err))
-		return 0
-	}
-
-	var topicID int
-	switch u := res.(type) {
-	case *tg.Updates:
-		for _, upd := range u.Updates {
-			if t, ok := upd.(*tg.UpdateMessageID); ok {
-				topicID = t.ID
-				break
-			}
-		}
-	}
-
-	if topicID > 0 {
-		db.SetUserLogTopicID(sender.ID, topicID)
-		utils.Logger.Info("Created new log topic for user", zap.Int64("userID", sender.ID), zap.Int("topicID", topicID))
-	}
-
-	return topicID
-}
-
 // ── copyToLogChannel (re-uploaded version) ────────────────────────────────────
 
 var (
@@ -3866,7 +3826,7 @@ func markCopied(chatID int64, messageID int) bool {
 	return true
 }
 
-func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass, logTopicID int) {
+func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass) {
 	botClient := MainBotClient
 	if botClient == nil {
 		return
@@ -3885,18 +3845,13 @@ func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass, lo
 		AccessHash: logCh.AccessHash,
 	}
 
-	req := &tg.MessagesSendMediaRequest{
+	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, &tg.MessagesSendMediaRequest{
 		Peer:     toPeer,
 		Media:    inputMedia,
 		Message:  msg.GetMessage(),
 		RandomID: rand.Int63(),
 		Silent:   true,
-	}
-	if logTopicID > 0 {
-		req.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: logTopicID}
-	}
-
-	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, req)
+	})
 	if sendErr != nil {
 		utils.Logger.Error("copyToLogChannel: send failed", zap.Error(sendErr))
 	} else {
@@ -3906,7 +3861,7 @@ func copyToLogChannelUploaded(msg *tg.Message, inputMedia tg.InputMediaClass, lo
 
 // ── copyToLogChannel (old — non-restricted channels साठी) ────────────────────
 
-func copyToLogChannel(msg *tg.Message, file *types.File, logTopicID int) {
+func copyToLogChannel(msg *tg.Message, file *types.File) {
 	botClient := MainBotClient
 	if botClient == nil {
 		return
@@ -3927,18 +3882,13 @@ func copyToLogChannel(msg *tg.Message, file *types.File, logTopicID int) {
 
 	media := buildInputMediaFromFile(file)
 
-	req := &tg.MessagesSendMediaRequest{
+	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, &tg.MessagesSendMediaRequest{
 		Peer:     toPeer,
 		Media:    media,
 		Message:  msg.GetMessage(),
 		RandomID: rand.Int63(),
 		Silent:   true,
-	}
-	if logTopicID > 0 {
-		req.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: logTopicID}
-	}
-
-	_, sendErr := botClient.API().MessagesSendMedia(bgCtx, req)
+	})
 	if sendErr != nil {
 		utils.Logger.Error("copyToLogChannel: MessagesSendMedia failed",
 			zap.Error(sendErr),

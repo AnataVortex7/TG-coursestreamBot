@@ -111,17 +111,6 @@ func GetUserByID(id primitive.ObjectID) (*User, error) {
 	return &user, nil
 }
 
-func SetUserLogTopicID(telegramID int64, topicID int) error {
-	ctx, cancel := Ctx()
-	defer cancel()
-
-	_, err := ColUsers.UpdateOne(ctx,
-		bson.M{"telegram_id": telegramID},
-		bson.M{"$set": bson.M{"log_topic_id": topicID}},
-	)
-	return err
-}
-
 func SetUserActive(id primitive.ObjectID, active bool) error {
 	ctx, cancel := Ctx()
 	defer cancel()
