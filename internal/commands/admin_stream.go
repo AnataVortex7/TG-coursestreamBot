@@ -112,6 +112,11 @@ func hasThumbnailStored() bool {
 // /setwatermark ने set केलेला text — video वर bottom-right corner मध्ये overlay
 // Server restart वर reset होतो (in-memory only)
 
+type processInfo struct {
+	cancel context.CancelFunc
+	userID int64
+}
+
 var watermarkStore sync.Map // key: "text", value: string
 
 func getWatermarkText() (string, bool) {
@@ -132,13 +137,13 @@ func hasWatermark() bool {
 // Multiple processes समांतराने (parallel) चालू राहू शकतात.
 
 var (
-	activeProcessStore sync.Map // key: uint64, value: context.CancelFunc
+	activeProcessStore sync.Map // uint64 -> processInfo
 	activeProcessSeq   uint64
 )
 
-func addActiveProcess(cancel context.CancelFunc) uint64 {
+func addActiveProcess(userID int64, cancel context.CancelFunc) uint64 {
 	id := atomic.AddUint64(&activeProcessSeq, 1)
-	activeProcessStore.Store(id, cancel)
+	activeProcessStore.Store(id, processInfo{cancel: cancel, userID: userID})
 	return id
 }
 
@@ -146,24 +151,29 @@ func removeActiveProcess(id uint64) {
 	activeProcessStore.Delete(id)
 }
 
-func stopAllActiveProcesses() int {
+func stopAllActiveProcessesForUser(userID int64) int {
 	count := 0
 	activeProcessStore.Range(func(key, value any) bool {
-		if cancel, ok := value.(context.CancelFunc); ok && cancel != nil {
-			cancel()
-			count++
+		if pInfo, ok := value.(processInfo); ok {
+			if pInfo.userID == userID && pInfo.cancel != nil {
+				pInfo.cancel()
+				count++
+				activeProcessStore.Delete(key)
+			}
 		}
-		activeProcessStore.Delete(key)
 		return true
 	})
 	return count
 }
 
-func hasActiveProcess() bool {
+func hasActiveProcessForUser(userID int64) bool {
 	hasAny := false
 	activeProcessStore.Range(func(key, value any) bool {
-		hasAny = true
-		return false
+		if pInfo, ok := value.(processInfo); ok && pInfo.userID == userID {
+			hasAny = true
+			return false
+		}
+		return true
 	})
 	return hasAny
 }
@@ -176,7 +186,8 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 
 	d.AddHandler(handlers.NewCommand("adminstream", adminOnly(cmdAdminStream)))
 	d.AddHandler(handlers.NewCommand("userbotdl", cmdUserbotDL))
-	d.AddHandler(handlers.NewCommand("stopuserbotdl", adminOnly(cmdStopUserbotDL)))
+	d.AddHandler(handlers.NewCommand("stopuserbotdl", cmdStopUserbotDL))
+	d.AddHandler(handlers.NewCommand("stop", cmdStopUserbotDL))
 	d.AddHandler(handlers.NewCommand("copychannel", adminOnly(cmdCopyChannel)))
 	d.AddHandler(handlers.NewCommand("predownload", adminOnly(cmdPreDownload)))
 	d.AddHandler(handlers.NewCommand("setreplace", adminOnly(cmdSetReplace)))
@@ -368,6 +379,11 @@ var (
 func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
 	if isAdmin {
+		if GetLiveUserbotClient != nil {
+			if liveClient := GetLiveUserbotClient(); liveClient != nil {
+				return liveClient, nil
+			}
+		}
 		if MainUserbotClient != nil {
 			return MainUserbotClient, nil
 		}
@@ -439,11 +455,12 @@ func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, chan
 // सध्या चालू असलेल्या सगळ्या background processes cancel करतो.
 
 func cmdStopUserbotDL(ctx *ext.Context, u *ext.Update) error {
-	if !hasActiveProcess() {
-		reply(ctx, u, "⚠️ सध्या कोणताही process चालू नाही.")
+	senderID := u.EffectiveSender().GetID()
+	if !hasActiveProcessForUser(senderID) {
+		reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
 		return dispatcher.EndGroups
 	}
-	stopped := stopAllActiveProcesses()
+	stopped := stopAllActiveProcessesForUser(senderID)
 	if stopped > 0 {
 		reply(ctx, u, fmt.Sprintf("🛑 एकूण %d चालू batch processes stop केले!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.", stopped))
 	} else {
@@ -517,42 +534,31 @@ func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 1 {
 		reply(ctx, u,
-			"📝 *Usage:* `/setreplace old=new [old2=new2 ...]`\n\n"+
+			"📝 *Usage:* `/setreplace old_text=new_text`\n\n"+
 				"Examples:\n"+
 				"`/setreplace hello=नमस्ते`\n"+
-				"`/setreplace Course=कोर्स Bot=बॉट`\n\n"+
-				"Caption मधील 'old' word आढळल्यास 'new' ने replace होईल.\n"+
-				"एकावेळी multiple pairs देता येतात.\n"+
+				"`/setreplace Please subscribe to my channel.= ` (काढून टाकण्यासाठी)\n\n"+
+				"Caption मधील 'old_text' आढळल्यास 'new_text' ने replace होईल.\n"+
 				"सध्याचे rules बघायला: /listreplace")
 		return dispatcher.EndGroups
 	}
 
-	added := []string{}
-	invalid := []string{}
-
-	for _, pair := range a {
-		parts := strings.SplitN(pair, "=", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
-			invalid = append(invalid, pair)
-			continue
-		}
-		oldWord := strings.TrimSpace(parts[0])
-		newWord := strings.TrimSpace(parts[1])
-		captionReplaceStore.Store(oldWord, newWord)
-		added = append(added, fmt.Sprintf("`%s` → `%s`", oldWord, newWord))
+	fullText := strings.Join(a, " ")
+	parts := strings.SplitN(fullText, "=", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+		reply(ctx, u, "❌ Invalid format. '=' असणे आवश्यक आहे.\nExample: `/setreplace old=new`")
+		return dispatcher.EndGroups
 	}
 
-	msg := ""
-	if len(added) > 0 {
-		msg += fmt.Sprintf("✅ Replace rules set (%d):\n%s", len(added), strings.Join(added, "\n"))
-	}
-	if len(invalid) > 0 {
-		msg += fmt.Sprintf("\n\n❌ Invalid pairs (= नाही):\n%s", strings.Join(invalid, ", "))
-	}
-	if msg == "" {
-		msg = "❌ कोणताही valid pair नाही."
-	}
-	reply(ctx, u, msg)
+	oldWord := strings.TrimSpace(parts[0])
+	newWord := strings.TrimSpace(parts[1])
+	
+	// If the user deliberately provides quotes for exact matching, we can remove them.
+	// But TrimSpace usually handles normal use cases.
+	
+	captionReplaceStore.Store(oldWord, newWord)
+
+	reply(ctx, u, fmt.Sprintf("✅ Replace rule set:\n\n`%s`\n⬇️\n`%s`", oldWord, newWord))
 	return dispatcher.EndGroups
 }
 
@@ -1230,7 +1236,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	go func() {
 		// [NEW] Cancel context — /stopuserbotdl ने cancel करता येतो
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(bgCancel)
+		pID := addActiveProcess(senderID, bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -1523,7 +1529,11 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			updateSummary()
 
 			if totalMsgs > 1 && msgIdx < len(msgIDList)-1 {
-				time.Sleep(1 * time.Second)
+				time.Sleep(3 * time.Second)
+				if successCount > 0 && successCount%10 == 0 {
+					editProgress("⏳ Anti-Spam Delay: Telegram limits टाळण्यासाठी 15 सेकंद थांबतोय...")
+					time.Sleep(15 * time.Second)
+				}
 			}
 		}
 
@@ -1686,6 +1696,7 @@ func fastCopyMessage(
 // lecture परत मागेल तेव्हा (delete केली असली तरी) — fast-path (cache-hit)
 // मुळे लगेच log-channel वरून forward होतं, नवीन watermark job चालतच नाही.
 func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
+	senderID := u.EffectiveSender().GetID()
 	a := args(u)
 	if len(a) < 2 {
 		reply(ctx, u,
@@ -1767,7 +1778,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 
 	go func() {
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(bgCancel)
+		pID := addActiveProcess(senderID, bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -2158,6 +2169,7 @@ func runWithFloodRetryGeneric(bgCtx context.Context, maxFloodRetries int, fn fun
 // admin-दिलेला arbitrary channel पास केलाय (globally-configured SendChannel
 // ऐवजी). /stopuserbotdl नेच हे पण थांबवता येतं (तोच shared cancel-state).
 func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
+	senderID := u.EffectiveSender().GetID()
 	a := args(u)
 
 	if len(a) < 3 {
@@ -2276,7 +2288,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 
 	go func() {
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(bgCancel)
+		pID := addActiveProcess(senderID, bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
