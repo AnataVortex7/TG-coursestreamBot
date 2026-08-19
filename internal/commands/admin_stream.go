@@ -455,7 +455,7 @@ func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, chan
 // सध्या चालू असलेल्या सगळ्या background processes cancel करतो.
 
 func cmdStopUserbotDL(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveSender().GetID()
+	senderID := u.EffectiveUser().GetID()
 	if !hasActiveProcessForUser(senderID) {
 		reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
 		return dispatcher.EndGroups
@@ -1696,7 +1696,7 @@ func fastCopyMessage(
 // lecture परत मागेल तेव्हा (delete केली असली तरी) — fast-path (cache-hit)
 // मुळे लगेच log-channel वरून forward होतं, नवीन watermark job चालतच नाही.
 func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveSender().GetID()
+	senderID := u.EffectiveUser().GetID()
 	a := args(u)
 	if len(a) < 2 {
 		reply(ctx, u,
@@ -2169,7 +2169,7 @@ func runWithFloodRetryGeneric(bgCtx context.Context, maxFloodRetries int, fn fun
 // admin-दिलेला arbitrary channel पास केलाय (globally-configured SendChannel
 // ऐवजी). /stopuserbotdl नेच हे पण थांबवता येतं (तोच shared cancel-state).
 func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveSender().GetID()
+	senderID := u.EffectiveUser().GetID()
 	a := args(u)
 
 	if len(a) < 3 {
