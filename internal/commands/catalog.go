@@ -231,6 +231,12 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 	case "userbot_watermark":
 		setPendingWatermarkPrompt(ctx, u, chatID)
 
+	case "userbot_rm_watermark":
+		watermarkStore.Delete(chatID)
+		_ = db.SetUserWatermark(chatID, "")
+		text, markup := renderPremiumMenuView(chatID)
+		editCatalogMessage(ctx, u, "✅ Watermark clear केला!\n\n"+text, markup)
+
 	case "userbot_logout":
 		_ = db.DeleteUserBotSessionForUser(chatID)
 		text, markup := renderPremiumMenuView(chatID)
@@ -2037,6 +2043,9 @@ func renderPremiumMenuView(userID int64) (string, tg.ReplyMarkupClass) {
 		}},
 		{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "💧 Set Watermark Text", Data: []byte("wc:userbot_watermark")},
+		}},
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "🗑️ Remove Watermark", Data: []byte("wc:userbot_rm_watermark")},
 		}},
 		{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "🚪 Logout Userbot", Data: []byte("wc:userbot_logout")},

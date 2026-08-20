@@ -506,11 +506,28 @@ func cmdSetWatermark(ctx *ext.Context, u *ext.Update) error {
 // ── /clearwatermark ───────────────────────────────────────────────────────────
 
 func cmdClearWatermark(ctx *ext.Context, u *ext.Update) error {
-	if !hasWatermark() {
+	senderID := u.EffectiveUser().GetID()
+	cleared := false
+
+	if hasWatermark() {
+		watermarkStore.Delete("text")
+		cleared = true
+	}
+
+	if _, ok := watermarkStore.Load(senderID); ok {
+		watermarkStore.Delete(senderID)
+		cleared = true
+	}
+	if wm, err := db.GetUserWatermark(senderID); err == nil && wm != "" {
+		_ = db.SetUserWatermark(senderID, "")
+		cleared = true
+	}
+
+	if !cleared {
 		reply(ctx, u, "💧 कोणताही watermark set नाही.")
 		return dispatcher.EndGroups
 	}
-	watermarkStore.Delete("text")
+
 	reply(ctx, u, "✅ Watermark clear केला. Video uploads आता watermark शिवाय जातील.")
 	return dispatcher.EndGroups
 }
@@ -518,8 +535,9 @@ func cmdClearWatermark(ctx *ext.Context, u *ext.Update) error {
 // ── /showwatermark ────────────────────────────────────────────────────────────
 
 func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
-	text, ok := getWatermarkText()
-	if !ok {
+	senderID := u.EffectiveUser().GetID()
+	text, ok := getWatermarkTextForUser(senderID)
+	if !ok || text == "" {
 		reply(ctx, u, "💧 कोणताही watermark set नाही.\nSet करायला: `/setwatermark <text>`")
 		return dispatcher.EndGroups
 	}
