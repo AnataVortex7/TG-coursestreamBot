@@ -259,12 +259,30 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 			}
 			
 			var lines []string
+			topMsgMap := make(map[int64]int)
+			for _, dClass := range modified.GetDialogs() {
+				if d, ok := dClass.(*tg.Dialog); ok {
+					var peerID int64
+					switch p := d.Peer.(type) {
+					case *tg.PeerChannel:
+						peerID = p.ChannelID
+					case *tg.PeerChat:
+						peerID = p.ChatID
+					}
+					if peerID != 0 {
+						topMsgMap[peerID] = d.TopMessage
+					}
+				}
+			}
+
 			for _, chatClass := range modified.GetChats() {
 				switch c := chatClass.(type) {
 				case *tg.Channel:
-					lines = append(lines, fmt.Sprintf("📢 **%s** (`-100%d`)", c.Title, c.ID))
+					top := topMsgMap[c.ID]
+					lines = append(lines, fmt.Sprintf("📢 **%s** (`-100%d`)\n └ Last Msg ID: `%d`", c.Title, c.ID, top))
 				case *tg.Chat:
-					lines = append(lines, fmt.Sprintf("👥 **%s** (`-%d`)", c.Title, c.ID))
+					top := topMsgMap[c.ID]
+					lines = append(lines, fmt.Sprintf("👥 **%s** (`-%d`)\n └ Last Msg ID: `%d`", c.Title, c.ID, top))
 				}
 			}
 			
