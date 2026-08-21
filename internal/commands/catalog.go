@@ -242,7 +242,7 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 					editCatalogMessage(ctx, u, fmt.Sprintf("DEBUG MAIN PANIC: %v", r), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
 				}
 			}()
-			editCatalogMessage(ctx, u, "⏳ Fetching channels... Please wait.", &tg.ReplyInlineMarkup{})
+			editCatalogMessage(ctx, u, "⏳ Fetching channels... Please wait.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
@@ -620,7 +620,10 @@ func editCatalogMessage(ctx *ext.Context, u *ext.Update, text string, markup tg.
 
 	utils.Logger.Sugar().Errorw("catalog: EditMessage failed, sending fallback message",
 		"chat_id", chatID, "msg_id", cbq.MsgID, "err", err)
-	if _, sendErr := ctx.Reply(u, ext.ReplyTextString(text), &ext.ReplyOpts{Markup: markup}); sendErr != nil {
+	if _, sendErr := ctx.SendMessage(chatID, &tg.MessagesSendMessageRequest{
+		Message:     text,
+		ReplyMarkup: markup,
+	}); sendErr != nil {
 		utils.Logger.Sugar().Errorw("catalog: fallback message send also failed", "chat_id", chatID, "err", sendErr)
 	}
 }
