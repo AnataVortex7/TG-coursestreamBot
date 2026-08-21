@@ -372,21 +372,26 @@ func cmdGrantUserbotAccess(ctx *ext.Context, u *ext.Update) error {
 
 
 var (
-	userbotClientsMu sync.Mutex
-	userbotClients   = make(map[int64]*gotgproto.Client)
+	AdminImpersonateStore sync.Map // adminID (int64) -> targetUserID (int64)
+	userbotClientsMu      sync.Mutex
+	userbotClients        = make(map[int64]*gotgproto.Client)
 )
 
 func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
 	if isAdmin {
-		if GetLiveUserbotClient != nil {
-			if liveClient := GetLiveUserbotClient(); liveClient != nil {
-				return liveClient, nil
+		if targetUser, ok := AdminImpersonateStore.Load(userID); ok {
+			userID = targetUser.(int64)
+		} else {
+			if GetLiveUserbotClient != nil {
+				if liveClient := GetLiveUserbotClient(); liveClient != nil {
+					return liveClient, nil
+				}
 			}
-		}
-		if GetUserbotClient != nil {
-			if uc := GetUserbotClient(); uc != nil {
-				return uc, nil
+			if GetUserbotClient != nil {
+				if uc := GetUserbotClient(); uc != nil {
+					return uc, nil
+				}
 			}
 		}
 	}

@@ -231,6 +231,61 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 	case "userbot_watermark":
 		setPendingWatermarkPrompt(ctx, u, chatID)
 
+	case "userbot_select_user":
+		text, markup := renderImpersonateMenu(chatID)
+		editCatalogMessage(ctx, u, text, markup)
+		
+	case "userbot_view_channels":
+		go func() {
+			client, err := GetUserbotClientForUser(chatID)
+			if err != nil || client == nil {
+				editCatalogMessage(ctx, u, "❌ Userbot account connected नाही किंवा Error आला.\n\n"+err.Error(), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+				return
+			}
+			
+			dReq, err := client.API().MessagesGetDialogs(context.Background(), &tg.MessagesGetDialogsRequest{
+				OffsetPeer: &tg.InputPeerEmpty{},
+				Limit: 100,
+			})
+			if err != nil {
+				editCatalogMessage(ctx, u, "❌ Error fetching channels: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+				return
+			}
+			
+			modified, ok := dReq.AsModified()
+			if !ok {
+				editCatalogMessage(ctx, u, "❌ Error parsing channels (API response format unknown).", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+				return
+			}
+			
+			var lines []string
+			for _, chatClass := range modified.GetChats() {
+				switch c := chatClass.(type) {
+				case *tg.Channel:
+					lines = append(lines, fmt.Sprintf("📢 **%s** (`-100%d`)", c.Title, c.ID))
+				case *tg.Chat:
+					lines = append(lines, fmt.Sprintf("👥 **%s** (`-%d`)", c.Title, c.ID))
+				}
+			}
+			
+			if len(lines) == 0 {
+				editCatalogMessage(ctx, u, "📭 या Account मध्ये कोणतेही Channels किंवा Groups नाहीत.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+				return
+			}
+			
+			text := "📋 **Joined Channels:**\n\n" + strings.Join(lines, "\n")
+			if len(text) > 4000 {
+				text = text[:4000] + "\n\n...(Too many to show)"
+			}
+			
+			editCatalogMessage(ctx, u, text, &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+		}()
+		
+	case "impersonate_reset":
+		AdminImpersonateStore.Delete(chatID)
+		text, markup := renderUserbotStatusDetailView(chatID)
+		editCatalogMessage(ctx, u, "✅ Userbot selection reset! आता तुमचं default/स्वतःचं account वापरलं जाईल.\n\n"+text, markup)
+		
 	case "userbot_rm_watermark":
 		watermarkStore.Delete(chatID)
 		_ = db.SetUserWatermark(chatID, "")
@@ -242,8 +297,6 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		text, markup := renderPremiumMenuView(chatID)
 		editCatalogMessage(ctx, u, "🚪 Userbot Account Logout केला!\n\n"+text, markup)
 
-		// फक्त page-indicator बटण ("📄 2/5") — काहीच करायचं नाही, already answered वर.
-
 	case "root":
 		text, markup, err := renderCourseListView(chatID)
 		if err != nil {
@@ -251,6 +304,22 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 			return dispatcher.EndGroups
 		}
 		editCatalogMessage(ctx, u, text, markup)
+		
+	default:
+		if strings.HasPrefix(parts[0], "impersonate_") {
+			targetIDStr := strings.TrimPrefix(parts[0], "impersonate_")
+			targetID, err := strconv.ParseInt(targetIDStr, 10, 64)
+			if err == nil {
+				AdminImpersonateStore.Store(chatID, targetID)
+				text, markup := renderUserbotStatusDetailView(chatID)
+				editCatalogMessage(ctx, u, fmt.Sprintf("✅ Account set! आता पुढील Userbot downloads साठी **User %d** चं account वापरलं जाईल.\n\n", targetID)+text, markup)
+			} else {
+				text, markup := renderUserbotStatusDetailView(chatID)
+				editCatalogMessage(ctx, u, "❌ Invalid User ID!\n\n"+text, markup)
+			}
+			return dispatcher.EndGroups
+		}
+
 
 	case "course":
 		if len(parts) < 2 {
@@ -2021,13 +2090,19 @@ func renderPremiumMenuView(userID int64) (string, tg.ReplyMarkupClass) {
 		scStr = fmt.Sprintf("`%d`", scID)
 	}
 
+	impersonationStr := "Default (Own Account)"
+	if target, ok := AdminImpersonateStore.Load(userID); ok {
+		impersonationStr = fmt.Sprintf("User ID: %d", target.(int64))
+	}
+
 	text := fmt.Sprintf(
 		"⭐ *Premium Features & Userbot Tools*\n\n"+
 			"👤 Userbot Status: %s\n"+
 			"💧 Custom Watermark: `%s`\n"+
-			"📢 Destination Channel: %s\n\n"+
+			"📢 Destination Channel: %s\n"+
+			"👥 Currently Using: %s\n\n"+
 			"खालीलपैकी पर्याय निवडा:",
-		statusStr, wm, scStr,
+		statusStr, wm, scStr, impersonationStr,
 	)
 
 	rows := []tg.KeyboardButtonRow{
@@ -2054,8 +2129,75 @@ func renderPremiumMenuView(userID int64) (string, tg.ReplyMarkupClass) {
 			&tg.KeyboardButtonCallback{Text: "⬅️ Back to Main Menu", Data: []byte("wc:root")},
 		}},
 	}
+	
+	if isAdmin {
+		rows = append([]tg.KeyboardButtonRow{
+			{Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonCallback{Text: "👥 Select Userbot Account", Data: []byte("wc:userbot_select_user")},
+			}},
+			{Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonCallback{Text: "📋 View Joined Channels", Data: []byte("wc:userbot_view_channels")},
+			}},
+		}, rows...)
+	}
 	return text, &tg.ReplyInlineMarkup{Rows: rows}
 }
+
+func renderImpersonateMenu(senderID int64) (string, tg.ReplyMarkupClass) {
+	docs, err := db.GetAllUserBotSessions()
+	if err != nil || len(docs) == 0 {
+		text := "❌ कोणीही Userbot ने login केलेलं नाही!"
+		markup := &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
+			{Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonCallback{Text: "⬅️ Back", Data: []byte("wc:userbot_status")},
+			}},
+		}}
+		return text, markup
+	}
+
+	var rows []tg.KeyboardButtonRow
+	for _, doc := range docs {
+		ownerID := int64(0)
+		if strings.HasPrefix(doc.Key, "user_") {
+			parsed, _ := strconv.ParseInt(strings.TrimPrefix(doc.Key, "user_"), 10, 64)
+			ownerID = parsed
+		}
+		
+		name := doc.FirstName
+		if name == "" {
+			name = doc.Phone
+		}
+		
+		btnText := fmt.Sprintf("👤 %s (ID: %d)", name, ownerID)
+		if ownerID == 0 {
+			btnText = fmt.Sprintf("👤 %s (Default)", name)
+		}
+		
+		data := fmt.Sprintf("wc:impersonate_%d", ownerID)
+		
+		rows = append(rows, tg.KeyboardButtonRow{
+			Buttons: []tg.KeyboardButtonClass{
+				&tg.KeyboardButtonCallback{Text: btnText, Data: []byte(data)},
+			},
+		})
+	}
+	
+	rows = append(rows, tg.KeyboardButtonRow{
+		Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "🔄 Reset (Use Own)", Data: []byte("wc:impersonate_reset")},
+		},
+	})
+	
+	rows = append(rows, tg.KeyboardButtonRow{
+		Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "⬅️ Back", Data: []byte("wc:userbot_status")},
+		},
+	})
+
+	text := "👥 *Select Userbot Account*\n\nखालीलपैकी कोणाचं account वापरायचं आहे ते निवडा:"
+	return text, &tg.ReplyInlineMarkup{Rows: rows}
+}
+
 
 func renderUserbotStatusDetailView(userID int64) (string, tg.ReplyMarkupClass) {
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)

@@ -1030,6 +1030,7 @@ func handlePendingReply(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, fmt.Sprintf("✅ Custom Watermark set झाला: `%s`", text))
 		return dispatcher.EndGroups
 	}
+
 	mc, ok := menuRegistry[p.key]
 	if !ok {
 		clearPending(senderID)

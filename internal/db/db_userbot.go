@@ -135,3 +135,20 @@ func DeleteUserBotSessionForUser(ownerID int64) error {
 	_, err := colUserbot().DeleteOne(ctx, bson.M{"key": key})
 	return err
 }
+
+func GetAllUserBotSessions() ([]UserBotSessionDoc, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cursor, err := colUserbot().Find(ctx, bson.M{})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var docs []UserBotSessionDoc
+	if err = cursor.All(ctx, &docs); err != nil {
+		return nil, err
+	}
+	return docs, nil
+}
