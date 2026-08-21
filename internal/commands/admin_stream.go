@@ -3414,7 +3414,7 @@ func downloadWatermarkAndReupload(
 		}
 
 		d := downloader.NewDownloader()
-		_, err = d.Download(dlClient.API(), file.Location).WithThreads(2).Parallel(dlCtx, dlWriter)
+		_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(dlCtx, dlWriter)
 		tmpFile.Close()
 		if err != nil {
 			return nil, false, fmt.Errorf("pre-download failed: %w", err)
@@ -3577,7 +3577,7 @@ func downloadAndReupload(
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(dlClient.API(), file.Location).WithThreads(2).Parallel(dlCtx, dlWriter)
+	_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
 		os.Remove(tmpPath)
@@ -3650,7 +3650,7 @@ func downloadWatermarkAndReuploadLocal(
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(dlClient.API(), file.Location).WithThreads(2).Parallel(dlCtx, dlWriter)
+	_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
 		os.Remove(inputPath)
