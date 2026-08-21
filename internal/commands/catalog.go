@@ -239,8 +239,12 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		editCatalogMessage(ctx, u, "⏳ Fetching channels... Please wait.", &tg.ReplyInlineMarkup{})
 		go func() {
 			client, err := GetUserbotClientForUser(chatID)
-			if err != nil || client == nil {
-				editCatalogMessage(ctx, u, "❌ Userbot account connected नाही किंवा Error आला.\n\n"+err.Error(), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+			if err != nil {
+				editCatalogMessage(ctx, u, "❌ Error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+				return
+			}
+			if client == nil {
+				editCatalogMessage(ctx, u, "❌ Userbot account connected नाही. कृपया आधी Login करा.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
 				return
 			}
 			
