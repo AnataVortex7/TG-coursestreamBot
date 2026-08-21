@@ -236,6 +236,7 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		editCatalogMessage(ctx, u, text, markup)
 		
 	case "userbot_view_channels":
+		editCatalogMessage(ctx, u, "⏳ Fetching channels... Please wait.", &tg.ReplyInlineMarkup{})
 		go func() {
 			client, err := GetUserbotClientForUser(chatID)
 			if err != nil || client == nil {
@@ -243,7 +244,10 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 				return
 			}
 			
-			dReq, err := client.API().MessagesGetDialogs(context.Background(), &tg.MessagesGetDialogsRequest{
+			reqCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			
+			dReq, err := client.API().MessagesGetDialogs(reqCtx, &tg.MessagesGetDialogsRequest{
 				OffsetPeer: &tg.InputPeerEmpty{},
 				Limit: 100,
 			})
