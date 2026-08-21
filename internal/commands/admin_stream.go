@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -3375,33 +3374,40 @@ func downloadWatermarkAndReupload(
 	koyebURL := os.Getenv("KOYEB_URL")
 	if koyebURL != "" {
 		editProgress(fmt.Sprintf(
+			"☁️ (Phase 1) Downloading to main server...\n📄 `%s`\n📌 Msg: `%d`",
+			file.FileName, msgID,
+		))
+
+		// ── Download to local disk first to avoid proxy timeouts (HF 60s timeout) ──
+		tmpFile, err := os.CreateTemp("", "colab-pre-*.tmp")
+		if err != nil {
+			return nil, false, fmt.Errorf("temp file create failed: %w", err)
+		}
+		tmpPath := tmpFile.Name()
+		defer os.Remove(tmpPath)
+
+		var dlWriter io.Writer = tmpFile
+		if onDownloadProgress != nil {
+			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
+		}
+
+		d := downloader.NewDownloader()
+		_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
+		tmpFile.Close()
+		if err != nil {
+			return nil, false, fmt.Errorf("pre-download failed: %w", err)
+		}
+
+		editProgress(fmt.Sprintf(
 			"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
 			file.FileName, msgID,
 		))
 
-		// Pipe token — Koyeb disk nahi, userbot directly response madhe pipe karil
+		// Temp file token
 		pipeToken := fmt.Sprintf("pipe-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
-
-		// PipeFn: Colab GET request aali ki userbot download pipe karil
-		pipeFn := func(w http.ResponseWriter) error {
-			pipeReader, pipeWriter := io.Pipe()
-			dlErrCh := make(chan error, 1)
-			go func() {
-				defer pipeWriter.Close()
-				d := downloader.NewDownloader()
-				_, dlErr := d.Download(dlClient.API(), file.Location).Stream(dlCtx, pipeWriter)
-				dlErrCh <- dlErr
-			}()
-			_, copyErr := io.Copy(w, pipeReader)
-			dlErr := <-dlErrCh
-			if copyErr != nil {
-				return copyErr
-			}
-			return dlErr
-		}
-
-		wmqueue.RegisterPipe(pipeToken, file.FileName, file.FileSize, pipeFn)
-		defer wmqueue.UnregisterPipe(pipeToken)
+		
+		wmqueue.RegisterTempFile(pipeToken, tmpPath, file.FileName)
+		defer wmqueue.UnregisterTempFile(pipeToken)
 
 		fileURL := fmt.Sprintf("%s/api/colab/tempfile/%s", koyebURL, pipeToken)
 
