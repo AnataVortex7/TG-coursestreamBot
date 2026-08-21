@@ -236,9 +236,20 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		editCatalogMessage(ctx, u, text, markup)
 		
 	case "userbot_view_channels":
-		editCatalogMessage(ctx, u, "⏳ Fetching channels... Please wait.", &tg.ReplyInlineMarkup{})
-		go func() {
-			client, err := GetUserbotClientForUser(chatID)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					editCatalogMessage(ctx, u, fmt.Sprintf("DEBUG MAIN PANIC: %v", r), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+				}
+			}()
+			editCatalogMessage(ctx, u, "⏳ Fetching channels... Please wait.", &tg.ReplyInlineMarkup{})
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						editCatalogMessage(ctx, u, fmt.Sprintf("DEBUG GO FUNC PANIC: %v", r), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
+					}
+				}()
+				client, err := GetUserbotClientForUser(chatID)
 			if err != nil {
 				editCatalogMessage(ctx, u, "❌ Error: "+err.Error(), &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
 				return
@@ -305,6 +316,7 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 			}
 			
 			editCatalogMessage(ctx, u, text, &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
+		}()
 		}()
 		return dispatcher.EndGroups
 		
