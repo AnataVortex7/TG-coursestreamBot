@@ -1439,6 +1439,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					case <-bgCtx.Done():
 						return nil, bgCtx.Err()
 					}
+				} else if strings.Contains(strings.ToLower(err.Error()), "deleted") {
+					return nil, err
 				} else if attempt < maxRetries {
 					editProgress(fmt.Sprintf("🔄 Retry %d/%d\n📌 Msg: `%d`", attempt, maxRetries, msgID))
 					time.Sleep(5 * time.Second)
@@ -2458,6 +2460,9 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 					return pm, nil
 				}
 				if bgCtx.Err() != nil {
+					return nil, err
+				}
+				if strings.Contains(strings.ToLower(err.Error()), "deleted") {
 					return nil, err
 				}
 			}
