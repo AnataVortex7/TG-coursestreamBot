@@ -2877,16 +2877,38 @@ func prepareMessage(
 	defer stallCancel()
 	stallTimer := time.AfterFunc(30*time.Minute, stallCancel)
 
+	var dlStartTime time.Time
+	var dlLastTime time.Time
+	var dlLastWritten int64
+	var dlSpeedStr string = "0.00 MB/s"
+
 	onDownloadProgress := func(written, total int64) {
 		stallTimer.Reset(30 * time.Minute)
 		if total <= 0 {
 			return
 		}
+
+		now := time.Now()
+		if dlStartTime.IsZero() {
+			dlStartTime = now
+			dlLastTime = now
+			dlLastWritten = written
+		} else {
+			elapsed := now.Sub(dlLastTime).Seconds()
+			if elapsed >= 1.0 { // update speed every 1s
+				bytesPerSec := float64(written-dlLastWritten) / elapsed
+				dlSpeedStr = fmt.Sprintf("%.2f MB/s", bytesPerSec/(1024*1024))
+				dlLastTime = now
+				dlLastWritten = written
+			}
+		}
+
 		pct := written * 100 / total
 		bar := progressBar(int(pct))
 		editProgress(fmt.Sprintf(
-			"📥 Downloading...STEP.1/3\n📄 `%s`\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
+			"📥 (Phase 1) Downloading...STEP.1/3\n📄 `%s`\n⚡ Speed: %s\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
 			file.FileName,
+			dlSpeedStr,
 			formatSize(written), formatSize(total),
 			bar, pct, msgID,
 		))
@@ -3386,13 +3408,13 @@ func downloadWatermarkAndReupload(
 		tmpPath := tmpFile.Name()
 		defer os.Remove(tmpPath)
 
-		var dlWriter io.Writer = tmpFile
+		var dlWriter io.WriterAt = tmpFile
 		if onDownloadProgress != nil {
 			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
 		}
 
 		d := downloader.NewDownloader()
-		_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
+		_, err = d.Download(dlClient.API(), file.Location).WithThreads(2).Parallel(dlCtx, dlWriter)
 		tmpFile.Close()
 		if err != nil {
 			return nil, false, fmt.Errorf("pre-download failed: %w", err)
@@ -3545,7 +3567,7 @@ func downloadAndReupload(
 	// delete caller karnar — thumb extract sathi lagel
 	// (defer os.Remove kadhun takla)
 
-	var dlWriter io.Writer = tmpFile
+	var dlWriter io.WriterAt = tmpFile
 	if onDownloadProgress != nil {
 		dlWriter = &progressWriter{
 			w:          tmpFile,
@@ -3555,7 +3577,7 @@ func downloadAndReupload(
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
+	_, err = d.Download(dlClient.API(), file.Location).WithThreads(2).Parallel(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
 		os.Remove(tmpPath)
@@ -3622,13 +3644,13 @@ func downloadWatermarkAndReuploadLocal(
 	}
 	inputPath := tmpFile.Name()
 
-	var dlWriter io.Writer = tmpFile
+	var dlWriter io.WriterAt = tmpFile
 	if onDownloadProgress != nil {
 		dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(dlClient.API(), file.Location).Stream(dlCtx, dlWriter)
+	_, err = d.Download(dlClient.API(), file.Location).WithThreads(2).Parallel(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
 		os.Remove(inputPath)
@@ -3796,10 +3818,12 @@ type progressWriter struct {
 	written    int64
 	lastPct    int64
 	onProgress func(written, total int64)
+	mu         sync.Mutex // Added for thread-safety in WriteAt
 }
 
 func (p *progressWriter) Write(b []byte) (int, error) {
 	n, err := p.w.Write(b)
+	p.mu.Lock()
 	p.written += int64(n)
 	if p.total > 0 {
 		pct := p.written * 100 / p.total
@@ -3810,6 +3834,28 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 			}
 		}
 	}
+	p.mu.Unlock()
+	return n, err
+}
+
+func (p *progressWriter) WriteAt(b []byte, off int64) (int, error) {
+	wAt, ok := p.w.(io.WriterAt)
+	if !ok {
+		return 0, fmt.Errorf("underlying writer does not implement WriterAt")
+	}
+	n, err := wAt.WriteAt(b, off)
+	p.mu.Lock()
+	p.written += int64(n)
+	if p.total > 0 {
+		pct := p.written * 100 / p.total
+		if pct >= p.lastPct+5 || p.written >= p.total {
+			p.lastPct = pct
+			if p.onProgress != nil {
+				p.onProgress(p.written, p.total)
+			}
+		}
+	}
+	p.mu.Unlock()
 	return n, err
 }
 
