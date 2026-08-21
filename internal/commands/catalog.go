@@ -302,6 +302,7 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 			
 			editCatalogMessage(ctx, u, text, &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:userbot_status")})
 		}()
+		return dispatcher.EndGroups
 		
 	case "impersonate_reset":
 		AdminImpersonateStore.Delete(chatID)
