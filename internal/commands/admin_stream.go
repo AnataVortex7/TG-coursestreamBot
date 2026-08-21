@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,11 +112,6 @@ func hasThumbnailStored() bool {
 // /setwatermark ने set केलेला text — video वर bottom-right corner मध्ये overlay
 // Server restart वर reset होतो (in-memory only)
 
-type processInfo struct {
-	cancel context.CancelFunc
-	userID int64
-}
-
 var watermarkStore sync.Map // key: "text", value: string
 
 func getWatermarkText() (string, bool) {
@@ -136,13 +132,13 @@ func hasWatermark() bool {
 // Multiple processes समांतराने (parallel) चालू राहू शकतात.
 
 var (
-	activeProcessStore sync.Map // uint64 -> processInfo
+	activeProcessStore sync.Map // key: uint64, value: context.CancelFunc
 	activeProcessSeq   uint64
 )
 
-func addActiveProcess(userID int64, cancel context.CancelFunc) uint64 {
+func addActiveProcess(cancel context.CancelFunc) uint64 {
 	id := atomic.AddUint64(&activeProcessSeq, 1)
-	activeProcessStore.Store(id, processInfo{cancel: cancel, userID: userID})
+	activeProcessStore.Store(id, cancel)
 	return id
 }
 
@@ -150,29 +146,24 @@ func removeActiveProcess(id uint64) {
 	activeProcessStore.Delete(id)
 }
 
-func stopAllActiveProcessesForUser(userID int64) int {
+func stopAllActiveProcesses() int {
 	count := 0
 	activeProcessStore.Range(func(key, value any) bool {
-		if pInfo, ok := value.(processInfo); ok {
-			if pInfo.userID == userID && pInfo.cancel != nil {
-				pInfo.cancel()
-				count++
-				activeProcessStore.Delete(key)
-			}
+		if cancel, ok := value.(context.CancelFunc); ok && cancel != nil {
+			cancel()
+			count++
 		}
+		activeProcessStore.Delete(key)
 		return true
 	})
 	return count
 }
 
-func hasActiveProcessForUser(userID int64) bool {
+func hasActiveProcess() bool {
 	hasAny := false
 	activeProcessStore.Range(func(key, value any) bool {
-		if pInfo, ok := value.(processInfo); ok && pInfo.userID == userID {
-			hasAny = true
-			return false
-		}
-		return true
+		hasAny = true
+		return false
 	})
 	return hasAny
 }
@@ -185,8 +176,7 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 
 	d.AddHandler(handlers.NewCommand("adminstream", adminOnly(cmdAdminStream)))
 	d.AddHandler(handlers.NewCommand("userbotdl", cmdUserbotDL))
-	d.AddHandler(handlers.NewCommand("stopuserbotdl", cmdStopUserbotDL))
-	d.AddHandler(handlers.NewCommand("stop", cmdStopUserbotDL))
+	d.AddHandler(handlers.NewCommand("stopuserbotdl", adminOnly(cmdStopUserbotDL)))
 	d.AddHandler(handlers.NewCommand("copychannel", adminOnly(cmdCopyChannel)))
 	d.AddHandler(handlers.NewCommand("predownload", adminOnly(cmdPreDownload)))
 	d.AddHandler(handlers.NewCommand("setreplace", adminOnly(cmdSetReplace)))
@@ -371,27 +361,15 @@ func cmdGrantUserbotAccess(ctx *ext.Context, u *ext.Update) error {
 
 
 var (
-	AdminImpersonateStore sync.Map // adminID (int64) -> targetUserID (int64)
-	userbotClientsMu      sync.Mutex
-	userbotClients        = make(map[int64]*gotgproto.Client)
+	userbotClientsMu sync.Mutex
+	userbotClients   = make(map[int64]*gotgproto.Client)
 )
 
 func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
 	if isAdmin {
-		if targetUser, ok := AdminImpersonateStore.Load(userID); ok {
-			userID = targetUser.(int64)
-		} else {
-			if GetLiveUserbotClient != nil {
-				if liveClient := GetLiveUserbotClient(); liveClient != nil {
-					return liveClient, nil
-				}
-			}
-			if GetUserbotClient != nil {
-				if uc := GetUserbotClient(); uc != nil {
-					return uc, nil
-				}
-			}
+		if MainUserbotClient != nil {
+			return MainUserbotClient, nil
 		}
 	}
 
@@ -461,12 +439,11 @@ func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, chan
 // सध्या चालू असलेल्या सगळ्या background processes cancel करतो.
 
 func cmdStopUserbotDL(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveUser().GetID()
-	if !hasActiveProcessForUser(senderID) {
-		reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
+	if !hasActiveProcess() {
+		reply(ctx, u, "⚠️ सध्या कोणताही process चालू नाही.")
 		return dispatcher.EndGroups
 	}
-	stopped := stopAllActiveProcessesForUser(senderID)
+	stopped := stopAllActiveProcesses()
 	if stopped > 0 {
 		reply(ctx, u, fmt.Sprintf("🛑 एकूण %d चालू batch processes stop केले!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.", stopped))
 	} else {
@@ -510,28 +487,11 @@ func cmdSetWatermark(ctx *ext.Context, u *ext.Update) error {
 // ── /clearwatermark ───────────────────────────────────────────────────────────
 
 func cmdClearWatermark(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveUser().GetID()
-	cleared := false
-
-	if hasWatermark() {
-		watermarkStore.Delete("text")
-		cleared = true
-	}
-
-	if _, ok := watermarkStore.Load(senderID); ok {
-		watermarkStore.Delete(senderID)
-		cleared = true
-	}
-	if wm, err := db.GetUserWatermark(senderID); err == nil && wm != "" {
-		_ = db.SetUserWatermark(senderID, "")
-		cleared = true
-	}
-
-	if !cleared {
+	if !hasWatermark() {
 		reply(ctx, u, "💧 कोणताही watermark set नाही.")
 		return dispatcher.EndGroups
 	}
-
+	watermarkStore.Delete("text")
 	reply(ctx, u, "✅ Watermark clear केला. Video uploads आता watermark शिवाय जातील.")
 	return dispatcher.EndGroups
 }
@@ -539,9 +499,8 @@ func cmdClearWatermark(ctx *ext.Context, u *ext.Update) error {
 // ── /showwatermark ────────────────────────────────────────────────────────────
 
 func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveUser().GetID()
-	text, ok := getWatermarkTextForUser(senderID)
-	if !ok || text == "" {
+	text, ok := getWatermarkText()
+	if !ok {
 		reply(ctx, u, "💧 कोणताही watermark set नाही.\nSet करायला: `/setwatermark <text>`")
 		return dispatcher.EndGroups
 	}
@@ -555,46 +514,45 @@ func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
 // ── /setreplace <old=new> [old2=new2] ... ─────────────────────────────────────
 
 func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
-	text := u.EffectiveMessage.Text
-	
-	// Command आणि args वेगळे करणे
-	partsCmd := strings.SplitN(text, " ", 2)
-	if len(partsCmd) < 2 || strings.TrimSpace(partsCmd[1]) == "" {
+	a := args(u)
+	if len(a) < 1 {
 		reply(ctx, u,
-			"📝 *Usage:* `/setreplace old_text=new_text`\n\n"+
+			"📝 *Usage:* `/setreplace old=new [old2=new2 ...]`\n\n"+
 				"Examples:\n"+
 				"`/setreplace hello=नमस्ते`\n"+
-				"`/setreplace Please subscribe to my channel.= ` (काढून टाकण्यासाठी)\n\n"+
-				"Caption मधील 'old_text' आढळल्यास 'new_text' ने replace होईल.\n"+
+				"`/setreplace Course=कोर्स Bot=बॉट`\n\n"+
+				"Caption मधील 'old' word आढळल्यास 'new' ने replace होईल.\n"+
+				"एकावेळी multiple pairs देता येतात.\n"+
 				"सध्याचे rules बघायला: /listreplace")
 		return dispatcher.EndGroups
 	}
 
-	// पुढे multiple spaces असल्यास फक्त सुरुवातीचे spaces काढायचे, मधले तसेच ठेवायचे.
-	fullText := strings.TrimLeft(partsCmd[1], " \t")
-	parts := strings.SplitN(fullText, "=", 2)
-	if len(parts) != 2 {
-		reply(ctx, u, "❌ Invalid format. '=' असणे आवश्यक आहे.\nExample: `/setreplace old=new`")
-		return dispatcher.EndGroups
+	added := []string{}
+	invalid := []string{}
+
+	for _, pair := range a {
+		parts := strings.SplitN(pair, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" {
+			invalid = append(invalid, pair)
+			continue
+		}
+		oldWord := strings.TrimSpace(parts[0])
+		newWord := strings.TrimSpace(parts[1])
+		captionReplaceStore.Store(oldWord, newWord)
+		added = append(added, fmt.Sprintf("`%s` → `%s`", oldWord, newWord))
 	}
 
-	// oldWord मध्ये जेवढे spaces असतील (सुरुवात/शेवट सोडून) ते तसेच राहतील.
-	oldWord := parts[0]
-	newWord := parts[1]
-	
-	// जर user ने quotes दिले असतील, तर आपण trimming करू शकतो.
-	// पण तूर्तास सुरळीतपणासाठी आपण फक्त trailing spaces काढूया.
-	// TrimSpace केल्यास oldWord च्या सुरुवातीचे/शेवटचे spaces जातील. जर त्याला तिथे spaces हवे असतील तर?
-	// सहसा ते कॉपी-पेस्ट मध्ये येतात.
-	oldWord = strings.TrimSpace(oldWord)
-	newWord = strings.TrimSpace(newWord)
-	
-	// If the user deliberately provides quotes for exact matching, we can remove them.
-	// But TrimSpace usually handles normal use cases.
-	
-	captionReplaceStore.Store(oldWord, newWord)
-
-	reply(ctx, u, fmt.Sprintf("✅ Replace rule set:\n\n`%s`\n⬇️\n`%s`", oldWord, newWord))
+	msg := ""
+	if len(added) > 0 {
+		msg += fmt.Sprintf("✅ Replace rules set (%d):\n%s", len(added), strings.Join(added, "\n"))
+	}
+	if len(invalid) > 0 {
+		msg += fmt.Sprintf("\n\n❌ Invalid pairs (= नाही):\n%s", strings.Join(invalid, ", "))
+	}
+	if msg == "" {
+		msg = "❌ कोणताही valid pair नाही."
+	}
+	reply(ctx, u, msg)
 	return dispatcher.EndGroups
 }
 
@@ -947,21 +905,7 @@ func cmdShowThumbnail(ctx *ext.Context, u *ext.Update) error {
 
 func applyReplaces(caption string) string {
 	captionReplaceStore.Range(func(k, v interface{}) bool {
-		oldStr := k.(string)
-		newStr := v.(string)
-		
-		// Case-insensitive and whitespace-flexible regex replacement
-		escapedOld := regexp.QuoteMeta(oldStr)
-		// Any sequence of whitespace in the user's search string will match ANY sequence of whitespace in the caption
-		escapedOld = regexp.MustCompile(`\s+`).ReplaceAllString(escapedOld, `\s+`)
-		
-		re, err := regexp.Compile("(?i)" + escapedOld)
-		if err == nil {
-			caption = re.ReplaceAllString(caption, newStr)
-		} else {
-			// Fallback if regex fails
-			caption = strings.ReplaceAll(caption, oldStr, newStr)
-		}
+		caption = strings.ReplaceAll(caption, k.(string), v.(string))
 		return true
 	})
 	return caption
@@ -1286,7 +1230,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	go func() {
 		// [NEW] Cancel context — /stopuserbotdl ने cancel करता येतो
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(senderID, bgCancel)
+		pID := addActiveProcess(bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -1307,7 +1251,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			lastEdit = time.Now()
 			editMu.Unlock()
 			botToken := os.Getenv("BOT_TOKEN")
-			go wmqueue.EditTgMessage(botToken, chatID, sentMsgID, text)
+			_ = wmqueue.EditTgMessage(botToken, chatID, sentMsgID, text)
 		}
 
 		deleteProgress := func() {
@@ -1438,8 +1382,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					case <-bgCtx.Done():
 						return nil, bgCtx.Err()
 					}
-				} else if strings.Contains(strings.ToLower(err.Error()), "deleted") {
-					return nil, err
 				} else if attempt < maxRetries {
 					editProgress(fmt.Sprintf("🔄 Retry %d/%d\n📌 Msg: `%d`", attempt, maxRetries, msgID))
 					time.Sleep(5 * time.Second)
@@ -1581,11 +1523,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			updateSummary()
 
 			if totalMsgs > 1 && msgIdx < len(msgIDList)-1 {
-				time.Sleep(3 * time.Second)
-				if successCount > 0 && successCount%10 == 0 {
-					editProgress("⏳ Anti-Spam Delay: Telegram limits टाळण्यासाठी 15 सेकंद थांबतोय...")
-					time.Sleep(15 * time.Second)
-				}
+				time.Sleep(1 * time.Second)
 			}
 		}
 
@@ -1748,7 +1686,6 @@ func fastCopyMessage(
 // lecture परत मागेल तेव्हा (delete केली असली तरी) — fast-path (cache-hit)
 // मुळे लगेच log-channel वरून forward होतं, नवीन watermark job चालतच नाही.
 func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveUser().GetID()
 	a := args(u)
 	if len(a) < 2 {
 		reply(ctx, u,
@@ -1830,7 +1767,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 
 	go func() {
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(senderID, bgCancel)
+		pID := addActiveProcess(bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -1988,7 +1925,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 		if freshConcurrency < 1 {
 			freshConcurrency = 1 // कुठलाही worker online नाही तरी एकेक करून प्रयत्न करत राहतो
 		}
-		const maxFreshConcurrency = 50 // [FIX] Increased cap from 6 to 50 to allow multiple Colab workers to run at full capacity
+		const maxFreshConcurrency = 6
 		if freshConcurrency > maxFreshConcurrency {
 			freshConcurrency = maxFreshConcurrency
 		}
@@ -2221,7 +2158,6 @@ func runWithFloodRetryGeneric(bgCtx context.Context, maxFloodRetries int, fn fun
 // admin-दिलेला arbitrary channel पास केलाय (globally-configured SendChannel
 // ऐवजी). /stopuserbotdl नेच हे पण थांबवता येतं (तोच shared cancel-state).
 func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
-	senderID := u.EffectiveUser().GetID()
 	a := args(u)
 
 	if len(a) < 3 {
@@ -2300,10 +2236,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 	// फक्त watermark ON असेल, किंवा fast-path fail होऊन fallback लागला, तरच
 	// खाली userbot lazily वापरला जातो — तेव्हा तो nil असेल तर तिथेच स्पष्ट
 	// error येईल (संपूर्ण command सुरुवातीलाच अडणार नाही).
-	var userbotClient *gotgproto.Client
-	if GetUserbotClient != nil {
-		userbotClient = GetUserbotClient()
-	}
+	userbotClient := MainUserbotClient
 
 	// Destination channel मध्ये bot खरंच admin/access आहे का ते आधीच तपासतो —
 	// नाहीतर हजारो messages नंतर मध्येच fail होत राहील.
@@ -2343,7 +2276,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 
 	go func() {
 		bgCtx, bgCancel := context.WithCancel(context.Background())
-		pID := addActiveProcess(senderID, bgCancel)
+		pID := addActiveProcess(bgCancel)
 		defer func() {
 			bgCancel()
 			removeActiveProcess(pID)
@@ -2362,8 +2295,11 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			}
 			lastEdit = time.Now()
 			editMu.Unlock()
-			botToken := os.Getenv("BOT_TOKEN")
-			go wmqueue.EditTgMessage(botToken, adminChatID, sentMsgID, text)
+			editCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, _ = botClient.API().MessagesEditMessage(editCtx, &tg.MessagesEditMessageRequest{
+				Peer: botPeer, ID: sentMsgID, Message: text,
+			})
 		}
 		deleteProgress := func() {
 			if sentMsgID == 0 {
@@ -2459,9 +2395,6 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 					return pm, nil
 				}
 				if bgCtx.Err() != nil {
-					return nil, err
-				}
-				if strings.Contains(strings.ToLower(err.Error()), "deleted") {
 					return nil, err
 				}
 			}
@@ -2877,38 +2810,16 @@ func prepareMessage(
 	defer stallCancel()
 	stallTimer := time.AfterFunc(30*time.Minute, stallCancel)
 
-	var dlStartTime time.Time
-	var dlLastTime time.Time
-	var dlLastWritten int64
-	var dlSpeedStr string = "0.00 MB/s"
-
 	onDownloadProgress := func(written, total int64) {
 		stallTimer.Reset(30 * time.Minute)
 		if total <= 0 {
 			return
 		}
-
-		now := time.Now()
-		if dlStartTime.IsZero() {
-			dlStartTime = now
-			dlLastTime = now
-			dlLastWritten = written
-		} else {
-			elapsed := now.Sub(dlLastTime).Seconds()
-			if elapsed >= 1.0 { // update speed every 1s
-				bytesPerSec := float64(written-dlLastWritten) / elapsed
-				dlSpeedStr = fmt.Sprintf("%.2f MB/s", bytesPerSec/(1024*1024))
-				dlLastTime = now
-				dlLastWritten = written
-			}
-		}
-
 		pct := written * 100 / total
 		bar := progressBar(int(pct))
 		editProgress(fmt.Sprintf(
-			"📥 (Phase 1) Downloading...STEP.1/3\n📄 `%s`\n⚡ Speed: %s\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
+			"📥 Downloading...STEP.1/3\n📄 `%s`\n💾 %s / %s\n%s %d%%\n📌 Msg: `%d`",
 			file.FileName,
-			dlSpeedStr,
 			formatSize(written), formatSize(total),
 			bar, pct, msgID,
 		))
@@ -3396,40 +3307,33 @@ func downloadWatermarkAndReupload(
 	koyebURL := os.Getenv("KOYEB_URL")
 	if koyebURL != "" {
 		editProgress(fmt.Sprintf(
-			"☁️ (Phase 1) Downloading to main server...\n📄 `%s`\n📌 Msg: `%d`",
-			file.FileName, msgID,
-		))
-
-		// ── Download to local disk first to avoid proxy timeouts (HF 60s timeout) ──
-		tmpFile, err := os.CreateTemp("", "colab-pre-*.tmp")
-		if err != nil {
-			return nil, false, fmt.Errorf("temp file create failed: %w", err)
-		}
-		tmpPath := tmpFile.Name()
-		defer os.Remove(tmpPath)
-
-		var dlWriter io.WriterAt = tmpFile
-		if onDownloadProgress != nil {
-			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
-		}
-
-		d := downloader.NewDownloader()
-		_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(dlCtx, dlWriter)
-		tmpFile.Close()
-		if err != nil {
-			return nil, false, fmt.Errorf("pre-download failed: %w", err)
-		}
-
-		editProgress(fmt.Sprintf(
 			"☁️ Colab la job pathavat aaho...\n📄 `%s`\n📌 Msg: `%d`",
 			file.FileName, msgID,
 		))
 
-		// Temp file token
+		// Pipe token — Koyeb disk nahi, userbot directly response madhe pipe karil
 		pipeToken := fmt.Sprintf("pipe-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
-		
-		wmqueue.RegisterTempFile(pipeToken, tmpPath, file.FileName)
-		defer wmqueue.UnregisterTempFile(pipeToken)
+
+		// PipeFn: Colab GET request aali ki userbot download pipe karil
+		pipeFn := func(w http.ResponseWriter) error {
+			pipeReader, pipeWriter := io.Pipe()
+			dlErrCh := make(chan error, 1)
+			go func() {
+				defer pipeWriter.Close()
+				d := downloader.NewDownloader()
+				_, dlErr := d.Download(dlClient.API(), file.Location).Stream(dlCtx, pipeWriter)
+				dlErrCh <- dlErr
+			}()
+			_, copyErr := io.Copy(w, pipeReader)
+			dlErr := <-dlErrCh
+			if copyErr != nil {
+				return copyErr
+			}
+			return dlErr
+		}
+
+		wmqueue.RegisterPipe(pipeToken, file.FileName, file.FileSize, pipeFn)
+		defer wmqueue.UnregisterPipe(pipeToken)
 
 		fileURL := fmt.Sprintf("%s/api/colab/tempfile/%s", koyebURL, pipeToken)
 
@@ -3818,7 +3722,7 @@ type progressWriter struct {
 	written    int64
 	lastPct    int64
 	onProgress func(written, total int64)
-	mu         sync.Mutex // Added for thread-safety in WriteAt
+	mu         sync.Mutex // added for thread safety
 }
 
 func (p *progressWriter) Write(b []byte) (int, error) {

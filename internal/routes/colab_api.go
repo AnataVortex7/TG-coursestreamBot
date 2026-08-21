@@ -115,6 +115,9 @@ func handleColabProgress(c *gin.Context) {
 	// [NEW] Telegram edit (खाली) फक्त ProgressMsgID>0 असेल तरच होतो — पण
 	// stage/percent text इथेच नेहमी साठवतो, जेणेकरून ProgressMsgID==0 असलेल्या
 	// jobs साठी (उदा. silent /predownload) सुद्धा कुणीतरी नंतर वाचू शकेल.
+	if job.MsgID > 0 {
+		req.Message += fmt.Sprintf("\n📌 Msg: `%d`", job.MsgID)
+	}
 	wmqueue.SetProgressMessage(req.JobID, req.Message)
 
 	// ── Ordered, serialized edit ─────────────────────────────────────────
