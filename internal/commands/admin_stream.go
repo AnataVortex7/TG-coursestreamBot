@@ -1303,7 +1303,26 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				editMu.Unlock()
 				return
 			}
-			// 5s frequency as requested by user
+			
+		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
+		
+		if isFinalMsg {
+			editMu.Lock()
+			currentMsgID := sentMsgID
+			editMu.Unlock()
+			if currentMsgID != 0 {
+				botToken := os.Getenv("BOT_TOKEN")
+				wmqueue.DeleteTgMessage(botToken, u.EffectiveChat().GetID(), int64(currentMsgID))
+				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+				if newID != 0 {
+					editMu.Lock()
+					sentMsgID = int(newID)
+					editMu.Unlock()
+				}
+			}
+			return
+		}
+// 5s frequency as requested by user
 			if time.Since(lastEdit) < 5*time.Second {
 				editMu.Unlock()
 				return
@@ -1324,7 +1343,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 			go func(msgID int) {
 				if needsNewMsg {
-					newID := wmqueue.SendTgMessage(botToken, chatID, text)
+					newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
 					if newID != 0 {
 						editMu.Lock()
 						sentMsgID = int(newID)
@@ -1340,7 +1359,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				success := wmqueue.EditTgMessage(botToken, chatID, msgID, text)
 				if !success {
 					// Edit failed (possibly FloodWait), delete and send new
-					newID := wmqueue.SendTgMessage(botToken, chatID, text)
+					newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
 					if newID != 0 {
 						editMu.Lock()
 						sentMsgID = int(newID)
@@ -1433,7 +1452,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			summaryEditMu.Lock()
 			if summaryMsgID == 0 {
 				summaryEditMu.Unlock()
-				newID := wmqueue.SendTgMessage(botToken, chatID, text)
+				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
 				if newID != 0 {
 					summaryEditMu.Lock()
 					summaryMsgID = int(newID)
@@ -1455,7 +1474,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			summaryEditMu.Unlock()
 
 			if needsNewMsg {
-				newID := wmqueue.SendTgMessage(botToken, chatID, text)
+				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
 				if newID != 0 {
 					summaryEditMu.Lock()
 					summaryMsgID = int(newID)
@@ -1469,7 +1488,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 			success := wmqueue.EditTgMessage(botToken, chatID, currentSummaryID, text)
 			if !success {
-				newID := wmqueue.SendTgMessage(botToken, chatID, text)
+				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
 				if newID != 0 {
 					summaryEditMu.Lock()
 					summaryMsgID = int(newID)
@@ -2448,7 +2467,26 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 				editMu.Unlock()
 				return
 			}
-			// 5s frequency as requested by user
+			
+		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
+		
+		if isFinalMsg {
+			editMu.Lock()
+			currentMsgID := sentMsgID
+			editMu.Unlock()
+			if currentMsgID != 0 {
+				botToken := os.Getenv("BOT_TOKEN")
+				wmqueue.DeleteTgMessage(botToken, u.EffectiveChat().GetID(), int64(currentMsgID))
+				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+				if newID != 0 {
+					editMu.Lock()
+					sentMsgID = int(newID)
+					editMu.Unlock()
+				}
+			}
+			return
+		}
+// 5s frequency as requested by user
 			if time.Since(lastEdit) < 5*time.Second {
 				editMu.Unlock()
 				return
@@ -3795,17 +3833,17 @@ func downloadAndReupload(
 	}
 	defer readFile.Close()
 
-	var upReader io.Reader = readFile
+	var upProgress uploader.Progress
 	if onUploadProgress != nil {
-		upReader = &progressWriter{
-			w:          readFile,
-			total:      totalSize,
-			onProgress: onUploadProgress,
-		}
+		upProgress = &uploadProgressAdapter{onProgress: onUploadProgress}
 	}
 
-	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
-	uploadedFile, err := up.FromReader(upCtx, file.FileName, upReader)
+	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024).WithThreads(3)
+	if upProgress != nil {
+		up = up.WithProgress(upProgress)
+	}
+	upload := uploader.NewUpload(file.FileName, readFile, totalSize)
+	uploadedFile, err := up.Upload(upCtx, upload)
 	if err != nil {
 		os.Remove(tmpPath)
 		return nil, "", fmt.Errorf("upload failed: %w", err)
@@ -3890,13 +3928,17 @@ func downloadWatermarkAndReuploadLocal(
 	}
 	defer readFile.Close()
 
-	var upReader io.Reader = readFile
+	var upProgress uploader.Progress
 	if onUploadProgress != nil {
-		upReader = &progressWriter{w: readFile, total: totalSize, onProgress: onUploadProgress}
+		upProgress = &uploadProgressAdapter{onProgress: onUploadProgress}
 	}
 
-	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024)
-	uploadedFile, err := up.FromReader(upCtx, file.FileName, upReader)
+	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024).WithThreads(3)
+	if upProgress != nil {
+		up = up.WithProgress(upProgress)
+	}
+	upload := uploader.NewUpload(file.FileName, readFile, totalSize)
+	uploadedFile, err := up.Upload(upCtx, upload)
 	if err != nil {
 		os.Remove(outputPath)
 		return nil, "", fmt.Errorf("upload failed: %w", err)
@@ -4025,7 +4067,7 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 	p.written += int64(n)
 	if p.total > 0 {
 		pct := p.written * 100 / p.total
-		if pct >= p.lastPct+5 || p.written >= p.total {
+		if pct >= p.lastPct+1 || p.written >= p.total {
 			p.lastPct = pct
 			if p.onProgress != nil {
 				p.onProgress(p.written, p.total)
@@ -4046,7 +4088,7 @@ func (p *progressWriter) WriteAt(b []byte, off int64) (int, error) {
 	p.written += int64(n)
 	if p.total > 0 {
 		pct := p.written * 100 / p.total
-		if pct >= p.lastPct+5 || p.written >= p.total {
+		if pct >= p.lastPct+1 || p.written >= p.total {
 			p.lastPct = pct
 			if p.onProgress != nil {
 				p.onProgress(p.written, p.total)
@@ -4066,7 +4108,7 @@ func (p *progressWriter) Read(b []byte) (int, error) {
 	p.written += int64(n)
 	if p.total > 0 {
 		pct := p.written * 100 / p.total
-		if pct >= p.lastPct+5 || p.written >= p.total {
+		if pct >= p.lastPct+1 || p.written >= p.total {
 			p.lastPct = pct
 			if p.onProgress != nil {
 				p.onProgress(p.written, p.total)
@@ -4251,3 +4293,26 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 }
+
+type uploadProgressAdapter struct {
+	onProgress func(written, total int64)
+	lastPct    int64
+	mu         sync.Mutex
+}
+
+
+func (p *uploadProgressAdapter) Chunk(ctx context.Context, state uploader.ProgressState) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if state.Total > 0 {
+		pct := state.Uploaded * 100 / state.Total
+		if pct >= p.lastPct+1 || state.Uploaded >= state.Total {
+			p.lastPct = pct
+			if p.onProgress != nil {
+				p.onProgress(state.Uploaded, state.Total)
+			}
+		}
+	}
+	return nil
+}
+
