@@ -648,21 +648,9 @@ func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
 // ── /setsendchannel <channelID> ──────────────────────────────────────────────
 
 func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
-		a := args(u)
-	senderID := u.EffectiveUser().GetID()
-	var targetUserID int64 = senderID
-	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
-
-	if isAdmin {
-		if targetUser, ok := AdminImpersonateStore.Load(senderID); ok {
-			if tu, ok := targetUser.(int64); ok && tu != 0 {
-				targetUserID = tu
-			}
-		}
-	}
-
+	a := args(u)
 	if len(a) < 1 {
-		curID, ok := getSendChannelIDForUser(targetUserID)
+		curID, ok := getSendChannelID()
 		if ok {
 			displayID := -(curID + 1000000000000)
 			reply(ctx, u, fmt.Sprintf(
@@ -680,18 +668,13 @@ func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-		rawID, err := strconv.ParseInt(strings.TrimSpace(a[0]), 10, 64)
-	if err != nil || rawID == 0 {
-		reply(ctx, u, "❌ Invalid channel ID.")
+	rawID, err := strconv.ParseInt(strings.TrimSpace(a[0]), 10, 64)
+	if err != nil || rawID <= 0 {
+		reply(ctx, u, "❌ Invalid channel ID. Positive number टाका.\nExample: `2479194095`")
 		return dispatcher.EndGroups
 	}
 
-	var internalID int64
-	if rawID > 0 {
-		internalID = -1000000000000 - rawID
-	} else {
-		internalID = rawID
-	}
+	internalID := -1000000000000 - rawID
 
 	botClient := MainBotClient
 	if botClient == nil {
@@ -709,7 +692,7 @@ func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 	}
 	_ = peer
 
-	setSendChannelIDForUser(targetUserID, internalID)
+	sendChannelStore.Store("id", internalID)
 
 	reply(ctx, u, fmt.Sprintf(
 		"✅ Send channel set!\n\n📢 Channel ID: `%d`\n\n"+
@@ -1101,15 +1084,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	a := args(u)
-	var targetUserID int64 = senderID
-
-	if isAdmin {
-		if targetUser, ok := AdminImpersonateStore.Load(senderID); ok {
-			if tu, ok := targetUser.(int64); ok && tu != 0 {
-				targetUserID = tu
-			}
-		}
-	}
 
 	if len(a) < 1 {
 		reply(ctx, u,
@@ -1129,11 +1103,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	var startMsg int
 	var endMsg int
 	var specificMsgIDs []int
-
-	
-	if isAdmin {
-		GlobalDashboard.SetAdminChat(os.Getenv("BOT_TOKEN"), u.EffectiveChat().GetID())
-	}
 
 	linkInfo, linkErr := parseTelegramPostInput(a)
 	if linkErr != nil {
@@ -1246,7 +1215,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		}
 	}
 
-	userbotClient, err := GetUserbotClientForUser(targetUserID)
+	userbotClient, err := GetUserbotClientForUser(senderID)
 	if err != nil || userbotClient == nil {
 		reply(ctx, u, "❌ Userbot Client ready नाही. आधी 🔑 Connect Userbot Account वरून Login करा.")
 		return dispatcher.EndGroups
@@ -1266,7 +1235,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	sourcePeerForSend := getChannelPeerIfBotAdmin(ctx, botClient, chatID)
 
 	var sendChannelPeer *tg.InputPeerChannel
-	if scID, ok := getSendChannelIDForUser(targetUserID); ok && scID != 0 {
+	if scID, ok := getSendChannelIDForUser(senderID); ok && scID != 0 {
 		sendChannelPeer = resolveChannelInputPeer(ctx, botClient, scID)
 		if sendChannelPeer == nil && userbotClient != nil {
 			sendChannelPeer = resolveChannelInputPeer(ctx, userbotClient, scID)
@@ -1303,15 +1272,14 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		watermarkStr = fmt.Sprintf("\n💧 Watermark: `%s`", wmText)
 	}
 
-		sentMsgID := 0
-	if !isAdmin {
-		sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
-			"⏳ Starting...\n📡 Channel: %d\n📑 %s%s%s%s\n\n🛑 Stop: /stopuserbotdl",
-			chatIDRaw, rangeStr, topicStr, channelStr, watermarkStr,
-		)), nil)
-		if sentMsg != nil {
-			sentMsgID = sentMsg.ID
-		}
+	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
+		"⏳ Starting...\n📡 Channel: `%d`\n📋 %s%s%s%s\n\n🛑 Stop: /stopuserbotdl",
+		chatIDRaw, rangeStr, topicStr, channelStr, watermarkStr,
+	)), nil)
+
+	sentMsgID := 0
+	if sentMsg != nil {
+		sentMsgID = sentMsg.ID
 	}
 
 	// ── Goroutine: process all messages ──────────────────────────────────────
@@ -1337,8 +1305,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			}
 			
 		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
-			if isFinalMsg {
-
+		
+		if isFinalMsg {
 			editMu.Lock()
 			currentMsgID := sentMsgID
 			editMu.Unlock()
@@ -1467,21 +1435,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 						}
 						s += fmt.Sprintf("\n• Msgs %s — `%s`",
 							strings.Join(idStrs, ", "), errText)
-					}
-				}
-			}
-						if len(errorLines) > 0 {
-				s += "\n\n*Errors:*"
-				for _, errText := range errorOrder {
-					ids := errorLines[errText]
-					if len(ids) == 1 {
-						s += fmt.Sprintf("\n🔸 Msg %d ➡ %s", ids[0], errText)
-					} else {
-						idStrs := make([]string, len(ids))
-						for i, id := range ids {
-							idStrs[i] = fmt.Sprintf("%d", id)
-						}
-						s += fmt.Sprintf("\n🔸 Msgs %s ➡ %s", strings.Join(idStrs, ", "), errText)
 					}
 				}
 			}
@@ -2516,7 +2469,8 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			}
 			
 		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
-			if isFinalMsg {
+		
+		if isFinalMsg {
 			editMu.Lock()
 			currentMsgID := sentMsgID
 			editMu.Unlock()
@@ -4361,4 +4315,3 @@ func (p *uploadProgressAdapter) Chunk(ctx context.Context, state uploader.Progre
 	}
 	return nil
 }
-
