@@ -475,7 +475,7 @@ func (q *Queue) CancelJobsByAdmin(adminID int64) int {
 	canceled := 0
 	var newPending []string
 	for _, id := range q.pending {
-		if job, ok := q.jobs[id]; ok && job.AdminChatID == adminID {
+		if job, ok := q.jobs[id]; ok && job.ChatID == adminID {
 			job.Status = StatusFailed
 			job.Error = "Canceled by /stopuserbotdl"
 			job.UpdatedAt = time.Now()
