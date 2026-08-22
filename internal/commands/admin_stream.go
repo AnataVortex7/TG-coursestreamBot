@@ -1309,9 +1309,13 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				return
 			}
 			
+			botToken := os.Getenv("BOT_TOKEN")
 			needsNewMsg := false
 			if editCount >= 10 || time.Since(msgCreatedAt) >= 2*time.Minute {
 				needsNewMsg = true
+			} else if _, waiting := wmqueue.InEditFloodWait(botToken); waiting {
+				needsNewMsg = true
+				wmqueue.ClearEditFloodWait(botToken)
 			}
 			
 			lastEdit = time.Now()
@@ -1319,7 +1323,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			editMu.Unlock()
 
 			go func(msgID int) {
-				botToken := os.Getenv("BOT_TOKEN")
 				if needsNewMsg {
 					newID := wmqueue.SendTgMessage(botToken, chatID, text)
 					if newID != 0 {
@@ -1424,8 +1427,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		var summaryCreatedAt = time.Now()
 
 		updateSummary := func() {
-			text := buildSummaryText()
 			botToken := os.Getenv("BOT_TOKEN")
+			text := buildSummaryText()
 			
 			summaryEditMu.Lock()
 			if summaryMsgID == 0 {
@@ -1444,6 +1447,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			needsNewMsg := false
 			if summaryEditCount >= 10 || time.Since(summaryCreatedAt) >= 2*time.Minute {
 				needsNewMsg = true
+			} else if _, waiting := wmqueue.InEditFloodWait(botToken); waiting {
+				needsNewMsg = true
+				wmqueue.ClearEditFloodWait(botToken)
 			}
 			currentSummaryID := summaryMsgID
 			summaryEditMu.Unlock()
@@ -2063,7 +2069,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 		// जास्त कॅप लावलाय जेणेकरून एकाच वेळी शेकडो jobs एकदम submit होऊन
 		// इतर live-user requests (न्यू watermark jobs) साठी queue busy
 		// होणार नाही.
-		const jobsPerWorker = 2 // watermark_worker.py चं MAX_CONCURRENT_JOBS सोबत जुळलेलं ठेवा
+		jobsPerWorker := wmqueue.Default.DynamicMaxJobsPerWorker()
 		freshConcurrency := len(wmqueue.ActiveWorkers()) * jobsPerWorker
 		if freshConcurrency < 1 {
 			freshConcurrency = 1 // कुठलाही worker online नाही तरी एकेक करून प्रयत्न करत राहतो
@@ -2169,7 +2175,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 
 					targetConc := cachedConcurrency
 					if isFresh {
-						targetConc = len(wmqueue.ActiveWorkers()) * jobsPerWorker
+						targetConc = len(wmqueue.ActiveWorkers()) * wmqueue.Default.DynamicMaxJobsPerWorker()
 						if targetConc < 1 {
 							targetConc = 1
 						}
@@ -2226,7 +2232,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 
 					liveLimit := cachedConcurrency
 					if isFresh {
-						liveLimit = len(wmqueue.ActiveWorkers()) * jobsPerWorker
+						liveLimit = len(wmqueue.ActiveWorkers()) * wmqueue.Default.DynamicMaxJobsPerWorker()
 						if liveLimit < 1 {
 							liveLimit = 1
 						}
@@ -2447,10 +2453,13 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 				editMu.Unlock()
 				return
 			}
-			
+			botToken := os.Getenv("BOT_TOKEN")
 			needsNewMsg := false
 			if editCount >= 10 || time.Since(msgCreatedAt) >= 2*time.Minute {
 				needsNewMsg = true
+			} else if _, waiting := wmqueue.InEditFloodWait(botToken); waiting {
+				needsNewMsg = true
+				wmqueue.ClearEditFloodWait(botToken)
 			}
 			
 			lastEdit = time.Now()
@@ -2458,7 +2467,6 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			editMu.Unlock()
 
 			go func(msgID int) {
-				botToken := os.Getenv("BOT_TOKEN")
 				if needsNewMsg {
 					newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
 					if newID != 0 {
@@ -2541,8 +2549,8 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 		var summaryCreatedAt = time.Now()
 
 		updateSummary := func() {
-			text := buildSummaryText()
 			botToken := os.Getenv("BOT_TOKEN")
+			text := buildSummaryText()
 			
 			summaryEditMu.Lock()
 			if summaryMsgID == 0 {
@@ -2561,6 +2569,9 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			needsNewMsg := false
 			if summaryEditCount >= 10 || time.Since(summaryCreatedAt) >= 2*time.Minute {
 				needsNewMsg = true
+			} else if _, waiting := wmqueue.InEditFloodWait(botToken); waiting {
+				needsNewMsg = true
+				wmqueue.ClearEditFloodWait(botToken)
 			}
 			currentSummaryID := summaryMsgID
 			summaryEditMu.Unlock()
@@ -3640,7 +3651,6 @@ func downloadWatermarkAndReupload(
 			0,     // channelID — 0 = जुना pipe/file_url mode (unchanged)
 			0,     // channelAccessHash — pipe mode मध्ये लागत नाही
 			"",    // downloadBotToken — रिकामा = जुना pipe/file_url mode (unchanged)
-			false, // bulk — [NEW] /userbotdl चे jobs cap-free राहतात, फक्त /predownload cap केला जातो
 		)
 		if submitErr == nil {
 			editProgress(fmt.Sprintf(

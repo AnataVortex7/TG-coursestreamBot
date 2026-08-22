@@ -81,14 +81,7 @@ type WatermarkJob struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 	WorkerID          string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
 
-	// Bulk — [NEW] true असेल तरच per-worker concurrency cap (MaxJobsPerWorker)
-	// लागू होतो. /predownload सारख्या admin bulk-batch मधून येणाऱ्या jobs साठी
-	// true — जेणेकरून एकाच worker वर सगळे jobs गर्दी करून, त्याच वेळी येणाऱ्या
-	// live/normal (course lecture, /userbotdl single-file) requests साठी queue
-	// busy होणार नाही. Live/normal request cha job हा false (default) राहतो —
-	// त्याला cap लागू होत नाही, तो नेहमी लगेच कुठल्याही free worker ला जातो,
-	// जुन्या behavior प्रमाणेच fully parallel.
-	Bulk bool `json:"-"`
+
 
 	// SentMessageID — Colab ने प्रत्यक्ष पाठवलेल्या message चा ID (student
 	// offline-download साठी 48hr auto-delete schedule करायला लागतो). Colab
@@ -352,43 +345,58 @@ func (q *Queue) Enqueue(job *WatermarkJob) {
 	saveJobToDB(job)
 }
 
-// MaxJobsPerWorker — एका Colab worker कडे एकाच वेळी जास्तीत जास्त इतकेच
-// "processing" *Bulk* jobs असू शकतात (उदा. /predownload). Poll() मध्ये याच
-// cap वर आधारित तो worker आधीच busy (cap इतके किंवा जास्त bulk jobs घेऊन
-// बसलाय) असेल तर पुढचा bulk job देत नाही — तो skip करून queue मध्ये पुढे
-// कुठे non-bulk (live/normal) job pending असेल तर तो लगेच देतो. cap फक्त
-// bulk jobs साठीच लागू होतो — live requests कधीच cap मध्ये अडकत नाहीत.
-//
-// [FIX #1] आधी हा cap कुठेच नव्हता — फक्त admin_stream.go मधला jobsPerWorker
-// batch-submit वेळचा total concurrency budget ठरवायचा, पण प्रत्यक्ष Poll()
-// पूर्णपणे FIFO होता (worker सध्या किती jobs घेऊन बसलाय हे कधीच बघत नव्हता).
-// त्यामुळे जो worker जास्त वेळा/लवकर poll करायचा (network latency मुळे)
-// त्यालाच वारंवार नवीन job मिळायचा, आणि हळू poll करणाऱ्या worker ला कधी
-// एकही job मिळायचा नाही किंवा एकच मिळायचा — हाच "random एका worker कडे
-// multiple job, दुसऱ्याला एकच" bug होता.
-//
-// [FIX #2] cap फक्त Bulk jobs (predownload सारख्या batch) वरच लागू केला —
-// live/normal (course lecture, single /userbotdl वगैरे) requests च्या jobs
-// Bulk=false असतात, त्यामुळे त्या नेहमी parallel + cap-free राहतात.
-const MaxJobsPerWorker = 2
+// DynamicMaxJobsPerWorker - Calculates maximum jobs per worker dynamically.
+// Default base is 2. If there are many pending jobs and fewer workers,
+// the cap is increased to scale parallel processing. Maximum cap is 5
+// to prevent Out-Of-Memory or Disk-Full errors on Colab/HuggingFace workers.
+func (q *Queue) DynamicMaxJobsPerWorker() int {
+	onlineWorkers := len(ActiveWorkers())
+	if onlineWorkers == 0 {
+		onlineWorkers = 1
+	}
+	
+	pendingCount := 0
+	// We are already inside a lock usually when this is called, but let's just 
+	// be careful. If this is called from Poll() which holds the lock, we shouldn't lock again.
+	// Oh wait, ActiveWorkers() does DB query, which is fine, but checking q.pending needs lock.
+	// Since Poll() calls this while holding q.mu, we must NOT lock here.
+	pendingCount = len(q.pending)
+
+	baseCap := 2
+	
+	if pendingCount > onlineWorkers*baseCap {
+		neededCap := (pendingCount + onlineWorkers - 1) / onlineWorkers
+		if neededCap > baseCap {
+			baseCap = neededCap
+		}
+	}
+	
+	const hardMax = 5
+	if baseCap > hardMax {
+		baseCap = hardMax
+	}
+	
+	return baseCap
+}
 
 func (q *Queue) Poll(workerID string) *WatermarkJob {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	// worker आधीच cap इतके (किंवा जास्त) *bulk* jobs process करतोय का —
-	// live/normal jobs या count मध्ये धरले जात नाहीत, त्यामुळे live traffic
-	// कधीच bulk cap मुळे अडत नाही.
-	bulkActiveForWorker := 0
+	maxJobs := q.DynamicMaxJobsPerWorker()
+
+	// worker कडे cap पेक्षा जास्त jobs process चालू आहेत का -
+	// live/normal आणि bulk jobs सर्व count होतात.
+	activeForWorker := 0
 	if workerID != "" {
 		for _, job := range q.jobs {
-			if job.Status == StatusProcessing && job.WorkerID == workerID && job.Bulk {
-				bulkActiveForWorker++
+			if job.Status == StatusProcessing && job.WorkerID == workerID {
+				activeForWorker++
 			}
 		}
 	}
 
-	var skipped []string // cap मुळे skip केलेले bulk job IDs — शेवटी परत pending मध्ये टाकायला
+	var skipped []string // cap मुळे skip केलेले job IDs — शेवटी परत pending मध्ये टाकायला
 	defer func() {
 		if len(skipped) > 0 {
 			q.pending = append(q.pending, skipped...)
@@ -403,9 +411,9 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 			continue
 		}
 
-		if job.Bulk && workerID != "" && bulkActiveForWorker >= MaxJobsPerWorker {
-			// हा worker आधीच cap इतके bulk jobs घेऊन बसलाय — हा bulk job
-			// skip करून पुढचा (शक्यतो non-bulk/live) job बघतो. cap मुळे
+		if workerID != "" && activeForWorker >= maxJobs {
+			// हा worker आधीच cap इतके jobs घेऊन बसलाय — हा job
+			// skip करून पुढचा job बघतो. cap मुळे
 			// skip केलेला job हरवू नये म्हणून queue च्या शेवटी परत टाकतो.
 			skipped = append(skipped, id)
 			continue
@@ -794,7 +802,6 @@ func SubmitJob(
 	channelID int64, // 0 असेल तर pipe/file_url mode (जुना, /userbotdl साठी)
 	channelAccessHash int64, // worker ला Pyrogram peer-cache seed करण्यासाठी लागतो
 	downloadBotToken string, // "" असेल तर pipe/file_url mode
-	bulk bool, // [NEW] true = /predownload सारखा admin bulk-batch job — फक्त यालाच per-worker cap (MaxJobsPerWorker) लागू होतो
 ) (string, error) {
 	jobID := fmt.Sprintf("wm-%d-%d", time.Now().UnixNano(), rand.Intn(9999))
 	job := &WatermarkJob{
@@ -818,7 +825,6 @@ func SubmitJob(
 		ChannelID:         channelID,
 		ChannelAccessHash: channelAccessHash,
 		DownloadBotToken:  downloadBotToken,
-		Bulk:              bulk,
 	}
 	Default.Enqueue(job)
 	return jobID, nil
@@ -917,8 +923,8 @@ func SetEditFloodWait(botToken string, until time.Time) {
 	editFloodWait.until[botToken] = until
 }
 
-// inEditFloodWait — सध्या या botToken साठी FLOOD_WAIT active आहे का.
-func inEditFloodWait(botToken string) (time.Time, bool) {
+// InEditFloodWait — सध्या या botToken साठी FLOOD_WAIT active आहे का.
+func InEditFloodWait(botToken string) (time.Time, bool) {
 	editFloodWait.mu.Lock()
 	defer editFloodWait.mu.Unlock()
 	until, ok := editFloodWait.until[botToken]
@@ -932,13 +938,19 @@ func inEditFloodWait(botToken string) (time.Time, bool) {
 	return until, true
 }
 
+func ClearEditFloodWait(botToken string) {
+	editFloodWait.mu.Lock()
+	defer editFloodWait.mu.Unlock()
+	delete(editFloodWait.until, botToken)
+}
+
 // EditTgMessage — return value सांगतो edit प्रत्यक्षात यशस्वी झाला का (कुठल्याही
 // मार्गाने — MTProto, Markdown HTTP, किंवा plain-text HTTP fallback). Caller
 // (उदा. progress-update handler) हे FinishProgress(jobID, success) ला पास
 // करून editFailStreak/backoff चालवतो — त्यामुळे सलग failures (FLOOD_WAIT सकट)
 // आपोआप कमी वारंवार retry होतात, प्रत्येक tick ला निष्फळ प्रयत्न होत नाही.
 func EditTgMessage(botToken string, chatID int64, msgID int, text string) bool {
-	if until, waiting := inEditFloodWait(botToken); waiting {
+	if until, waiting := InEditFloodWait(botToken); waiting {
 		log.Printf("[wmqueue] EditTgMessage: skipping (FLOOD_WAIT active until %s, botToken=...%s)",
 			until.Format(time.RFC3339), lastN(botToken, 6))
 		return false
@@ -950,7 +962,7 @@ func EditTgMessage(botToken string, chatID int64, msgID int, text string) bool {
 	// त्यामुळे इथे पोहोचलो) तर लगेच परत तपासा — नाहीतर हाच call पुढे HTTP
 	// (Markdown + plain, प्रत्येकी ~15 sec TLS timeout) दोन्ही निष्फळ प्रयत्न
 	// करत बसतो, जरी आपल्याला आत्ताच कळलं की पुढचे 15+ तास काहीही उपयोग नाही.
-	if _, waiting := inEditFloodWait(botToken); waiting {
+	if _, waiting := InEditFloodWait(botToken); waiting {
 		return false
 	}
 	if editTgMessageAttempt(botToken, chatID, msgID, text, true) {

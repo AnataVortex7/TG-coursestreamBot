@@ -85,10 +85,9 @@ func deliverVideoToUser(
 		// true (silent==true तिथूनच येतो) — त्यामुळे फक्त त्याच jobs वर
 		// per-worker cap (wmqueue.MaxJobsPerWorker) लागू होतो. Normal/live
 		// lecture request (silent==false) कायम cap-free, fully parallel राहतो.
-		bulk := silent
 		msgID, logMsgID, colabErr := deliverViaColab(
 			botClient, channelID, messageID, fileName, watermarkText,
-			studentChatID, progressMsgID, caption, logChatID, logAccessHash, silent, bulk, editProgress,
+			studentChatID, progressMsgID, caption, logChatID, logAccessHash, silent, editProgress,
 		)
 		if colabErr == nil {
 			return nil, msgID, logMsgID, true, false, nil
@@ -133,7 +132,6 @@ func deliverViaColab(
 	logChatID int64,
 	logAccessHash int64,
 	silent bool,
-	bulk bool, // [NEW] true = /predownload batch job — per-worker cap लागू होतो
 	editProgress func(string),
 ) (sentMessageID int, logChannelMsgID int, err error) {
 
@@ -197,7 +195,6 @@ func deliverViaColab(
 		channelID,
 		channelAccessHash,
 		downloadBotToken,
-		bulk, // [NEW] silent pre-download (/predownload) असेल तरच true — फक्त तिथेच per-worker cap लागू होतो
 	)
 	if err != nil {
 		return 0, 0, fmt.Errorf("submit job failed: %w", err)
