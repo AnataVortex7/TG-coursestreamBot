@@ -1287,7 +1287,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		// [NEW] Cancel context — /stopuserbotdl ने cancel करता येतो
 		bgCtx, bgCancel := context.WithCancel(context.Background())
 		pID := addActiveProcess(senderID, bgCancel)
+		wmqueue.IncUserbotDL()
 		defer func() {
+			wmqueue.DecUserbotDL()
 			bgCancel()
 			removeActiveProcess(pID)
 		}()

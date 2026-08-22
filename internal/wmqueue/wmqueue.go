@@ -268,6 +268,33 @@ func IsColabStopRequested() bool {
 	return colabStop.stopped
 }
 
+// ── Active UserbotDL Tracker ──────────────────────────────────────────────────
+// To reserve worker slots while userbotdl is downloading on the main server.
+var (
+	userbotMu       sync.Mutex
+	activeUserbotDL int
+)
+
+func IncUserbotDL() {
+	userbotMu.Lock()
+	activeUserbotDL++
+	userbotMu.Unlock()
+}
+
+func DecUserbotDL() {
+	userbotMu.Lock()
+	if activeUserbotDL > 0 {
+		activeUserbotDL--
+	}
+	userbotMu.Unlock()
+}
+
+func GetActiveUserbotDL() int {
+	userbotMu.Lock()
+	defer userbotMu.Unlock()
+	return activeUserbotDL
+}
+
 // ── Job Queue ─────────────────────────────────────────────────────────────────
 
 type Queue struct {
@@ -357,13 +384,19 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 
 	maxJobs := q.DynamicMaxJobsPerWorker()
 
-	// worker कडे cap पेक्षा जास्त jobs process चालू आहेत का -
-	// live/normal आणि bulk jobs सर्व count होतात.
 	activeForWorker := 0
-	if workerID != "" {
-		for _, job := range q.jobs {
-			if job.Status == StatusProcessing && job.WorkerID == workerID {
+	globalActivePredownloads := 0
+	globalActiveUserbotJobs := 0
+
+	for _, job := range q.jobs {
+		if job.Status == StatusProcessing {
+			if workerID != "" && job.WorkerID == workerID {
 				activeForWorker++
+			}
+			if job.LogOnly {
+				globalActivePredownloads++
+			} else {
+				globalActiveUserbotJobs++
 			}
 		}
 	}
@@ -402,10 +435,29 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 
 	if selectedIndex != -1 {
 		id := q.pending[selectedIndex]
+		job := q.jobs[id]
+		
+		// [NEW] Global slot reservation logic for userbotdl
+		if job.LogOnly {
+			activeCmds := GetActiveUserbotDL()
+			slotsToReserve := activeCmds - globalActiveUserbotJobs
+			if slotsToReserve > 0 {
+				onlineWorkers := len(ActiveWorkers())
+				if onlineWorkers == 0 {
+					onlineWorkers = 1
+				}
+				totalSlots := onlineWorkers * maxJobs
+				maxAllowedPredownloads := totalSlots - slotsToReserve
+				
+				if globalActivePredownloads >= maxAllowedPredownloads {
+					return nil
+				}
+			}
+		}
+
 		// Remove the selected job from pending
 		q.pending = append(q.pending[:selectedIndex], q.pending[selectedIndex+1:]...)
 		
-		job := q.jobs[id]
 		job.Status = StatusProcessing
 		job.WorkerID = workerID
 		job.UpdatedAt = time.Now()
