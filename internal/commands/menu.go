@@ -260,32 +260,6 @@ func catKeyOf(cmdKey string) string {
 // Select-step list sources
 // ═══════════════════════════════════════════════════════════════════════════
 
-
-func listUserbotsItems() ([]listItem, string, error) {
-	users, err := db.ListUsers()
-	if err != nil {
-		return nil, "", err
-	}
-	var items []listItem
-	for _, usr := range users {
-		if usr.TelegramID != 0 && db.HasUserbotAccess(usr.TelegramID) {
-			name := usr.FullName
-			if name == "" {
-				name = usr.Username
-			}
-			if name == "" {
-				name = fmt.Sprintf("User %d", usr.TelegramID)
-			}
-			display := fmt.Sprintf("%s (TG: %d)", name, usr.TelegramID)
-			items = append(items, listItem{display: display, id: fmt.Sprintf("-u %d", usr.TelegramID)})
-		}
-	}
-	if len(items) == 0 {
-		return nil, "No connected userbots found.", nil
-	}
-	return items, "", nil
-}
-
 func listUsersItems() ([]listItem, string, error) {
 	users, err := db.ListUsers()
 	if err != nil {
@@ -674,7 +648,7 @@ func init() {
 	// ── Stream Settings ──
 	registerCmd(menuCmd{key: "listreplace", label: "📋 List Replace Rules", kind: kindView, fn: cmdListReplace})
 	registerCmd(menuCmd{key: "setreplace", label: "➕ Set Replace Rule", kind: kindFlow, fn: cmdSetReplace, steps: []cmdStep{
-		inputStep("📝 old_text=new_text टाका (line मध्ये space असली तरी चालेल):"),
+		inputStep("📝 old=new टाका (multiple sathi space ने separate करा):"),
 	}})
 	registerCmd(menuCmd{key: "delreplace", label: "🗑 Delete Replace Rule", kind: kindFlow, fn: cmdDelReplace, steps: []cmdStep{
 		selectStep("🗑 Delete Replace Rule — निवडा:", listReplaceItems),
@@ -987,24 +961,9 @@ func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
 
 	case kindFlow:
 		if len(mc.steps) == 0 {
-			editMenu(ctx, u, "❌ Configuration error - steps missing.", backAndRefreshMarkup(key))
+			editMenu(ctx, u, "❌ Configuration error — steps नाहीत.", backAndRefreshMarkup(key))
 			return dispatcher.EndGroups
 		}
-		
-		if isAdmin {
-			if key == "userbotdl" {
-				mc.steps = []cmdStep{
-					selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot account should download this?", listUserbotsItems),
-					inputStep("📥 *Userbot Download*\n\nChat ID & MsgID / Post Link..."),
-				}
-			} else if key == "setsendchannel" {
-				mc.steps = []cmdStep{
-					selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot's destination channel do you want to set?", listUserbotsItems),
-					inputStep("📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):"),
-				}
-			}
-		}
-
 		startFlowStep(ctx, u, key, mc.steps[0], mc.steps[1:], senderID, nil)
 	}
 	return dispatcher.EndGroups
@@ -1071,7 +1030,6 @@ func handlePendingReply(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, fmt.Sprintf("✅ Custom Watermark set झाला: `%s`", text))
 		return dispatcher.EndGroups
 	}
-
 	mc, ok := menuRegistry[p.key]
 	if !ok {
 		clearPending(senderID)
@@ -1145,35 +1103,21 @@ func premiumCancelMarkup() tg.ReplyMarkupClass {
 }
 
 func setPendingUserbotDLPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
-	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
-	if isAdmin {
-		startFlowStep(ctx, u, "userbotdl", 
-			selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot account should download this?", listUserbotsItems),
-			[]cmdStep{inputStep("📥 *Userbot Download*\n\nChat ID & MsgID / Post Link...\n\n*Examples:*\n-100123456789 45\nhttps://t.me/c/4372880940/1687")},
-			userID, nil)
-		return
-	}
 	setPending(userID, &pendingAction{
 		key: "userbotdl",
-		currentStep: inputStep("📥 *Userbot Download*\n\nChat ID & MsgID / Post Link..."),
+		currentStep: inputStep("📥 *Userbot Download*\n\nChat ID आणि Message Range/ID टाका किंवा Post Link वापरा:\n\n*Examples:*\n`-100123456789 45` (Single message)\n`-100123456789 45 60` (Range of messages)\n`https://t.me/c/4372880940/1687` (Post Link)"),
 	})
-	editCatalogMessage(ctx, u, "📥 *Userbot Download*\n\nChat ID & MsgID / Post Link...\n\n*Examples:*\n-100123456789 45 (Single message)\n-100123456789 45 60 (Range of messages)\nhttps://t.me/c/4372880940/1687 (Post Link)", premiumCancelMarkup())
+	editCatalogMessage(ctx, u, "📥 *Userbot Download*\n\nChat ID आणि Message Range/ID टाका किंवा Post Link वापरा:\n\n*Examples:*\n`-100123456789 45` (Single message)\n`-100123456789 45 60` (Range of messages)\n`https://t.me/c/4372880940/1687` (Post Link)", premiumCancelMarkup())
 }
+
 func setPendingSendChannelPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
-	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
-	if isAdmin {
-		startFlowStep(ctx, u, "setsendchannel", 
-			selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot's destination channel do you want to set?", listUserbotsItems),
-			[]cmdStep{inputStep("📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):")},
-			userID, nil)
-		return
-	}
 	setPending(userID, &pendingAction{
 		key: "setsendchannel_user",
-		currentStep: inputStep("📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):"),
+		currentStep: inputStep("📢 *Set Destination Channel*\n\nDownloads पाठवण्यासाठी तुमचा Channel ID टाका (उदा: `-1001234567890`):"),
 	})
-	editCatalogMessage(ctx, u, "📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):", premiumCancelMarkup())
+	editCatalogMessage(ctx, u, "📢 *Set Destination Channel*\n\nDownloads पाठवण्यासाठी तुमचा Channel ID टाका (उदा: `-1001234567890`):", premiumCancelMarkup())
 }
+
 func setPendingWatermarkPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
 	setPending(userID, &pendingAction{
 		key: "setwatermark_user",

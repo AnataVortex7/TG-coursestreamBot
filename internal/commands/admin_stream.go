@@ -653,10 +653,11 @@ func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 	var targetUserID int64 = senderID
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
 
-	if isAdmin && len(a) >= 2 && a[0] == "-u" {
-		if uid, err := strconv.ParseInt(a[1], 10, 64); err == nil {
-			targetUserID = uid
-			a = a[2:]
+	if isAdmin {
+		if targetUser, ok := AdminImpersonateStore.Load(senderID); ok {
+			if tu, ok := targetUser.(int64); ok && tu != 0 {
+				targetUserID = tu
+			}
 		}
 	}
 
@@ -679,13 +680,18 @@ func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	rawID, err := strconv.ParseInt(strings.TrimSpace(a[0]), 10, 64)
-	if err != nil || rawID <= 0 {
-		reply(ctx, u, "❌ Invalid channel ID. Positive number टाका.\nExample: `2479194095`")
+		rawID, err := strconv.ParseInt(strings.TrimSpace(a[0]), 10, 64)
+	if err != nil || rawID == 0 {
+		reply(ctx, u, "❌ Invalid channel ID.")
 		return dispatcher.EndGroups
 	}
 
-	internalID := -1000000000000 - rawID
+	var internalID int64
+	if rawID > 0 {
+		internalID = -1000000000000 - rawID
+	} else {
+		internalID = rawID
+	}
 
 	botClient := MainBotClient
 	if botClient == nil {
@@ -1097,10 +1103,11 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	var targetUserID int64 = senderID
 
-	if isAdmin && len(a) >= 2 && a[0] == "-u" {
-		if uid, err := strconv.ParseInt(a[1], 10, 64); err == nil {
-			targetUserID = uid
-			a = a[2:]
+	if isAdmin {
+		if targetUser, ok := AdminImpersonateStore.Load(senderID); ok {
+			if tu, ok := targetUser.(int64); ok && tu != 0 {
+				targetUserID = tu
+			}
 		}
 	}
 
@@ -1460,6 +1467,21 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 						}
 						s += fmt.Sprintf("\n• Msgs %s — `%s`",
 							strings.Join(idStrs, ", "), errText)
+					}
+				}
+			}
+						if len(errorLines) > 0 {
+				s += "\n\n*Errors:*"
+				for _, errText := range errorOrder {
+					ids := errorLines[errText]
+					if len(ids) == 1 {
+						s += fmt.Sprintf("\n🔸 Msg %d ➡ %s", ids[0], errText)
+					} else {
+						idStrs := make([]string, len(ids))
+						for i, id := range ids {
+							idStrs[i] = fmt.Sprintf("%d", id)
+						}
+						s += fmt.Sprintf("\n🔸 Msgs %s ➡ %s", strings.Join(idStrs, ", "), errText)
 					}
 				}
 			}
