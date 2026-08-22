@@ -3648,7 +3648,7 @@ func downloadWatermarkAndReupload(
 
 		var dlWriter io.WriterAt = tmpFile
 		if onDownloadProgress != nil {
-			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
+			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress, ctx: dlCtx}
 		}
 
 		d := downloader.NewDownloader()
@@ -3810,6 +3810,7 @@ func downloadAndReupload(
 			w:          tmpFile,
 			total:      file.FileSize,
 			onProgress: onDownloadProgress,
+			ctx:        dlCtx,
 		}
 	}
 
@@ -3883,7 +3884,7 @@ func downloadWatermarkAndReuploadLocal(
 
 	var dlWriter io.WriterAt = tmpFile
 	if onDownloadProgress != nil {
-		dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
+		dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress, ctx: dlCtx}
 	}
 
 	d := downloader.NewDownloader()
@@ -4061,9 +4062,13 @@ type progressWriter struct {
 	onProgress func(written, total int64)
 	mu         sync.Mutex // Added for thread-safety in WriteAt
 	lastTime   time.Time
+	ctx        context.Context // [NEW] To abort hung downloads when /stopuserbotdl is called
 }
 
 func (p *progressWriter) Write(b []byte) (int, error) {
+	if p.ctx != nil && p.ctx.Err() != nil {
+		return 0, p.ctx.Err()
+	}
 	n, err := p.w.Write(b)
 	p.mu.Lock()
 	p.written += int64(n)
@@ -4081,6 +4086,9 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 }
 
 func (p *progressWriter) WriteAt(b []byte, off int64) (int, error) {
+	if p.ctx != nil && p.ctx.Err() != nil {
+		return 0, p.ctx.Err()
+	}
 	wAt, ok := p.w.(io.WriterAt)
 	if !ok {
 		return 0, fmt.Errorf("underlying writer does not implement WriterAt")
@@ -4102,6 +4110,9 @@ func (p *progressWriter) WriteAt(b []byte, off int64) (int, error) {
 }
 
 func (p *progressWriter) Read(b []byte) (int, error) {
+	if p.ctx != nil && p.ctx.Err() != nil {
+		return 0, p.ctx.Err()
+	}
 	r, ok := p.w.(io.Reader)
 	if !ok {
 		return 0, fmt.Errorf("underlying writer does not implement Reader")

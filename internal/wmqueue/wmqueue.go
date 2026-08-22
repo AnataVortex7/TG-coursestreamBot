@@ -1310,6 +1310,8 @@ func StartColabWatcher() {
 							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID, statusMsg)
 						}
 					}
+					// [NEW] Remove the dead worker from the tracker/DB so it disappears from /colabstatus
+					forgetWorker(id)
 				}
 			}
 
