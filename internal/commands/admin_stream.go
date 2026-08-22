@@ -1350,13 +1350,13 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 						editCount = 0
 						msgCreatedAt = time.Now()
 						editMu.Unlock()
-						wmqueue.DeleteTgMessage(botToken, chatID, int64(msgID))
+						wmqueue.DeleteTgMessage(botToken, adminChatID, int64(msgID))
 					}
 					return
 				}
 
 				// Otherwise edit
-				success := wmqueue.EditTgMessage(botToken, chatID, msgID, text)
+				success := wmqueue.EditTgMessage(botToken, adminChatID, msgID, text)
 				if !success {
 					// Edit failed (possibly FloodWait), delete and send new
 					newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
@@ -1366,7 +1366,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 						editCount = 0
 						msgCreatedAt = time.Now()
 						editMu.Unlock()
-						wmqueue.DeleteTgMessage(botToken, chatID, int64(msgID))
+						wmqueue.DeleteTgMessage(botToken, adminChatID, int64(msgID))
 					}
 				} else {
 					editMu.Lock()
@@ -1481,12 +1481,12 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					summaryEditCount = 0
 					summaryCreatedAt = time.Now()
 					summaryEditMu.Unlock()
-					wmqueue.DeleteTgMessage(botToken, chatID, int64(currentSummaryID))
+					wmqueue.DeleteTgMessage(botToken, adminChatID, int64(currentSummaryID))
 				}
 				return
 			}
 
-			success := wmqueue.EditTgMessage(botToken, chatID, currentSummaryID, text)
+			success := wmqueue.EditTgMessage(botToken, adminChatID, currentSummaryID, text)
 			if !success {
 				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
 				if newID != 0 {
@@ -1495,7 +1495,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					summaryEditCount = 0
 					summaryCreatedAt = time.Now()
 					summaryEditMu.Unlock()
-					wmqueue.DeleteTgMessage(botToken, chatID, int64(currentSummaryID))
+					wmqueue.DeleteTgMessage(botToken, adminChatID, int64(currentSummaryID))
 				}
 			} else {
 				summaryEditMu.Lock()
@@ -1526,7 +1526,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					sendChannelPeer,
 					editProgress,
 					adminChatID,
-					sentMsgID,
+					&sentMsgID,
 				)
 				if err == nil {
 					return pm, nil
@@ -2669,7 +2669,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 				// channel मध्ये परत डुप्लिकेट नको. sendChannelPeer = destPeer.
 				pm, err = prepareMessage(
 					bgCtx, userbotClient, botClient, sourceChatID, srcRaw, msgID, 0,
-					botPeer, nil, destPeer, editProgress, adminChatID, sentMsgID,
+					botPeer, nil, destPeer, editProgress, adminChatID, &sentMsgID,
 				)
 				if err == nil {
 					return pm, nil
@@ -3003,7 +3003,7 @@ func prepareMessage(
 	sendChannelPeer *tg.InputPeerChannel,
 	editProgress func(string),
 	adminChatID int64,
-	sentMsgID int,
+	sentMsgID *int,
 ) (*preparedMessage, error) {
 
 	// ── Step 1: Fetch message ─────────────────────────────────────────────
@@ -3619,7 +3619,7 @@ func downloadWatermarkAndReupload(
 	msgID int,
 	botToken string,
 	adminChatID int64,
-	progressMsgID int,
+	progressMsgID *int,
 	sendToChatID int64,
 	sendToAccessHash int64,
 	sendToTopicID int,
@@ -3676,7 +3676,7 @@ func downloadWatermarkAndReupload(
 			wmText,
 			botToken,
 			adminChatID,
-			progressMsgID,
+			*progressMsgID,
 			sendToChatID,
 			sendToAccessHash,
 			sendToTopicID,
