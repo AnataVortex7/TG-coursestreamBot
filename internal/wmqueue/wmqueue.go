@@ -1062,17 +1062,17 @@ func notifyAllowedUsers(text string) {
 	botToken := config.ValueOf.BotToken
 	for _, uid := range config.ValueOf.AllowedUsers {
 		go func(chatID int64) {
-			msgID := sendTgMessage(botToken, chatID, text)
+			msgID := SendTgMessage(botToken, chatID, text)
 			if msgID == 0 {
 				return
 			}
 			time.Sleep(30 * time.Second)
-			deleteTgMessage(botToken, chatID, msgID)
+			DeleteTgMessage(botToken, chatID, msgID)
 		}(uid)
 	}
 }
 
-func sendTgMessage(botToken string, chatID int64, text string) int64 {
+func SendTgMessage(botToken string, chatID int64, text string) int64 {
 	if botToken == "" || chatID == 0 || strings.TrimSpace(text) == "" {
 		log.Printf("[wmqueue] sendTgMessage: empty botToken, chatID, or text provided (skip)")
 		return 0
@@ -1171,7 +1171,7 @@ func sendTgMessagePlain(botToken string, chatID int64, text string) int64 {
 	return result.Result.MessageID
 }
 
-func deleteTgMessage(botToken string, chatID int64, msgID int64) {
+func DeleteTgMessage(botToken string, chatID int64, msgID int64) {
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/deleteMessage", botToken)
 	payload, err := json.Marshal(map[string]interface{}{
 		"chat_id":    chatID,

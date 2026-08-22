@@ -1292,22 +1292,66 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			removeActiveProcess(pID)
 		}()
 
-		var lastEdit time.Time
 		var editMu sync.Mutex
+		var lastEdit time.Time
+		var editCount int
+		var msgCreatedAt = time.Now()
 
 		editProgress := func(text string) {
-			if sentMsgID == 0 {
-				return
-			}
 			editMu.Lock()
-			if time.Since(lastEdit) < 3*time.Second {
+			if sentMsgID == 0 {
 				editMu.Unlock()
 				return
 			}
+			// 5s frequency as requested by user
+			if time.Since(lastEdit) < 5*time.Second {
+				editMu.Unlock()
+				return
+			}
+			
+			needsNewMsg := false
+			if editCount >= 10 || time.Since(msgCreatedAt) >= 2*time.Minute {
+				needsNewMsg = true
+			}
+			
 			lastEdit = time.Now()
+			currentMsgID := sentMsgID
 			editMu.Unlock()
-			botToken := os.Getenv("BOT_TOKEN")
-			go wmqueue.EditTgMessage(botToken, chatID, sentMsgID, text)
+
+			go func(msgID int) {
+				botToken := os.Getenv("BOT_TOKEN")
+				if needsNewMsg {
+					newID := wmqueue.SendTgMessage(botToken, chatID, text)
+					if newID != 0 {
+						editMu.Lock()
+						sentMsgID = int(newID)
+						editCount = 0
+						msgCreatedAt = time.Now()
+						editMu.Unlock()
+						wmqueue.DeleteTgMessage(botToken, chatID, int64(msgID))
+					}
+					return
+				}
+
+				// Otherwise edit
+				success := wmqueue.EditTgMessage(botToken, chatID, msgID, text)
+				if !success {
+					// Edit failed (possibly FloodWait), delete and send new
+					newID := wmqueue.SendTgMessage(botToken, chatID, text)
+					if newID != 0 {
+						editMu.Lock()
+						sentMsgID = int(newID)
+						editCount = 0
+						msgCreatedAt = time.Now()
+						editMu.Unlock()
+						wmqueue.DeleteTgMessage(botToken, chatID, int64(msgID))
+					}
+				} else {
+					editMu.Lock()
+					editCount++
+					editMu.Unlock()
+				}
+			}(currentMsgID)
 		}
 
 		deleteProgress := func() {
@@ -1375,31 +1419,63 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			return s
 		}
 
-		// [FIX] summaryMsgID parse — सगळे possible update types handle करतो
+		var summaryEditMu sync.Mutex
+		var summaryEditCount int
+		var summaryCreatedAt = time.Now()
+
 		updateSummary := func() {
 			text := buildSummaryText()
+			botToken := os.Getenv("BOT_TOKEN")
+			
+			summaryEditMu.Lock()
 			if summaryMsgID == 0 {
-				sCtx, sCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer sCancel()
-				sentSummary, err := botClient.API().MessagesSendMessage(sCtx, &tg.MessagesSendMessageRequest{
-					Peer:      botPeer,
-					Message:   text,
-					RandomID:  rand.Int63(),
-					NoWebpage: true,
-				})
-				if err == nil {
-					// [FIX] सगळे MTProto update types handle करा
-					summaryMsgID = extractMessageID(sentSummary)
+				summaryEditMu.Unlock()
+				newID := wmqueue.SendTgMessage(botToken, chatID, text)
+				if newID != 0 {
+					summaryEditMu.Lock()
+					summaryMsgID = int(newID)
+					summaryEditCount = 0
+					summaryCreatedAt = time.Now()
+					summaryEditMu.Unlock()
+				}
+				return
+			}
+
+			needsNewMsg := false
+			if summaryEditCount >= 10 || time.Since(summaryCreatedAt) >= 2*time.Minute {
+				needsNewMsg = true
+			}
+			currentSummaryID := summaryMsgID
+			summaryEditMu.Unlock()
+
+			if needsNewMsg {
+				newID := wmqueue.SendTgMessage(botToken, chatID, text)
+				if newID != 0 {
+					summaryEditMu.Lock()
+					summaryMsgID = int(newID)
+					summaryEditCount = 0
+					summaryCreatedAt = time.Now()
+					summaryEditMu.Unlock()
+					wmqueue.DeleteTgMessage(botToken, chatID, int64(currentSummaryID))
+				}
+				return
+			}
+
+			success := wmqueue.EditTgMessage(botToken, chatID, currentSummaryID, text)
+			if !success {
+				newID := wmqueue.SendTgMessage(botToken, chatID, text)
+				if newID != 0 {
+					summaryEditMu.Lock()
+					summaryMsgID = int(newID)
+					summaryEditCount = 0
+					summaryCreatedAt = time.Now()
+					summaryEditMu.Unlock()
+					wmqueue.DeleteTgMessage(botToken, chatID, int64(currentSummaryID))
 				}
 			} else {
-				eCtx, eCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer eCancel()
-				_, _ = botClient.API().MessagesEditMessage(eCtx, &tg.MessagesEditMessageRequest{
-					Peer:      botPeer,
-					ID:        summaryMsgID,
-					Message:   text,
-					NoWebpage: true,
-				})
+				summaryEditMu.Lock()
+				summaryEditCount++
+				summaryEditMu.Unlock()
 			}
 		}
 
@@ -2035,6 +2111,8 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 		// [NEW] 5-सेकंद visual progress-bar ticker — existing per-completion
 		// editProgress ला touch न करता, वेगळ्या ticker मधून पूर्ण-batch चा
 		// एकत्रित overview (+ प्रत्येक चालू lecture चा stage/percent) पाठवतो.
+
+
 		progressStopCh := make(chan struct{})
 		StartProgressBarTicker(
 			progressStopCh,
@@ -2353,21 +2431,66 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			removeActiveProcess(pID)
 		}()
 
-		var lastEdit time.Time
 		var editMu sync.Mutex
+		var lastEdit time.Time
+		var editCount int
+		var msgCreatedAt = time.Now()
+
 		editProgress := func(text string) {
-			if sentMsgID == 0 {
-				return
-			}
 			editMu.Lock()
-			if time.Since(lastEdit) < 3*time.Second {
+			if sentMsgID == 0 {
 				editMu.Unlock()
 				return
 			}
+			// 5s frequency as requested by user
+			if time.Since(lastEdit) < 5*time.Second {
+				editMu.Unlock()
+				return
+			}
+			
+			needsNewMsg := false
+			if editCount >= 10 || time.Since(msgCreatedAt) >= 2*time.Minute {
+				needsNewMsg = true
+			}
+			
 			lastEdit = time.Now()
+			currentMsgID := sentMsgID
 			editMu.Unlock()
-			botToken := os.Getenv("BOT_TOKEN")
-			go wmqueue.EditTgMessage(botToken, adminChatID, sentMsgID, text)
+
+			go func(msgID int) {
+				botToken := os.Getenv("BOT_TOKEN")
+				if needsNewMsg {
+					newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
+					if newID != 0 {
+						editMu.Lock()
+						sentMsgID = int(newID)
+						editCount = 0
+						msgCreatedAt = time.Now()
+						editMu.Unlock()
+						wmqueue.DeleteTgMessage(botToken, adminChatID, int64(msgID))
+					}
+					return
+				}
+
+				// Otherwise edit
+				success := wmqueue.EditTgMessage(botToken, adminChatID, msgID, text)
+				if !success {
+					// Edit failed (possibly FloodWait), delete and send new
+					newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
+					if newID != 0 {
+						editMu.Lock()
+						sentMsgID = int(newID)
+						editCount = 0
+						msgCreatedAt = time.Now()
+						editMu.Unlock()
+						wmqueue.DeleteTgMessage(botToken, adminChatID, int64(msgID))
+					}
+				} else {
+					editMu.Lock()
+					editCount++
+					editMu.Unlock()
+				}
+			}(currentMsgID)
 		}
 		deleteProgress := func() {
 			if sentMsgID == 0 {
@@ -2413,23 +2536,63 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			return s
 		}
 
+		var summaryEditMu sync.Mutex
+		var summaryEditCount int
+		var summaryCreatedAt = time.Now()
+
 		updateSummary := func() {
 			text := buildSummaryText()
+			botToken := os.Getenv("BOT_TOKEN")
+			
+			summaryEditMu.Lock()
 			if summaryMsgID == 0 {
-				sCtx, sCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer sCancel()
-				sentSummary, err := botClient.API().MessagesSendMessage(sCtx, &tg.MessagesSendMessageRequest{
-					Peer: botPeer, Message: text, RandomID: rand.Int63(), NoWebpage: true,
-				})
-				if err == nil {
-					summaryMsgID = extractMessageID(sentSummary)
+				summaryEditMu.Unlock()
+				newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
+				if newID != 0 {
+					summaryEditMu.Lock()
+					summaryMsgID = int(newID)
+					summaryEditCount = 0
+					summaryCreatedAt = time.Now()
+					summaryEditMu.Unlock()
+				}
+				return
+			}
+
+			needsNewMsg := false
+			if summaryEditCount >= 10 || time.Since(summaryCreatedAt) >= 2*time.Minute {
+				needsNewMsg = true
+			}
+			currentSummaryID := summaryMsgID
+			summaryEditMu.Unlock()
+
+			if needsNewMsg {
+				newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
+				if newID != 0 {
+					summaryEditMu.Lock()
+					summaryMsgID = int(newID)
+					summaryEditCount = 0
+					summaryCreatedAt = time.Now()
+					summaryEditMu.Unlock()
+					wmqueue.DeleteTgMessage(botToken, adminChatID, int64(currentSummaryID))
+				}
+				return
+			}
+
+			success := wmqueue.EditTgMessage(botToken, adminChatID, currentSummaryID, text)
+			if !success {
+				newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
+				if newID != 0 {
+					summaryEditMu.Lock()
+					summaryMsgID = int(newID)
+					summaryEditCount = 0
+					summaryCreatedAt = time.Now()
+					summaryEditMu.Unlock()
+					wmqueue.DeleteTgMessage(botToken, adminChatID, int64(currentSummaryID))
 				}
 			} else {
-				eCtx, eCancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer eCancel()
-				_, _ = botClient.API().MessagesEditMessage(eCtx, &tg.MessagesEditMessageRequest{
-					Peer: botPeer, ID: summaryMsgID, Message: text, NoWebpage: true,
-				})
+				summaryEditMu.Lock()
+				summaryEditCount++
+				summaryEditMu.Unlock()
 			}
 		}
 
