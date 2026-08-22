@@ -346,37 +346,9 @@ func (q *Queue) Enqueue(job *WatermarkJob) {
 }
 
 // DynamicMaxJobsPerWorker - Calculates maximum jobs per worker dynamically.
-// Default base is 2. If there are many pending jobs and fewer workers,
-// the cap is increased to scale parallel processing. Maximum cap is 5
-// to prevent Out-Of-Memory or Disk-Full errors on Colab/HuggingFace workers.
+// Modified: Strict max limit of 2 jobs per worker to prevent overloading.
 func (q *Queue) DynamicMaxJobsPerWorker() int {
-	onlineWorkers := len(ActiveWorkers())
-	if onlineWorkers == 0 {
-		onlineWorkers = 1
-	}
-	
-	pendingCount := 0
-	// We are already inside a lock usually when this is called, but let's just 
-	// be careful. If this is called from Poll() which holds the lock, we shouldn't lock again.
-	// Oh wait, ActiveWorkers() does DB query, which is fine, but checking q.pending needs lock.
-	// Since Poll() calls this while holding q.mu, we must NOT lock here.
-	pendingCount = len(q.pending)
-
-	baseCap := 2
-	
-	if pendingCount > onlineWorkers*baseCap {
-		neededCap := (pendingCount + onlineWorkers - 1) / onlineWorkers
-		if neededCap > baseCap {
-			baseCap = neededCap
-		}
-	}
-	
-	const hardMax = 5
-	if baseCap > hardMax {
-		baseCap = hardMax
-	}
-	
-	return baseCap
+	return 2
 }
 
 func (q *Queue) Poll(workerID string) *WatermarkJob {
@@ -396,34 +368,50 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 		}
 	}
 
-	var skipped []string // cap मुळे skip केलेले job IDs — शेवटी परत pending मध्ये टाकायला
-	defer func() {
-		if len(skipped) > 0 {
-			q.pending = append(q.pending, skipped...)
-		}
-	}()
+	if workerID != "" && activeForWorker >= maxJobs {
+		return nil
+	}
 
-	for len(q.pending) > 0 {
-		id := q.pending[0]
-		q.pending = q.pending[1:]
+	var validPending []string
+	var priorityIndex = -1
+	var normalIndex = -1
+
+	for _, id := range q.pending {
 		job, ok := q.jobs[id]
 		if !ok || job.Status != StatusPending {
 			continue
 		}
-
-		if workerID != "" && activeForWorker >= maxJobs {
-			// हा worker आधीच cap इतके jobs घेऊन बसलाय — हा job
-			// skip करून पुढचा job बघतो. cap मुळे
-			// skip केलेला job हरवू नये म्हणून queue च्या शेवटी परत टाकतो.
-			skipped = append(skipped, id)
-			continue
+		validPending = append(validPending, id)
+		
+		// Prioritize live/userbotdl (LogOnly == false) over predownload (LogOnly == true)
+		if priorityIndex == -1 && !job.LogOnly {
+			priorityIndex = len(validPending) - 1
+		} else if normalIndex == -1 && job.LogOnly {
+			normalIndex = len(validPending) - 1
 		}
+	}
+	
+	q.pending = validPending
 
+	selectedIndex := -1
+	if priorityIndex != -1 {
+		selectedIndex = priorityIndex
+	} else if normalIndex != -1 {
+		selectedIndex = normalIndex
+	}
+
+	if selectedIndex != -1 {
+		id := q.pending[selectedIndex]
+		// Remove the selected job from pending
+		q.pending = append(q.pending[:selectedIndex], q.pending[selectedIndex+1:]...)
+		
+		job := q.jobs[id]
 		job.Status = StatusProcessing
 		job.WorkerID = workerID
 		job.UpdatedAt = time.Now()
 		return job
 	}
+
 	return nil
 }
 
