@@ -648,9 +648,20 @@ func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
 // ── /setsendchannel <channelID> ──────────────────────────────────────────────
 
 func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
-	a := args(u)
+		a := args(u)
+	senderID := u.EffectiveUser().GetID()
+	var targetUserID int64 = senderID
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
+
+	if isAdmin && len(a) >= 2 && a[0] == "-u" {
+		if uid, err := strconv.ParseInt(a[1], 10, 64); err == nil {
+			targetUserID = uid
+			a = a[2:]
+		}
+	}
+
 	if len(a) < 1 {
-		curID, ok := getSendChannelID()
+		curID, ok := getSendChannelIDForUser(targetUserID)
 		if ok {
 			displayID := -(curID + 1000000000000)
 			reply(ctx, u, fmt.Sprintf(
@@ -692,7 +703,7 @@ func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 	}
 	_ = peer
 
-	sendChannelStore.Store("id", internalID)
+	setSendChannelIDForUser(targetUserID, internalID)
 
 	reply(ctx, u, fmt.Sprintf(
 		"✅ Send channel set!\n\n📢 Channel ID: `%d`\n\n"+
@@ -1084,6 +1095,14 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	a := args(u)
+	var targetUserID int64 = senderID
+
+	if isAdmin && len(a) >= 2 && a[0] == "-u" {
+		if uid, err := strconv.ParseInt(a[1], 10, 64); err == nil {
+			targetUserID = uid
+			a = a[2:]
+		}
+	}
 
 	if len(a) < 1 {
 		reply(ctx, u,
@@ -1103,6 +1122,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	var startMsg int
 	var endMsg int
 	var specificMsgIDs []int
+
+	
+	GlobalDashboard.SetAdminChat(os.Getenv("BOT_TOKEN"), u.EffectiveChat().GetID())
 
 	linkInfo, linkErr := parseTelegramPostInput(a)
 	if linkErr != nil {
@@ -1215,7 +1237,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		}
 	}
 
-	userbotClient, err := GetUserbotClientForUser(senderID)
+	userbotClient, err := GetUserbotClientForUser(targetUserID)
 	if err != nil || userbotClient == nil {
 		reply(ctx, u, "❌ Userbot Client ready नाही. आधी 🔑 Connect Userbot Account वरून Login करा.")
 		return dispatcher.EndGroups
@@ -1235,7 +1257,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	sourcePeerForSend := getChannelPeerIfBotAdmin(ctx, botClient, chatID)
 
 	var sendChannelPeer *tg.InputPeerChannel
-	if scID, ok := getSendChannelIDForUser(senderID); ok && scID != 0 {
+	if scID, ok := getSendChannelIDForUser(targetUserID); ok && scID != 0 {
 		sendChannelPeer = resolveChannelInputPeer(ctx, botClient, scID)
 		if sendChannelPeer == nil && userbotClient != nil {
 			sendChannelPeer = resolveChannelInputPeer(ctx, userbotClient, scID)
@@ -1306,7 +1328,12 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			
 		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
 		
-		if isFinalMsg {
+		
+			// Update global dashboard
+			GlobalDashboard.UpdateTask(fmt.Sprintf("%d-active", targetUserID), targetUserID, fmt.Sprintf("%d", targetUserID), text, isFinalMsg)
+
+			if isFinalMsg {
+
 			editMu.Lock()
 			currentMsgID := sentMsgID
 			editMu.Unlock()

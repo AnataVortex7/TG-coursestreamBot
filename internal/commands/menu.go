@@ -260,6 +260,32 @@ func catKeyOf(cmdKey string) string {
 // Select-step list sources
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+func listUserbotsItems() ([]listItem, string, error) {
+	users, err := db.ListUsers()
+	if err != nil {
+		return nil, "", err
+	}
+	var items []listItem
+	for _, usr := range users {
+		if usr.TelegramID != 0 && db.HasUserbotAccess(usr.TelegramID) {
+			name := usr.FullName
+			if name == "" {
+				name = usr.Username
+			}
+			if name == "" {
+				name = fmt.Sprintf("User %d", usr.TelegramID)
+			}
+			display := fmt.Sprintf("%s (TG: %d)", name, usr.TelegramID)
+			items = append(items, listItem{display: display, id: fmt.Sprintf("-u %d", usr.TelegramID)})
+		}
+	}
+	if len(items) == 0 {
+		return nil, "No connected userbots found.", nil
+	}
+	return items, "", nil
+}
+
 func listUsersItems() ([]listItem, string, error) {
 	users, err := db.ListUsers()
 	if err != nil {
@@ -961,9 +987,24 @@ func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
 
 	case kindFlow:
 		if len(mc.steps) == 0 {
-			editMenu(ctx, u, "❌ Configuration error — steps नाहीत.", backAndRefreshMarkup(key))
+			editMenu(ctx, u, "❌ Configuration error - steps missing.", backAndRefreshMarkup(key))
 			return dispatcher.EndGroups
 		}
+		
+		if isAdmin {
+			if key == "userbotdl" {
+				mc.steps = []cmdStep{
+					selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot account should download this?", listUserbotsItems),
+					inputStep("📥 *Userbot Download*\n\nChat ID & MsgID / Post Link..."),
+				}
+			} else if key == "setsendchannel" {
+				mc.steps = []cmdStep{
+					selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot's destination channel do you want to set?", listUserbotsItems),
+					inputStep("📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):"),
+				}
+			}
+		}
+
 		startFlowStep(ctx, u, key, mc.steps[0], mc.steps[1:], senderID, nil)
 	}
 	return dispatcher.EndGroups
