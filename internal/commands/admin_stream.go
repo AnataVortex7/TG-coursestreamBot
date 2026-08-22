@@ -462,13 +462,21 @@ func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, chan
 
 func cmdStopUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	senderID := u.EffectiveUser().GetID()
+	
+	// [NEW] Clear any pending jobs in the queue for this admin
+	canceledJobs := wmqueue.Default.CancelJobsByAdmin(senderID)
+	
 	if !hasActiveProcessForUser(senderID) {
-		reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
+		if canceledJobs > 0 {
+			reply(ctx, u, fmt.Sprintf("🛑 Queue मधून %d pending jobs cancel केले!", canceledJobs))
+		} else {
+			reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
+		}
 		return dispatcher.EndGroups
 	}
 	stopped := stopAllActiveProcessesForUser(senderID)
-	if stopped > 0 {
-		reply(ctx, u, fmt.Sprintf("🛑 एकूण %d चालू batch processes stop केले!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.", stopped))
+	if stopped > 0 || canceledJobs > 0 {
+		reply(ctx, u, fmt.Sprintf("🛑 एकूण %d चालू batch processes आणि %d pending jobs stop केले!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.", stopped, canceledJobs))
 	} else {
 		reply(ctx, u, "⚠️ Process आधीच थांबले होते.")
 	}

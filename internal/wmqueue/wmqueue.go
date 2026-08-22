@@ -467,6 +467,29 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 	return nil
 }
 
+// CancelJobsByAdmin — admin ने stop केल्यास त्याचे सर्व pending jobs cancel करतो
+func (q *Queue) CancelJobsByAdmin(adminID int64) int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	canceled := 0
+	var newPending []string
+	for _, id := range q.pending {
+		if job, ok := q.jobs[id]; ok && job.AdminChatID == adminID {
+			job.Status = StatusFailed
+			job.Error = "Canceled by /stopuserbotdl"
+			job.UpdatedAt = time.Now()
+			canceled++
+			// Also delete from DB so they don't persist
+			go deleteJobFromDB(id)
+		} else {
+			newPending = append(newPending, id)
+		}
+	}
+	q.pending = newPending
+	return canceled
+}
+
 func (q *Queue) UpdateStatus(jobID, status, errMsg string) {
 	q.mu.Lock()
 	var targetJob *WatermarkJob
