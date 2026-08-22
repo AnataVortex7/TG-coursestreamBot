@@ -1145,21 +1145,35 @@ func premiumCancelMarkup() tg.ReplyMarkupClass {
 }
 
 func setPendingUserbotDLPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
+	if isAdmin {
+		startFlowStep(ctx, u, "userbotdl", 
+			selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot account should download this?", listUserbotsItems),
+			[]cmdStep{inputStep("📥 *Userbot Download*\n\nChat ID & MsgID / Post Link...\n\n*Examples:*\n-100123456789 45\nhttps://t.me/c/4372880940/1687")},
+			userID, nil)
+		return
+	}
 	setPending(userID, &pendingAction{
 		key: "userbotdl",
-		currentStep: inputStep("📥 *Userbot Download*\n\nChat ID आणि Message Range/ID टाका किंवा Post Link वापरा:\n\n*Examples:*\n`-100123456789 45` (Single message)\n`-100123456789 45 60` (Range of messages)\n`https://t.me/c/4372880940/1687` (Post Link)"),
+		currentStep: inputStep("📥 *Userbot Download*\n\nChat ID & MsgID / Post Link..."),
 	})
-	editCatalogMessage(ctx, u, "📥 *Userbot Download*\n\nChat ID आणि Message Range/ID टाका किंवा Post Link वापरा:\n\n*Examples:*\n`-100123456789 45` (Single message)\n`-100123456789 45 60` (Range of messages)\n`https://t.me/c/4372880940/1687` (Post Link)", premiumCancelMarkup())
+	editCatalogMessage(ctx, u, "📥 *Userbot Download*\n\nChat ID & MsgID / Post Link...\n\n*Examples:*\n-100123456789 45 (Single message)\n-100123456789 45 60 (Range of messages)\nhttps://t.me/c/4372880940/1687 (Post Link)", premiumCancelMarkup())
 }
-
 func setPendingSendChannelPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, userID)
+	if isAdmin {
+		startFlowStep(ctx, u, "setsendchannel", 
+			selectStep("👥 *Select Target Userbot Account*\n\nWhich userbot's destination channel do you want to set?", listUserbotsItems),
+			[]cmdStep{inputStep("📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):")},
+			userID, nil)
+		return
+	}
 	setPending(userID, &pendingAction{
 		key: "setsendchannel_user",
-		currentStep: inputStep("📢 *Set Destination Channel*\n\nDownloads पाठवण्यासाठी तुमचा Channel ID टाका (उदा: `-1001234567890`):"),
+		currentStep: inputStep("📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):"),
 	})
-	editCatalogMessage(ctx, u, "📢 *Set Destination Channel*\n\nDownloads पाठवण्यासाठी तुमचा Channel ID टाका (उदा: `-1001234567890`):", premiumCancelMarkup())
+	editCatalogMessage(ctx, u, "📥 *Set Destination Channel*\n\nEnter Channel ID (e.g., -1001234567890):", premiumCancelMarkup())
 }
-
 func setPendingWatermarkPrompt(ctx *ext.Context, u *ext.Update, userID int64) {
 	setPending(userID, &pendingAction{
 		key: "setwatermark_user",

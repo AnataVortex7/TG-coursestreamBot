@@ -1124,7 +1124,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	var specificMsgIDs []int
 
 	
-	GlobalDashboard.SetAdminChat(os.Getenv("BOT_TOKEN"), u.EffectiveChat().GetID())
+	if isAdmin {
+		GlobalDashboard.SetAdminChat(os.Getenv("BOT_TOKEN"), u.EffectiveChat().GetID())
+	}
 
 	linkInfo, linkErr := parseTelegramPostInput(a)
 	if linkErr != nil {
@@ -1294,14 +1296,15 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		watermarkStr = fmt.Sprintf("\n💧 Watermark: `%s`", wmText)
 	}
 
-	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
-		"⏳ Starting...\n📡 Channel: `%d`\n📋 %s%s%s%s\n\n🛑 Stop: /stopuserbotdl",
-		chatIDRaw, rangeStr, topicStr, channelStr, watermarkStr,
-	)), nil)
-
-	sentMsgID := 0
-	if sentMsg != nil {
-		sentMsgID = sentMsg.ID
+		sentMsgID := 0
+	if !isAdmin {
+		sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
+			"⏳ Starting...\n📡 Channel: %d\n📑 %s%s%s%s\n\n🛑 Stop: /stopuserbotdl",
+			chatIDRaw, rangeStr, topicStr, channelStr, watermarkStr,
+		)), nil)
+		if sentMsg != nil {
+			sentMsgID = sentMsg.ID
+		}
 	}
 
 	// ── Goroutine: process all messages ──────────────────────────────────────
@@ -1327,11 +1330,6 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			}
 			
 		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
-		
-		
-			// Update global dashboard
-			GlobalDashboard.UpdateTask(fmt.Sprintf("%d-active", targetUserID), targetUserID, fmt.Sprintf("%d", targetUserID), text, isFinalMsg)
-
 			if isFinalMsg {
 
 			editMu.Lock()
@@ -2496,8 +2494,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 			}
 			
 		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
-		
-		if isFinalMsg {
+			if isFinalMsg {
 			editMu.Lock()
 			currentMsgID := sentMsgID
 			editMu.Unlock()

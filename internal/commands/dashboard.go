@@ -155,8 +155,9 @@ func (d *DashboardManager) buildText() string {
 			lines := strings.Split(t.Text, "\n")
 			// Try to compact the text for dashboard
 			compact := ""
-			for _, l := range lines {
-				if strings.Contains(l, "Uploading") || strings.Contains(l, "Downloading") || strings.Contains(l, "Speed") || strings.Contains(l, "Done") || strings.Contains(l, "Err") || strings.Contains(l, "Processing") {
+						for _, l := range lines {
+				l = strings.TrimSpace(l)
+				if l != "" && !strings.Contains(l, "Msg:") && !strings.Contains(l, "📌") {
 					compact += l + " | "
 				}
 			}
