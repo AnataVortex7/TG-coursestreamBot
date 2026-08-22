@@ -462,21 +462,13 @@ func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, chan
 
 func cmdStopUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	senderID := u.EffectiveUser().GetID()
-	
-	// [NEW] Clear any pending jobs in the queue for this admin
-	canceledJobs := wmqueue.Default.CancelJobsByAdmin(senderID)
-	
 	if !hasActiveProcessForUser(senderID) {
-		if canceledJobs > 0 {
-			reply(ctx, u, fmt.Sprintf("🛑 Queue मधून %d pending jobs cancel केले!", canceledJobs))
-		} else {
-			reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
-		}
+		reply(ctx, u, "⚠️ सध्या तुमचा कोणताही process चालू नाही.")
 		return dispatcher.EndGroups
 	}
 	stopped := stopAllActiveProcessesForUser(senderID)
-	if stopped > 0 || canceledJobs > 0 {
-		reply(ctx, u, fmt.Sprintf("🛑 एकूण %d चालू batch processes आणि %d pending jobs stop केले!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.", stopped, canceledJobs))
+	if stopped > 0 {
+		reply(ctx, u, fmt.Sprintf("🛑 एकूण %d चालू batch processes stop केले!\n\nजे messages आधीच send झाले ते cancel होणार नाहीत.\nSummary लवकरच update होईल.", stopped))
 	} else {
 		reply(ctx, u, "⚠️ Process आधीच थांबले होते.")
 	}
@@ -1295,9 +1287,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		// [NEW] Cancel context — /stopuserbotdl ने cancel करता येतो
 		bgCtx, bgCancel := context.WithCancel(context.Background())
 		pID := addActiveProcess(senderID, bgCancel)
-		wmqueue.IncUserbotDL()
 		defer func() {
-			wmqueue.DecUserbotDL()
 			bgCancel()
 			removeActiveProcess(pID)
 		}()
@@ -3656,7 +3646,7 @@ func downloadWatermarkAndReupload(
 
 		var dlWriter io.WriterAt = tmpFile
 		if onDownloadProgress != nil {
-			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress, ctx: dlCtx}
+			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
 		}
 
 		d := downloader.NewDownloader()
@@ -3818,7 +3808,6 @@ func downloadAndReupload(
 			w:          tmpFile,
 			total:      file.FileSize,
 			onProgress: onDownloadProgress,
-			ctx:        dlCtx,
 		}
 	}
 
@@ -3892,7 +3881,7 @@ func downloadWatermarkAndReuploadLocal(
 
 	var dlWriter io.WriterAt = tmpFile
 	if onDownloadProgress != nil {
-		dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress, ctx: dlCtx}
+		dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
 	}
 
 	d := downloader.NewDownloader()
@@ -4070,13 +4059,9 @@ type progressWriter struct {
 	onProgress func(written, total int64)
 	mu         sync.Mutex // Added for thread-safety in WriteAt
 	lastTime   time.Time
-	ctx        context.Context // [NEW] To abort hung downloads when /stopuserbotdl is called
 }
 
 func (p *progressWriter) Write(b []byte) (int, error) {
-	if p.ctx != nil && p.ctx.Err() != nil {
-		return 0, p.ctx.Err()
-	}
 	n, err := p.w.Write(b)
 	p.mu.Lock()
 	p.written += int64(n)
@@ -4094,9 +4079,6 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 }
 
 func (p *progressWriter) WriteAt(b []byte, off int64) (int, error) {
-	if p.ctx != nil && p.ctx.Err() != nil {
-		return 0, p.ctx.Err()
-	}
 	wAt, ok := p.w.(io.WriterAt)
 	if !ok {
 		return 0, fmt.Errorf("underlying writer does not implement WriterAt")
@@ -4118,9 +4100,6 @@ func (p *progressWriter) WriteAt(b []byte, off int64) (int, error) {
 }
 
 func (p *progressWriter) Read(b []byte) (int, error) {
-	if p.ctx != nil && p.ctx.Err() != nil {
-		return 0, p.ctx.Err()
-	}
 	r, ok := p.w.(io.Reader)
 	if !ok {
 		return 0, fmt.Errorf("underlying writer does not implement Reader")
@@ -4336,3 +4315,4 @@ func (p *uploadProgressAdapter) Chunk(ctx context.Context, state uploader.Progre
 	}
 	return nil
 }
+

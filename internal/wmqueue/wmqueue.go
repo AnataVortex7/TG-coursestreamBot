@@ -268,33 +268,6 @@ func IsColabStopRequested() bool {
 	return colabStop.stopped
 }
 
-// ── Active UserbotDL Tracker ──────────────────────────────────────────────────
-// To reserve worker slots while userbotdl is downloading on the main server.
-var (
-	userbotMu       sync.Mutex
-	activeUserbotDL int
-)
-
-func IncUserbotDL() {
-	userbotMu.Lock()
-	activeUserbotDL++
-	userbotMu.Unlock()
-}
-
-func DecUserbotDL() {
-	userbotMu.Lock()
-	if activeUserbotDL > 0 {
-		activeUserbotDL--
-	}
-	userbotMu.Unlock()
-}
-
-func GetActiveUserbotDL() int {
-	userbotMu.Lock()
-	defer userbotMu.Unlock()
-	return activeUserbotDL
-}
-
 // ── Job Queue ─────────────────────────────────────────────────────────────────
 
 type Queue struct {
@@ -373,9 +346,37 @@ func (q *Queue) Enqueue(job *WatermarkJob) {
 }
 
 // DynamicMaxJobsPerWorker - Calculates maximum jobs per worker dynamically.
-// Modified: Strict max limit of 2 jobs per worker to prevent overloading.
+// Default base is 2. If there are many pending jobs and fewer workers,
+// the cap is increased to scale parallel processing. Maximum cap is 5
+// to prevent Out-Of-Memory or Disk-Full errors on Colab/HuggingFace workers.
 func (q *Queue) DynamicMaxJobsPerWorker() int {
-	return 2
+	onlineWorkers := len(ActiveWorkers())
+	if onlineWorkers == 0 {
+		onlineWorkers = 1
+	}
+	
+	pendingCount := 0
+	// We are already inside a lock usually when this is called, but let's just 
+	// be careful. If this is called from Poll() which holds the lock, we shouldn't lock again.
+	// Oh wait, ActiveWorkers() does DB query, which is fine, but checking q.pending needs lock.
+	// Since Poll() calls this while holding q.mu, we must NOT lock here.
+	pendingCount = len(q.pending)
+
+	baseCap := 2
+	
+	if pendingCount > onlineWorkers*baseCap {
+		neededCap := (pendingCount + onlineWorkers - 1) / onlineWorkers
+		if neededCap > baseCap {
+			baseCap = neededCap
+		}
+	}
+	
+	const hardMax = 5
+	if baseCap > hardMax {
+		baseCap = hardMax
+	}
+	
+	return baseCap
 }
 
 func (q *Queue) Poll(workerID string) *WatermarkJob {
@@ -384,110 +385,46 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 
 	maxJobs := q.DynamicMaxJobsPerWorker()
 
+	// worker कडे cap पेक्षा जास्त jobs process चालू आहेत का -
+	// live/normal आणि bulk jobs सर्व count होतात.
 	activeForWorker := 0
-	globalActivePredownloads := 0
-	globalActiveUserbotJobs := 0
-
-	for _, job := range q.jobs {
-		if job.Status == StatusProcessing {
-			if workerID != "" && job.WorkerID == workerID {
+	if workerID != "" {
+		for _, job := range q.jobs {
+			if job.Status == StatusProcessing && job.WorkerID == workerID {
 				activeForWorker++
-			}
-			if job.LogOnly {
-				globalActivePredownloads++
-			} else {
-				globalActiveUserbotJobs++
 			}
 		}
 	}
 
-	if workerID != "" && activeForWorker >= maxJobs {
-		return nil
-	}
+	var skipped []string // cap मुळे skip केलेले job IDs — शेवटी परत pending मध्ये टाकायला
+	defer func() {
+		if len(skipped) > 0 {
+			q.pending = append(q.pending, skipped...)
+		}
+	}()
 
-	var validPending []string
-	var priorityIndex = -1
-	var normalIndex = -1
-
-	for _, id := range q.pending {
+	for len(q.pending) > 0 {
+		id := q.pending[0]
+		q.pending = q.pending[1:]
 		job, ok := q.jobs[id]
 		if !ok || job.Status != StatusPending {
 			continue
 		}
-		validPending = append(validPending, id)
-		
-		// Prioritize live/userbotdl (LogOnly == false) over predownload (LogOnly == true)
-		if priorityIndex == -1 && !job.LogOnly {
-			priorityIndex = len(validPending) - 1
-		} else if normalIndex == -1 && job.LogOnly {
-			normalIndex = len(validPending) - 1
-		}
-	}
-	
-	q.pending = validPending
 
-	selectedIndex := -1
-	if priorityIndex != -1 {
-		selectedIndex = priorityIndex
-	} else if normalIndex != -1 {
-		selectedIndex = normalIndex
-	}
-
-	if selectedIndex != -1 {
-		id := q.pending[selectedIndex]
-		job := q.jobs[id]
-		
-		// [NEW] Global slot reservation logic for userbotdl
-		if job.LogOnly {
-			activeCmds := GetActiveUserbotDL()
-			slotsToReserve := activeCmds - globalActiveUserbotJobs
-			if slotsToReserve > 0 {
-				onlineWorkers := len(ActiveWorkers())
-				if onlineWorkers == 0 {
-					onlineWorkers = 1
-				}
-				totalSlots := onlineWorkers * maxJobs
-				maxAllowedPredownloads := totalSlots - slotsToReserve
-				
-				if globalActivePredownloads >= maxAllowedPredownloads {
-					return nil
-				}
-			}
+		if workerID != "" && activeForWorker >= maxJobs {
+			// हा worker आधीच cap इतके jobs घेऊन बसलाय — हा job
+			// skip करून पुढचा job बघतो. cap मुळे
+			// skip केलेला job हरवू नये म्हणून queue च्या शेवटी परत टाकतो.
+			skipped = append(skipped, id)
+			continue
 		}
 
-		// Remove the selected job from pending
-		q.pending = append(q.pending[:selectedIndex], q.pending[selectedIndex+1:]...)
-		
 		job.Status = StatusProcessing
 		job.WorkerID = workerID
 		job.UpdatedAt = time.Now()
 		return job
 	}
-
 	return nil
-}
-
-// CancelJobsByAdmin — admin ने stop केल्यास त्याचे सर्व pending jobs cancel करतो
-func (q *Queue) CancelJobsByAdmin(adminID int64) int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	canceled := 0
-	var newPending []string
-	for _, id := range q.pending {
-		if job, ok := q.jobs[id]; ok && job.ChatID == adminID {
-			job.Status = StatusFailed
-			job.Error = "Canceled by /stopuserbotdl"
-			job.UpdatedAt = time.Now()
-			canceled++
-			// Also delete from DB so they don't persist
-			go deleteJobFromDB(id)
-		} else {
-			newPending = append(newPending, id)
-		}
-	}
-	q.pending = newPending
-	return canceled
 }
 
 func (q *Queue) UpdateStatus(jobID, status, errMsg string) {
@@ -1333,8 +1270,6 @@ func StartColabWatcher() {
 							go EditTgMessage(job.BotToken, job.ChatID, job.ProgressMsgID, statusMsg)
 						}
 					}
-					// [NEW] Remove the dead worker from the tracker/DB so it disappears from /colabstatus
-					forgetWorker(id)
 				}
 			}
 
