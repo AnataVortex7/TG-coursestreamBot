@@ -771,7 +771,7 @@ func buildRegistrationEmail(identifier, fullName string, telegramID int64) strin
       <p style="color:rgba(255,255,255,.8);font-size:13px;margin:0;">User ने Telegram account link करायला request केली</p>
     </div>
     <div style="padding:28px 32px;">
-      <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+      <table style="width:100%%;border-collapse:collapse;margin-bottom:24px;">
         <tr>
           <td style="color:#7a7d8e;font-size:12px;font-weight:700;text-transform:uppercase;padding:8px 0;border-bottom:1px solid #2a2d3a;">User</td>
           <td style="color:#e8e9f0;font-size:14px;font-weight:600;padding:8px 0;border-bottom:1px solid #2a2d3a;">%s</td>

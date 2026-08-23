@@ -444,6 +444,7 @@ func cmdRevokeAccess(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ "+err.Error())
 		return dispatcher.EndGroups
 	}
+	purgeSentLecturesForAccess(ctx, user.ID, courseID, nil)
 
 	reply(ctx, u, fmt.Sprintf("✅ Access revoked for user: %s", user.Username))
 	return dispatcher.EndGroups
@@ -879,8 +880,10 @@ func cmdRegStatus(ctx *ext.Context, u *ext.Update) error {
 }
 
 // ─── Offline Download — Video Watermark ON/OFF ────────────────────────────────
-// ON  → offline video: download → user चा mobile/email watermark burn → reupload
-//       (जुनी, default behaviour — deliverWatermarkedVideo वापरतो, start.go मध्ये).
+// ON  → offline video: watermark worker/Colab वर download → user चा mobile/email
+//       watermark burn → student ला थेट पाठवतो (deliverVideoToUser, start.go मध्ये).
+//       Worker offline असेल तर watermark टाळून plain copy-forward होतो — main
+//       server वर local FFmpeg आता कधीच चालत नाही.
 // OFF → offline video थेट copy-forward होतो (photo/PDF सारखं) — कोणताही
 //       download/FFmpeg/re-upload होत नाही, त्यामुळे जलद पण watermark शिवाय.
 
@@ -1039,6 +1042,7 @@ func cmdHelp(ctx *ext.Context, u *ext.Update) error {
 /listusers — सर्व users list
 /userinfo \<mobile\_or\_email\> — user चा पूर्ण info
 /settg \<mobile\_or\_email\> \<telegram\_id\> — Telegram ID link करा
+/unlinktg \<mobile\_or\_email\> — ⚠️ emergency: Telegram ID unlink करा \(support साठीच\)
 /blockuser \<identifier\> \<days\> \<reason\> — user block करा
 /unblockuser \<identifier\> — user unblock करा
 /suspicious — suspicious users list

@@ -196,6 +196,8 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("setsendchannel", adminOnly(cmdSetSendChannel)))
 	d.AddHandler(handlers.NewCommand("showsendchannel", adminOnly(cmdShowSendChannel)))
 	d.AddHandler(handlers.NewCommand("clearsendchannel", adminOnly(cmdClearSendChannel)))
+	d.AddHandler(handlers.NewCommand("setuserbotlog", adminOnly(cmdSetUserbotLogGroup)))
+	d.AddHandler(handlers.NewCommand("clearuserbotlog", adminOnly(cmdClearUserbotLogGroup)))
 	d.AddHandler(handlers.NewCommand("setthumbnail", adminOnly(cmdSetThumbnail)))
 	d.AddHandler(handlers.NewCommand("clearthumbnail", adminOnly(cmdClearThumbnail)))
 	d.AddHandler(handlers.NewCommand("showthumbnail", adminOnly(cmdShowThumbnail)))
@@ -644,6 +646,127 @@ func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
 	reply(ctx, u, fmt.Sprintf("✅ सगळे replace rules clear केले (%d rules काढले).", count))
 	return dispatcher.EndGroups
 }
+
+// ── /setuserbotlog <channelID/groupID> ──────────────────────────────────────────────
+
+func cmdSetUserbotLogGroup(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	var internalID int64
+	var rawID int64
+	
+	if len(a) < 1 {
+		// No args? try to set the current group as log group
+		chat := u.EffectiveChat()
+		if chat != nil && (chat.GetID() < 0) {
+			internalID = chat.GetID()
+			if internalID < -1000000000000 {
+				rawID = -(internalID + 1000000000000)
+			} else {
+				rawID = -internalID
+			}
+		} else {
+			curID := db.GetSettingInt64("userbot_log_group_id", 0)
+			if curID != 0 {
+				displayID := -(curID + 1000000000000)
+				reply(ctx, u, fmt.Sprintf(
+					"📢 *Userbot Log Group*\n\nसध्या set: `%d`\n\nबदलायला: `/setuserbotlog <groupID>`\nकाढायला: `/clearuserbotlog`",
+					displayID,
+				))
+			} else {
+				reply(ctx, u,
+					"📢 *Usage:* `/setuserbotlog <groupID>` (किंवा ज्या group मध्ये set करायचं तिथे ही command पाठवा)\n\n"+
+						"t.me/c/ वरील positive ID टाका.\n"+
+						"Example: `/setuserbotlog 2479194095`\n\n"+
+						"⚠️ Bot त्या group/channel चा admin असणे आवश्यक आहे.\n"+
+						"Userbot DL वापरताना प्रत्येक user चा वेगळा topic तयार होऊन डेटा तिथे log होईल.")
+			}
+			return dispatcher.EndGroups
+		}
+	} else {
+		var err error
+		rawID, err = strconv.ParseInt(strings.TrimSpace(a[0]), 10, 64)
+		if err != nil || rawID <= 0 {
+			reply(ctx, u, "❌ Invalid ID. Positive number टाका.\nExample: `2479194095`")
+			return dispatcher.EndGroups
+		}
+		internalID = -1000000000000 - rawID
+	}
+
+	botClient := MainBotClient
+	if botClient == nil {
+		reply(ctx, u, "❌ Bot client चालू नाही.")
+		return dispatcher.EndGroups
+	}
+
+	peer := resolveChannelInputPeer(ctx, botClient, internalID)
+	if peer == nil {
+		reply(ctx, u, "❌ Bot ला हा Group/Channel सापडत नाही. Bot ला तिथे add करा आणि admin बनवा.")
+		return dispatcher.EndGroups
+	}
+
+	db.SetSettingInt64("userbot_log_group_id", internalID)
+	reply(ctx, u, fmt.Sprintf("✅ *Userbot Log Group Set!*\n\nID: `%d`\nआता Userbot DL चा डेटा इथे log होईल.", rawID))
+	return dispatcher.EndGroups
+}
+
+// ── /clearuserbotlog ──────────────────────────────────────────────
+
+func cmdClearUserbotLogGroup(ctx *ext.Context, u *ext.Update) error {
+	db.SetSettingInt64("userbot_log_group_id", 0)
+	reply(ctx, u, "✅ *Userbot Log Group Cleared!*\n\nआता Userbot DL चा डेटा log होणार नाही.")
+	return dispatcher.EndGroups
+}
+
+func getUserbotLogTopic(ctx context.Context, botClient *gotgproto.Client, senderID int64, logGroupID int64, logGroupPeer tg.InputPeerClass) (int, error) {
+	key := fmt.Sprintf("userbot_log_topic_%d_%d", logGroupID, senderID)
+	topicID := db.GetSettingInt64(key, 0)
+	if topicID > 0 {
+		return int(topicID), nil
+	}
+
+	var title string
+	dbUser, _ := db.GetUserByTelegramID(senderID)
+	if dbUser != nil && dbUser.FullName != "" {
+		title = fmt.Sprintf("%s (%d)", dbUser.FullName, senderID)
+	} else {
+		title = fmt.Sprintf("User %d", senderID)
+	}
+
+	res, err := botClient.API().MessagesCreateForumTopic(ctx, &tg.MessagesCreateForumTopicRequest{
+		Peer:     logGroupPeer,
+		Title:    title,
+		RandomID: rand.Int63(),
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	newTopicID := 0
+	switch r := res.(type) {
+	case *tg.Updates:
+		for _, upd := range r.Updates {
+			if u, ok := upd.(*tg.UpdateNewMessage); ok {
+				if msg, ok := u.Message.(*tg.Message); ok {
+					newTopicID = msg.ID
+					break
+				}
+				if msg, ok := u.Message.(*tg.MessageService); ok {
+					newTopicID = msg.ID
+					break
+				}
+			}
+		}
+	}
+
+	if newTopicID == 0 {
+		return 0, fmt.Errorf("could not extract topic id")
+	}
+
+	db.SetSettingInt64(key, int64(newTopicID))
+	return newTopicID, nil
+}
+
+
 
 // ── /setsendchannel <channelID> ──────────────────────────────────────────────
 
@@ -1242,6 +1365,18 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		}
 	}
 
+	var userbotLogGroupPeer tg.InputPeerClass
+	var userbotTopicID int
+	if logGroupID := db.GetSettingInt64("userbot_log_group_id", 0); logGroupID != 0 {
+		if peer := resolveChannelInputPeer(ctx, botClient, logGroupID); peer != nil {
+			userbotLogGroupPeer = peer
+			tID, err := getUserbotLogTopic(ctx, botClient, senderID, logGroupID, peer)
+			if err == nil {
+				userbotTopicID = tID
+			}
+		}
+	}
+
 	totalMsgs := 0
 	rangeStr := ""
 	if len(specificMsgIDs) > 0 {
@@ -1527,6 +1662,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					editProgress,
 					adminChatID,
 					&sentMsgID,
+					userbotLogGroupPeer,
+					userbotTopicID,
 				)
 				if err == nil {
 					return pm, nil
@@ -1646,6 +1783,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 					sendChannelPeer,
 					editProgress,
 					pm,
+					userbotLogGroupPeer,
+					userbotTopicID,
 				)
 			}(phA.pm)
 
@@ -2670,6 +2809,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 				pm, err = prepareMessage(
 					bgCtx, userbotClient, botClient, sourceChatID, srcRaw, msgID, 0,
 					botPeer, nil, destPeer, editProgress, adminChatID, &sentMsgID,
+					nil, 0,
 				)
 				if err == nil {
 					return pm, nil
@@ -2745,6 +2885,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 								return sendPreparedMessage(
 									bgCtx, userbotClient, botClient, sourceChatID, srcRaw, 0,
 									botPeer, nil, destPeer, editProgress, pm,
+									nil, 0,
 								)
 							})
 						}
@@ -2816,6 +2957,7 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 					return sendPreparedMessage(
 						bgCtx, userbotClient, botClient, sourceChatID, srcRaw, 0,
 						botPeer, nil, destPeer, editProgress, pm,
+						nil, 0,
 					)
 				})
 			}(phA.pm)
@@ -3004,6 +3146,8 @@ func prepareMessage(
 	editProgress func(string),
 	adminChatID int64,
 	sentMsgID *int,
+	userbotLogGroupPeer tg.InputPeerClass,
+	userbotTopicID int,
 ) (*preparedMessage, error) {
 
 	// ── Step 1: Fetch message ─────────────────────────────────────────────
@@ -3354,6 +3498,8 @@ func sendPreparedMessage(
 	sendChannelPeer *tg.InputPeerChannel,
 	editProgress func(string),
 	pm *preparedMessage,
+	userbotLogGroupPeer tg.InputPeerClass,
+	userbotTopicID int,
 ) error {
 
 	if pm.textOnly || pm.colabSent {
@@ -3515,6 +3661,16 @@ func sendPreparedMessage(
 					logMedia = dm
 				}
 				copyToLogChannelUploaded(tgMsg, logMedia)
+				if userbotLogGroupPeer != nil && userbotTopicID != 0 {
+					ulReq := &tg.MessagesSendMediaRequest{
+						Peer:     userbotLogGroupPeer,
+						Media:    logMedia,
+						Message:  fileCaption,
+						RandomID: rand.Int63(),
+						ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID},
+					}
+					_, _ = botClient.API().MessagesSendMedia(context.Background(), ulReq)
+				}
 			}()
 		}
 	} else {
@@ -3545,6 +3701,16 @@ func sendPreparedMessage(
 					logMedia = dm
 				}
 				copyToLogChannelUploaded(tgMsg, logMedia)
+				if userbotLogGroupPeer != nil && userbotTopicID != 0 {
+					ulReq := &tg.MessagesSendMediaRequest{
+						Peer:     userbotLogGroupPeer,
+						Media:    logMedia,
+						Message:  adminCaption,
+						RandomID: rand.Int63(),
+						ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID},
+					}
+					_, _ = botClient.API().MessagesSendMedia(context.Background(), ulReq)
+				}
 			}()
 		}
 

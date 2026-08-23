@@ -1524,6 +1524,34 @@ func SetSettingString(key, value string) error {
 	return err
 }
 
+// GetSettingInt64 — key साठी int64 value मिळवतो. Key नसेल तर defaultVal.
+func GetSettingInt64(key string, defaultVal int64) int64 {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	var doc struct {
+		Value int64 `bson:"value"`
+	}
+	err := ColSettings.FindOne(ctx, bson.M{"_id": key}).Decode(&doc)
+	if err != nil {
+		return defaultVal
+	}
+	return doc.Value
+}
+
+// SetSettingInt64 — key साठी int64 value set/update करतो.
+func SetSettingInt64(key string, value int64) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	_, err := ColSettings.UpdateOne(ctx,
+		bson.M{"_id": key},
+		bson.M{"$set": bson.M{"value": value}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN IMPERSONATE SESSION
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -216,6 +216,7 @@ var categories = []category{
 		"userbotdl", "predownload", "copychannel", "stopuserbotdl",
 		"showwatermark", "setwatermark", "clearwatermark",
 		"showsendchannel", "setsendchannel", "clearsendchannel",
+		"setuserbotlog", "clearuserbotlog",
 		"showthumbnail", "setthumbnail", "clearthumbnail",
 		"listreplace", "setreplace", "delreplace", "clearreplace",
 	}},
@@ -227,6 +228,7 @@ var categories = []category{
 	{"stream", "⚙️ Stream & Watermark Settings", []string{
 		"listreplace", "setreplace", "delreplace", "clearreplace",
 		"showsendchannel", "setsendchannel", "clearsendchannel",
+		"setuserbotlog", "clearuserbotlog",
 		"showthumbnail", "setthumbnail", "clearthumbnail",
 		"showwatermark", "setwatermark", "clearwatermark",
 	}},
@@ -659,6 +661,10 @@ func init() {
 		inputStep("📢 Channel ID टाका:"),
 	}})
 	registerCmd(menuCmd{key: "clearsendchannel", label: "🗑 Clear Send Channel", kind: kindToggle, fn: cmdClearSendChannel})
+	registerCmd(menuCmd{key: "setuserbotlog", label: "📁 Set Userbot Log Group", kind: kindFlow, fn: cmdSetUserbotLogGroup, steps: []cmdStep{
+		inputStep("📢 Group ID टाका (t.me/c/ वरील ID):"),
+	}})
+	registerCmd(menuCmd{key: "clearuserbotlog", label: "🗑 Clear Userbot Log", kind: kindToggle, fn: cmdClearUserbotLogGroup})
 	registerCmd(menuCmd{key: "showthumbnail", label: "📸 Show Thumbnail", kind: kindView, fn: cmdShowThumbnail})
 	registerCmd(menuCmd{key: "setthumbnail", label: "➕ Set Thumbnail (Info)", kind: kindView, fn: cmdShowSetThumbnailHelp})
 	registerCmd(menuCmd{key: "clearthumbnail", label: "🗑 Clear Thumbnail", kind: kindToggle, fn: cmdClearThumbnail})
