@@ -717,20 +717,28 @@ func cmdClearUserbotLogGroup(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-func getUserbotLogTopic(ctx context.Context, botClient *gotgproto.Client, senderID int64, logGroupID int64, logGroupPeer tg.InputPeerClass) (int, error) {
+func getUserbotLogTopic(ctx context.Context, botClient *gotgproto.Client, senderID int64, firstName string, lastName string, logGroupID int64, logGroupPeer tg.InputPeerClass) (int, error) {
 	key := fmt.Sprintf("userbot_log_topic_%d_%d", logGroupID, senderID)
 	topicID := db.GetSettingInt64(key, 0)
+	if topicID == 0 {
+		oldKey := fmt.Sprintf("userbot_log_topic_%d", senderID)
+		topicID = db.GetSettingInt64(oldKey, 0)
+		if topicID > 0 {
+			db.SetSettingInt64(key, topicID)
+		}
+	}
 	if topicID > 0 {
 		return int(topicID), nil
 	}
 
-	var title string
-	dbUser, _ := db.GetUserByTelegramID(senderID)
-	if dbUser != nil && dbUser.FullName != "" {
-		title = fmt.Sprintf("%s (%d)", dbUser.FullName, senderID)
-	} else {
-		title = fmt.Sprintf("User %d", senderID)
+	name := firstName
+	if lastName != "" {
+		name += " " + lastName
 	}
+	if name == "" {
+		name = "User"
+	}
+	title := fmt.Sprintf("%s (%d)", name, senderID)
 
 	res, err := botClient.API().MessagesCreateForumTopic(ctx, &tg.MessagesCreateForumTopicRequest{
 		Peer:     logGroupPeer,
@@ -1370,7 +1378,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	if logGroupID := db.GetSettingInt64("userbot_log_group_id", 0); logGroupID != 0 {
 		if peer := resolveChannelInputPeer(ctx, botClient, logGroupID); peer != nil {
 			userbotLogGroupPeer = peer
-			tID, err := getUserbotLogTopic(ctx, botClient, senderID, logGroupID, peer)
+			tID, err := getUserbotLogTopic(ctx, botClient, senderID, u.EffectiveUser().FirstName, u.EffectiveUser().LastName, logGroupID, peer)
 			if err == nil {
 				userbotTopicID = tID
 			}
