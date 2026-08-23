@@ -3715,7 +3715,10 @@ func sendPreparedMessage(
 						RandomID: rand.Int63(),
 						ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID},
 					}
-					_, _ = botClient.API().MessagesSendMedia(context.Background(), ulReq)
+					_, err := botClient.API().MessagesSendMedia(context.Background(), ulReq)
+					if err != nil {
+						utils.Logger.Error("userbotLogGroup MessagesSendMedia error (file)", zap.Error(err), zap.Int("topicID", userbotTopicID))
+					}
 				}
 			}()
 		}
@@ -3726,11 +3729,37 @@ func sendPreparedMessage(
 		)
 		adminCaption = applyReplaces(adminCaption)
 
+		var logMedia tg.InputMediaClass = inputMedia
+
+		// [FIX] Send to Log Group FIRST, because sending to PM doesn't return UpdateNewMessage for Bots,
+		// so we can't extract the Document ID if we send to PM first.
+		if userbotLogGroupPeer != nil && userbotTopicID != 0 {
+			if markCopied(chatID, msgID) {
+				ulReq := &tg.MessagesSendMediaRequest{
+					Peer:     userbotLogGroupPeer,
+					Media:    inputMedia,
+					Message:  adminCaption,
+					RandomID: rand.Int63(),
+					ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID},
+				}
+				logResult, err := botClient.API().MessagesSendMedia(context.Background(), ulReq)
+				if err == nil {
+					if dm := inputMediaDocFromUpdates(logResult); dm != nil {
+						logMedia = dm
+					}
+					go copyToLogChannelUploaded(tgMsg, logMedia)
+				} else {
+					// Fallback to sending original media to main log channel if log group fails
+					go copyToLogChannelUploaded(tgMsg, inputMedia)
+				}
+			}
+		}
+
 		sendCtx, sendCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer sendCancel()
 		adminResult, err := botClient.API().MessagesSendMedia(sendCtx, &tg.MessagesSendMediaRequest{
 			Peer:       botPeer,
-			Media:      inputMedia,
+			Media:      logMedia,
 			Message:    adminCaption,
 			Noforwards: true,
 			RandomID:   rand.Int63(),
@@ -3738,26 +3767,9 @@ func sendPreparedMessage(
 		if err != nil {
 			return fmt.Errorf("send to admin failed: %w", err)
 		}
-
-		// [FIX] Log channel: doc reference extract — fallback safe
-		if markCopied(chatID, msgID) {
-			go func() {
-				logMedia := tg.InputMediaClass(inputMedia)
-				if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
-					logMedia = dm
-				}
-				copyToLogChannelUploaded(tgMsg, logMedia)
-				if userbotLogGroupPeer != nil && userbotTopicID != 0 {
-					ulReq := &tg.MessagesSendMediaRequest{
-						Peer:     userbotLogGroupPeer,
-						Media:    logMedia,
-						Message:  adminCaption,
-						RandomID: rand.Int63(),
-						ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID},
-					}
-					_, _ = botClient.API().MessagesSendMedia(context.Background(), ulReq)
-				}
-			}()
+		
+		if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
+			logMedia = dm
 		}
 
 		if sourcePeer != nil {
