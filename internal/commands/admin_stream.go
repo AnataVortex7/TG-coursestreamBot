@@ -765,6 +765,16 @@ func getUserbotLogTopic(ctx context.Context, botClient *gotgproto.Client, sender
 					break
 				}
 			}
+			if u, ok := upd.(*tg.UpdateNewChannelMessage); ok {
+				if msg, ok := u.Message.(*tg.Message); ok {
+					newTopicID = msg.ID
+					break
+				}
+				if msg, ok := u.Message.(*tg.MessageService); ok {
+					newTopicID = msg.ID
+					break
+				}
+			}
 		}
 	}
 
@@ -3698,14 +3708,12 @@ func sendPreparedMessage(
 				}
 				copyToLogChannelUploaded(tgMsg, logMedia)
 				if userbotLogGroupPeer != nil && userbotTopicID != 0 {
-					replyTo := &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID}
-					replyTo.SetTopMsgID(userbotTopicID)
 					ulReq := &tg.MessagesSendMediaRequest{
 						Peer:     userbotLogGroupPeer,
 						Media:    logMedia,
 						Message:  fileCaption,
 						RandomID: rand.Int63(),
-						ReplyTo:  replyTo,
+						ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID},
 					}
 					_, _ = botClient.API().MessagesSendMedia(context.Background(), ulReq)
 				}
@@ -3740,14 +3748,12 @@ func sendPreparedMessage(
 				}
 				copyToLogChannelUploaded(tgMsg, logMedia)
 				if userbotLogGroupPeer != nil && userbotTopicID != 0 {
-					replyTo := &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID}
-					replyTo.SetTopMsgID(userbotTopicID)
 					ulReq := &tg.MessagesSendMediaRequest{
 						Peer:     userbotLogGroupPeer,
 						Media:    logMedia,
 						Message:  adminCaption,
 						RandomID: rand.Int63(),
-						ReplyTo:  replyTo,
+						ReplyTo:  &tg.InputReplyToMessage{ReplyToMsgID: userbotTopicID},
 					}
 					_, _ = botClient.API().MessagesSendMedia(context.Background(), ulReq)
 				}
