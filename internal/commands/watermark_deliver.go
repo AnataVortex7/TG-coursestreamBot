@@ -189,6 +189,7 @@ func deliverViaColab(
 		logChatID,     // logChatID — caller ठरवतो (offline-download: 0/स्पॅम टाळायला, bot Watch: LOG_CHANNEL)
 		logAccessHash, // logAccessHash
 		0,             // userbotLogChatID
+		0,             // userbotLogAccessHash
 		0,             // userbotLogTopicID
 		caption,
 		messageID,

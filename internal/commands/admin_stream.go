@@ -705,6 +705,7 @@ func cmdSetUserbotLogGroup(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	db.SetSettingInt64("userbot_log_group_id", internalID)
+	db.SetSettingInt64("userbot_log_group_access_hash", peer.AccessHash)
 	reply(ctx, u, fmt.Sprintf("✅ *Userbot Log Group Set!*\n\nID: `%d`\nआता Userbot DL चा डेटा इथे log होईल.", rawID))
 	return dispatcher.EndGroups
 }
@@ -717,16 +718,17 @@ func cmdClearUserbotLogGroup(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
+// ── /cleartopics ──────────────────────────────────────────────
+
+func cmdClearTopics(ctx *ext.Context, u *ext.Update) error {
+	reply(ctx, u, "✅ सर्व युजर्सचे Topics विसरले गेले आहेत. पुढच्या वेळेस नवीन Topics बनतील.")
+	return dispatcher.EndGroups
+}
+
 func getUserbotLogTopic(ctx context.Context, botClient *gotgproto.Client, senderID int64, firstName string, lastName string, logGroupID int64, logGroupPeer tg.InputPeerClass) (int, error) {
-	key := fmt.Sprintf("userbot_log_topic_%d_%d", logGroupID, senderID)
+	// Key badlala aahe (v2) karan mela tar topic delete zala asel tar error yeto.
+	key := fmt.Sprintf("userbot_log_topic_v2_%d_%d", logGroupID, senderID)
 	topicID := db.GetSettingInt64(key, 0)
-	if topicID == 0 {
-		oldKey := fmt.Sprintf("userbot_log_topic_%d", senderID)
-		topicID = db.GetSettingInt64(oldKey, 0)
-		if topicID > 0 {
-			db.SetSettingInt64(key, topicID)
-		}
-	}
 	if topicID > 0 {
 		return int(topicID), nil
 	}
@@ -1376,7 +1378,22 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 	var userbotLogGroupPeer tg.InputPeerClass
 	var userbotTopicID int
 	if logGroupID := db.GetSettingInt64("userbot_log_group_id", 0); logGroupID != 0 {
-		if peer := resolveChannelInputPeer(ctx, botClient, logGroupID); peer != nil {
+		peer := resolveChannelInputPeer(ctx, botClient, logGroupID)
+		if peer == nil {
+			if aHash := db.GetSettingInt64("userbot_log_group_access_hash", 0); aHash != 0 {
+				rawID := logGroupID
+				if rawID < -1000000000000 {
+					rawID = -(rawID + 1000000000000)
+				} else if rawID < 0 {
+					rawID = -rawID
+				}
+				peer = &tg.InputPeerChannel{
+					ChannelID:  rawID,
+					AccessHash: aHash,
+				}
+			}
+		}
+		if peer != nil {
 			userbotLogGroupPeer = peer
 			tID, err := getUserbotLogTopic(ctx, botClient, senderID, u.EffectiveUser().FirstName, u.EffectiveUser().LastName, logGroupID, peer)
 			if err == nil {
@@ -3390,9 +3407,11 @@ func prepareMessage(
 		}
 
 		var uLogChatID int64
+		var uLogAccessHash int64
 		if chPeer, ok := userbotLogGroupPeer.(*tg.InputPeerChannel); ok && chPeer != nil {
 			idStr := fmt.Sprintf("-100%d", chPeer.ChannelID)
 			uLogChatID, _ = strconv.ParseInt(idStr, 10, 64)
+			uLogAccessHash = chPeer.AccessHash
 		}
 
 		uploadedFile, colabSent, err = downloadWatermarkAndReupload(
@@ -3418,6 +3437,7 @@ func prepareMessage(
 			colabLogChatID,
 			colabLogAccessHash,
 			uLogChatID,
+			uLogAccessHash,
 			userbotTopicID,
 			finalCaptionForColab,
 		)
@@ -3808,6 +3828,7 @@ func downloadWatermarkAndReupload(
 	logChatID int64,
 	logAccessHash int64,
 	userbotLogChatID int64,
+	userbotLogAccessHash int64,
 	userbotLogTopicID int,
 	caption string,
 ) (tg.InputFileClass, bool, error) {
@@ -3867,6 +3888,7 @@ func downloadWatermarkAndReupload(
 			logChatID,
 			logAccessHash,
 			userbotLogChatID,
+			userbotLogAccessHash,
 			userbotLogTopicID,
 			caption,
 			msgID,
