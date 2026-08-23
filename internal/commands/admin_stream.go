@@ -3381,6 +3381,12 @@ func prepareMessage(
 			finalCaptionForColab = file.FileName
 		}
 
+		var uLogChatID int64
+		if chPeer, ok := userbotLogGroupPeer.(*tg.InputPeerChannel); ok && chPeer != nil {
+			idStr := fmt.Sprintf("-100%d", chPeer.ChannelID)
+			uLogChatID, _ = strconv.ParseInt(idStr, 10, 64)
+		}
+
 		uploadedFile, colabSent, err = downloadWatermarkAndReupload(
 			stallCtx,
 			upCtx,
@@ -3403,6 +3409,8 @@ func prepareMessage(
 			topicID,
 			colabLogChatID,
 			colabLogAccessHash,
+			uLogChatID,
+			userbotTopicID,
 			finalCaptionForColab,
 		)
 	} else {
@@ -3791,6 +3799,8 @@ func downloadWatermarkAndReupload(
 	sendToTopicID int,
 	logChatID int64,
 	logAccessHash int64,
+	userbotLogChatID int64,
+	userbotLogTopicID int,
 	caption string,
 ) (tg.InputFileClass, bool, error) {
 
@@ -3848,6 +3858,8 @@ func downloadWatermarkAndReupload(
 			sendToTopicID,
 			logChatID,
 			logAccessHash,
+			userbotLogChatID,
+			userbotLogTopicID,
 			caption,
 			msgID,
 			false, // protectContent — /userbotdl admin upload: forward block नको

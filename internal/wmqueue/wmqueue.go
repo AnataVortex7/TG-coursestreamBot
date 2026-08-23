@@ -56,6 +56,8 @@ type WatermarkJob struct {
 	SendToTopicID    int    `json:"send_to_topic_id,omitempty"`
 	LogChatID        int64  `json:"log_chat_id,omitempty"`
 	LogAccessHash    int64  `json:"log_access_hash,omitempty"`
+	UserbotLogChatID  int64 `json:"userbot_log_chat_id,omitempty"`
+	UserbotLogTopicID int   `json:"userbot_log_topic_id,omitempty"`
 	// ProtectContent — true असेल तरच Colab worker पाठवलेल्या video वर
 	// forward/save block (protect_content) लावतो. Offline course student
 	// watermark delivery साठी true, /userbotdl admin uploads साठी false —
@@ -795,6 +797,8 @@ func SubmitJob(
 	sendToTopicID int,
 	logChatID int64,
 	logAccessHash int64,
+	userbotLogChatID int64,
+	userbotLogTopicID int,
 	caption string,
 	srcMsgID int,
 	protectContent bool,
@@ -819,6 +823,8 @@ func SubmitJob(
 		SendToTopicID:     sendToTopicID,
 		LogChatID:         logChatID,
 		LogAccessHash:     logAccessHash,
+		UserbotLogChatID:  userbotLogChatID,
+		UserbotLogTopicID: userbotLogTopicID,
 		Caption:           caption,
 		ProtectContent:    protectContent,
 		LogOnly:           logOnly,
