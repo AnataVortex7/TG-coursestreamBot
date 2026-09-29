@@ -576,7 +576,8 @@ func init() {
 	// ── Users ──
 	registerCmd(menuCmd{key: "listusers", label: "👤 List Users", kind: kindView, fn: cmdListUsers})
 	registerCmd(menuCmd{key: "adduser", label: "➕ Add User", kind: kindFlow, fn: cmdAddUser, steps: []cmdStep{
-		inputStep("📱 Mobile number किंवा email टाका:"),
+		inputStep("📱 Mobile number टाका (नसेल तर - पाठवा):"),
+		inputStep("📧 Email टाका (नसेल तर - पाठवा):"),
 		inputStep("🔑 Password टाका:"),
 		inputStep("👤 Full Name टाका (नसेल तर - पाठवा):"),
 	}})
@@ -599,7 +600,7 @@ func init() {
 	registerCmd(menuCmd{key: "grantaccess", label: "🔑 Grant Access", kind: kindFlow, fn: cmdGrantAccess, steps: []cmdStep{
 		selectStep("👤 कोणत्या User ला access द्यायचा:", listUsersItems),
 		selectStep("📚 कोणता Course द्यायचा:", listCoursesItems),
-		inputStep("📅 किती months (permanent साठी - पाठवा):"),
+		inputStep("📅 Access कालावधी टाका:\n  30d → 30 दिवस\n  3m  → 3 महिने\n  -   → permanent"),
 	}})
 	registerCmd(menuCmd{key: "revokeaccess", label: "🚫 Revoke Access", kind: kindFlow, fn: cmdRevokeAccess, steps: []cmdStep{
 		selectStep("🚫 कोणता access काढायचा:", listAccessItems),

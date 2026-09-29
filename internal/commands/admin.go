@@ -102,26 +102,55 @@ func args(u *ext.Update) []string {
 
 func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
+	// Menu flow: /adduser <mobile> <email> <password> [full name]
+	// Manual command: /adduser <mobile_or_email> <password> [full name]  (backward compat)
 	if len(a) < 2 {
-		reply(ctx, u, "Usage: /adduser <mobile_or_email> <password> [full name]\nExamples:\n/adduser 9876543210 pass123\n/adduser user@email.com pass123 Rahul Sharma")
+		reply(ctx, u, "Usage: /adduser <mobile> <email> <password> [full name]\n\nExamples:\n/adduser 9876543210 - pass123 Rahul Sharma\n/adduser - user@email.com pass123 Rahul Sharma\n/adduser 9876543210 user@email.com pass123 Rahul Sharma\n\n(mobile किंवा email नसेल तर - टाका)")
 		return dispatcher.EndGroups
 	}
-	identifier := strings.ToLower(strings.TrimSpace(a[0]))
-	password := a[1]
-	fullName := ""
-	if len(a) > 2 {
-		fullName = strings.Join(a[2:], " ")
+
+	var mobile, email, password, fullName string
+
+	// Menu flow पाठवतो: mobile email password [name...]
+	// a[0] आणि a[1] दोन्ही "-" नाहीत किंवा a[1] "@" नाही तर backward-compat mode
+	if len(a) >= 3 && (strings.Contains(a[0], "@") || a[0] == "-" || (!strings.Contains(a[0], "@") && (strings.Contains(a[1], "@") || a[1] == "-"))) {
+		// New menu flow: mobile email password [name...]
+		rawMobile := strings.TrimSpace(a[0])
+		rawEmail := strings.ToLower(strings.TrimSpace(a[1]))
+		password = a[2]
+		if len(a) > 3 {
+			fullName = strings.Join(a[3:], " ")
+			if fullName == "-" {
+				fullName = ""
+			}
+		}
+		if rawMobile != "-" && rawMobile != "" {
+			mobile = rawMobile
+		}
+		if rawEmail != "-" && rawEmail != "" {
+			email = rawEmail
+		}
+	} else {
+		// Backward-compat: /adduser <mobile_or_email> <password> [name...]
+		identifier := strings.ToLower(strings.TrimSpace(a[0]))
+		password = a[1]
+		if len(a) > 2 {
+			fullName = strings.Join(a[2:], " ")
+		}
+		if strings.Contains(identifier, "@") {
+			email = identifier
+		} else {
+			mobile = identifier
+		}
 	}
 
-	mobile, email := "", ""
-	if strings.Contains(identifier, "@") {
-		email = identifier
-	} else {
-		mobile = identifier
+	if mobile == "" && email == "" {
+		reply(ctx, u, "❌ Mobile आणि Email दोन्ही रिकामं चालणार नाही — निदान एक तरी सांगा.")
+		return dispatcher.EndGroups
 	}
 
 	if len(password) < 6 {
-		reply(ctx, u, "❌ Password must be at least 6 characters.")
+		reply(ctx, u, "❌ Password किमान 6 characters हवा.")
 		return dispatcher.EndGroups
 	}
 
@@ -137,13 +166,20 @@ func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	info := identifier
+	loginID := email
+	if loginID == "" {
+		loginID = mobile
+	}
+	info := loginID
 	if fullName != "" {
-		info = fullName + " (" + identifier + ")"
+		info = fullName + " (" + loginID + ")"
 	}
 	reply(ctx, u, fmt.Sprintf(
-		"✅ User created\n\nName: %s\nLogin ID: %s\nDB ID: %s",
-		info, identifier, user.ID.Hex(),
+		"✅ User created\n\nName: %s\nMobile: %s\nEmail: %s\nDB ID: %s",
+		info,
+		orDash(mobile),
+		orDash(email),
+		user.ID.Hex(),
 	))
 	return dispatcher.EndGroups
 }
@@ -362,7 +398,7 @@ func cmdListCourses(ctx *ext.Context, u *ext.Update) error {
 func cmdGrantAccess(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 2 {
-		reply(ctx, u, "Usage: /grantaccess <mobile_or_email> <course_id> [months]\nExamples:\n/grantaccess 9876543210 <course_id>       → permanent\n/grantaccess 9876543210 <course_id> 3     → 3 months")
+		reply(ctx, u, "Usage: /grantaccess <mobile_or_email> <course_id> [duration]\n\nDuration format:\n  30d  → 30 दिवस\n  3m   → 3 महिने (= 90 दिवस)\n  -    → permanent (default)\n\nExamples:\n/grantaccess 9876543210 <course_id>\n/grantaccess 9876543210 <course_id> 30d\n/grantaccess 9876543210 <course_id> 3m")
 		return dispatcher.EndGroups
 	}
 
@@ -384,23 +420,35 @@ func cmdGrantAccess(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 
-	months := 0
-	if len(a) >= 3 {
-		if m, err2 := strconv.Atoi(a[2]); err2 == nil && m > 0 {
-			months = m
+	// Parse duration: 30d = days, 3m = months→days, - or missing = permanent
+	days := 0
+	expiryMsg := "♾️ Permanent (no expiry)"
+	if len(a) >= 3 && a[2] != "-" {
+		raw := strings.ToLower(strings.TrimSpace(a[2]))
+		switch {
+		case strings.HasSuffix(raw, "d"):
+			if n, e := strconv.Atoi(strings.TrimSuffix(raw, "d")); e == nil && n > 0 {
+				days = n
+				expiryMsg = fmt.Sprintf("⏳ %d दिवस → expires on %s", days, time.Now().AddDate(0, 0, days).Format("02 Jan 2006"))
+			}
+		case strings.HasSuffix(raw, "m"):
+			if n, e := strconv.Atoi(strings.TrimSuffix(raw, "m")); e == nil && n > 0 {
+				days = n * 30
+				expiryMsg = fmt.Sprintf("⏳ %d महिने (%d दिवस) → expires on %s", n, days, time.Now().AddDate(0, 0, days).Format("02 Jan 2006"))
+			}
+		default:
+			// Backward compat: plain number treated as months
+			if n, e := strconv.Atoi(raw); e == nil && n > 0 {
+				days = n * 30
+				expiryMsg = fmt.Sprintf("⏳ %d महिने (%d दिवस) → expires on %s", n, days, time.Now().AddDate(0, 0, days).Format("02 Jan 2006"))
+			}
 		}
 	}
 
 	adminID := u.EffectiveUser().GetID()
-	if err := db.GrantAccess(user.ID, courseID, adminID, months); err != nil {
+	if err := db.GrantAccess(user.ID, courseID, adminID, days); err != nil {
 		reply(ctx, u, "❌ "+err.Error())
 		return dispatcher.EndGroups
-	}
-
-	expiryMsg := "♾️ Permanent (no expiry)"
-	if months > 0 {
-		expDate := time.Now().AddDate(0, months, 0)
-		expiryMsg = fmt.Sprintf("⏳ %d month(s) → expires on %s", months, expDate.Format("02 Jan 2006"))
 	}
 
 	go func() {

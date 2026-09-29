@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/db"
 
 	"github.com/celestix/gotgproto/dispatcher"
@@ -79,6 +80,32 @@ func cmdSetTG(ctx *ext.Context, u *ext.Update) error {
 		"✅ Linked!\n👤 User: %s\n📱 Telegram ID: %d\n\nआता user Telegram वरून OTP login वापरू शकतो.",
 		user.Username, tgID,
 	))
+
+	// जर या user ला आधी pre-download cache केलेले courses असतील तर admin ला
+	// notify करा — /predownload परत चालवल्यावर fast cache-hit delivery होईल.
+	go func() {
+		accesses, err := db.ActiveAccessForUser(user.ID)
+		if err != nil || len(accesses) == 0 {
+			return
+		}
+		var courseNames []string
+		for _, acc := range accesses {
+			if c, e := db.GetCourseByID(acc.CourseID); e == nil && c != nil {
+				courseNames = append(courseNames, "• "+c.Title)
+			}
+		}
+		if len(courseNames) == 0 {
+			return
+		}
+		msg := fmt.Sprintf(
+			"🔗 *TG Linked!*\n👤 User: `%s` (mobile: `%s`)\n📱 TG ID: `%d`\n\n📚 *%d course access आहे:*\n%s\n\n⚡ Pre-download cache असेल तर `/predownload %s <courseID>` चालवा — fast होईल.",
+			user.FullName, user.Mobile, tgID,
+			len(courseNames), strings.Join(courseNames, "\n"),
+			user.Mobile,
+		)
+		bot.NotifyAllowedUsers(msg)
+	}()
+
 	return dispatcher.EndGroups
 }
 

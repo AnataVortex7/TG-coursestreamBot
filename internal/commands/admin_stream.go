@@ -2058,10 +2058,7 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, fmt.Sprintf("❌ User सापडला नाही: `%s` (mobile/email/telegramID तपासून बघ)", identifier))
 		return dispatcher.EndGroups
 	}
-	if targetUser.TelegramID == 0 {
-		reply(ctx, u, "❌ या user चं Telegram account अजून link नाहीये — त्याने आधी `/register` करायला हवं.")
-		return dispatcher.EndGroups
-	}
+	cacheOnly := targetUser.TelegramID == 0
 	hasAccess, _ := db.HasAccess(targetUser.ID, courseID)
 	if !hasAccess {
 		reply(ctx, u, "❌ या user कडे या course चा access नाहीये.")
@@ -2098,10 +2095,17 @@ func cmdPreDownload(ctx *ext.Context, u *ext.Update) error {
 	adminChatID := u.EffectiveChat().GetID()
 	adminPeer := botClient.PeerStorage.GetInputPeerById(adminChatID)
 
-	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
+	startMsg := fmt.Sprintf(
 		"⏳ Pre-download सुरू...\n👤 User: `%s` (mobile: `%s`)\n📚 Course: `%s`\n📦 एकूण: %d lectures\n\n🛑 Stop: /stopuserbotdl",
 		targetUser.FullName, targetUser.Mobile, course.Title, total,
-	)), nil)
+	)
+	if cacheOnly {
+		startMsg = fmt.Sprintf(
+			"⚠️ Cache-only mode (TG link नाही)\n👤 User: `%s` (mobile: `%s`)\n📚 Course: `%s`\n📦 एकूण: %d lectures\n\nFiles cache होतील — user TG link करेल तेव्हा `/predownload` परत चालवा.\n\n🛑 Stop: /stopuserbotdl",
+			targetUser.FullName, targetUser.Mobile, course.Title, total,
+		)
+	}
+	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(startMsg), nil)
 	statusMsgID := 0
 	if sentMsg != nil {
 		statusMsgID = sentMsg.ID
