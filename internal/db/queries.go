@@ -397,13 +397,13 @@ func DeleteCourse(id primitive.ObjectID) error {
 
 // GrantAccess gives a user access to a course.
 // months=0 means permanent access; months>0 sets an expiry date.
-func GrantAccess(userID, courseID primitive.ObjectID, adminTelegramID int64, months int) error {
+func GrantAccess(userID, courseID primitive.ObjectID, adminTelegramID int64, days int) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 
 	var expiresAt *time.Time
-	if months > 0 {
-		t := time.Now().AddDate(0, months, 0)
+	if days > 0 {
+		t := time.Now().AddDate(0, 0, days)
 		expiresAt = &t
 	}
 
