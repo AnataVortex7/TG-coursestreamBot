@@ -95,7 +95,17 @@ func (u *UserBotStruct) Status() UserBotInfo {
 
 // ─── SendCode ─────────────────────────────────────────────────────────────────
 
-func (u *UserBotStruct) SendCode(phone string) (string, error) {
+// SendCode — phone ला OTP पाठवतो.
+// apiID/apiHash: 0/"" असेल तर global config वापरतो.
+// 3 attempts, प्रत्येकी 60s timeout. Goroutine leak fix केलं आहे.
+func (u *UserBotStruct) SendCode(phone string, apiID int, apiHash string) (string, error) {
+	if apiID == 0 {
+		apiID = int(config.ValueOf.ApiID)
+	}
+	if apiHash == "" {
+		apiHash = config.ValueOf.ApiHash
+	}
+
 	loginMu.Lock()
 	if activePending != nil {
 		activePending.cancel()
@@ -103,10 +113,26 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 	}
 	loginMu.Unlock()
 
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		hash, err := u.sendCodeAttempt(phone, apiID, apiHash)
+		if err == nil {
+			return hash, nil
+		}
+		lastErr = err
+		if attempt < 3 {
+			// exponential backoff — 3s, 6s
+			time.Sleep(time.Duration(attempt) * 3 * time.Second)
+		}
+	}
+	return "", fmt.Errorf("%w (3 attempts failed)", lastErr)
+}
+
+func (u *UserBotStruct) sendCodeAttempt(phone string, apiID int, apiHash string) (string, error) {
 	storage    := &session.StorageMemory{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	tgClient := telegram.NewClient(int(config.ValueOf.ApiID), config.ValueOf.ApiHash, telegram.Options{
+	tgClient := telegram.NewClient(apiID, apiHash, telegram.Options{
 		SessionStorage: storage,
 		Device: telegram.DeviceConfig{
 			DeviceModel:   "Pyrogram",
@@ -127,8 +153,8 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 			// ── Step 1: OTP pathav (raw API) ──────────────────────────────
 			sentCode, err := rawAPI.AuthSendCode(ctx, &tg.AuthSendCodeRequest{
 				PhoneNumber: phone,
-				APIID:       int(config.ValueOf.ApiID),
-				APIHash:     config.ValueOf.ApiHash,
+				APIID:       int(apiID),
+				APIHash:     apiHash,
 				Settings:    tg.CodeSettings{},
 			})
 			if err != nil {
@@ -229,7 +255,7 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 				resultCh <- loginResult{err: fmt.Errorf("Session parse error: %v", jsonErr)}
 				return nil
 			}
-			sessionStr, encErr := qrlogin.EncodeToPyrogramSession(&jd.Data, config.ValueOf.ApiID)
+			sessionStr, encErr := qrlogin.EncodeToPyrogramSession(&jd.Data, int32(apiID))
 			if encErr != nil {
 				resultCh <- loginResult{err: fmt.Errorf("Session encode error: %v", encErr)}
 				return nil
@@ -271,7 +297,7 @@ func (u *UserBotStruct) SendCode(phone string) (string, error) {
 	case err := <-errCh:
 		cancel()
 		return "", err
-	case <-time.After(20 * time.Second):
+	case <-time.After(60 * time.Second):
 		cancel()
 		return "", errors.New("Telegram connection timeout — API_ID/API_HASH check kara")
 	}
