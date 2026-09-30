@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/db"
 
 	"github.com/celestix/gotgproto/dispatcher"
@@ -103,7 +102,9 @@ func cmdSetTG(ctx *ext.Context, u *ext.Update) error {
 			len(courseNames), strings.Join(courseNames, "\n"),
 			user.Mobile,
 		)
-		bot.NotifyAllowedUsers(msg)
+		if NotifyAdmins != nil {
+			NotifyAdmins(msg)
+		}
 	}()
 
 	return dispatcher.EndGroups

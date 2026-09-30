@@ -93,6 +93,8 @@ type loginPhase string
 
 const (
 	loginPhasePhone    loginPhase = "phone"
+	loginPhaseApiID   loginPhase = "api_id"
+	loginPhaseApiHash loginPhase = "api_hash"
 	loginPhaseCode     loginPhase = "code"
 	loginPhasePassword loginPhase = "password"
 )
@@ -101,6 +103,8 @@ type loginState struct {
 	phase     loginPhase
 	phone     string
 	phoneHash string
+	apiID     int
+	apiHash   string
 	expiresAt time.Time
 }
 
@@ -505,14 +509,70 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 	switch ls.phase {
 	case loginPhasePhone:
 		phone := text
-		hash, err := UserbotSendCode(phone)
+		// User च्या DB profile मध्ये API creds आहेत का ते check करा
+		dbUser, _ := db.GetUserByTelegramID(adminID)
+		if dbUser != nil && dbUser.TgApiID != 0 && dbUser.TgApiHash != "" {
+			// Stored creds आहेत — लगेच OTP पाठवा
+			hash, err := UserbotSendCode(phone, int(dbUser.TgApiID), dbUser.TgApiHash)
+			if err != nil {
+				clearUserbotLogin(adminID)
+				reply(ctx, u, "❌ "+err.Error())
+				return dispatcher.EndGroups
+			}
+			setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: phone, phoneHash: hash, apiID: int(dbUser.TgApiID), apiHash: dbUser.TgApiHash})
+			reply(ctx, u, "✅ OTP पाठवला! (stored API creds वापरले)\n\n🔢 Telegram वर आलेला OTP code टाका:\n\n⚠️ *टीप:* code मध्ये space किंवा dash देऊन टाका. (उदा: `9-9-0-8-7`)")
+			return dispatcher.EndGroups
+		}
+		// No stored creds — API_ID विचारा
+		setUserbotLogin(adminID, &loginState{phase: loginPhaseApiID, phone: phone})
+		reply(ctx, u, "🔑 *Telegram API ID टाका:*\n\n[my.telegram.org](https://my.telegram.org) वरून मिळतो.\n\nDefault global config वापरायचा असेल तर `-` पाठवा.")
+		return dispatcher.EndGroups
+
+	case loginPhaseApiID:
+		apiID := 0
+		apiHash := ""
+		if text != "-" && text != "" {
+			n, e := strconv.Atoi(strings.TrimSpace(text))
+			if e != nil || n <= 0 {
+				reply(ctx, u, "❌ Valid API ID टाका (number) किंवा default साठी `-` पाठवा.")
+				return dispatcher.EndGroups
+			}
+			apiID = n
+		}
+		if apiID == 0 {
+			// Default config वापरतो — API Hash विचारायची गरज नाही
+			hash, err := UserbotSendCode(ls.phone, 0, "")
+			if err != nil {
+				clearUserbotLogin(adminID)
+				reply(ctx, u, "❌ "+err.Error())
+				return dispatcher.EndGroups
+			}
+			setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: ls.phone, phoneHash: hash})
+			reply(ctx, u, "✅ OTP पाठवला! (global API creds)\n\n🔢 OTP code टाका:")
+			return dispatcher.EndGroups
+		}
+		setUserbotLogin(adminID, &loginState{phase: loginPhaseApiHash, phone: ls.phone, apiID: apiID})
+		reply(ctx, u, "🔑 *API Hash टाका:*\n\n(my.telegram.org वरूनच मिळतो — API ID सोबतच असतो)")
+		return dispatcher.EndGroups
+
+	case loginPhaseApiHash:
+		apiHash := strings.TrimSpace(text)
+		if apiHash == "" || apiHash == "-" {
+			reply(ctx, u, "❌ Valid API Hash टाका.")
+			return dispatcher.EndGroups
+		}
+		// Save creds to DB for next time
+		if dbUser, err := db.GetUserByTelegramID(adminID); err == nil && dbUser != nil {
+			_ = db.SetUserTgApiCreds(dbUser.ID, int32(ls.apiID), apiHash)
+		}
+		hash, err := UserbotSendCode(ls.phone, ls.apiID, apiHash)
 		if err != nil {
 			clearUserbotLogin(adminID)
 			reply(ctx, u, "❌ "+err.Error())
 			return dispatcher.EndGroups
 		}
-		setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: phone, phoneHash: hash})
-		reply(ctx, u, "✅ OTP पाठवला!\n\n🔢 Telegram वर आलेला OTP code टाका:\n\n⚠️ *टीप:* Telegram code block करू नये म्हणून code मध्ये space किंवा dash देऊन टाका. (उदा: `9-9-0-8-7` किंवा `9 9 9 9 9`)")
+		setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: ls.phone, phoneHash: hash, apiID: ls.apiID, apiHash: apiHash})
+		reply(ctx, u, "✅ OTP पाठवला! API creds save केले.\n\n🔢 OTP code टाका:")
 		return dispatcher.EndGroups
 
 	case loginPhaseCode:

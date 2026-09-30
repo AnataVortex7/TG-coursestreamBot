@@ -21,11 +21,12 @@ var SyncChannelAdmins func(channelID int64) error
 
 var (
 	UserbotStatus            func() (running bool, firstName, lastName, username, phone string, userID int64)
-	UserbotSendCode          func(phone string) (phoneHash string, err error)
+	UserbotSendCode          func(phone string, apiID int, apiHash string) (phoneHash string, err error)
 	UserbotVerifyCode        func(phone, phoneHash, code, password string) (sessionStr, firstName, lastName, username, phoneOut string, userID int64, err error)
 	UserbotStop              func()
 	UserbotStartFromSession  func(sessionStr string)
 	SendTelegramDMWithMarkup func(userID int64, text string, markup interface{}) error
+	NotifyAdmins             func(text string)
 )
 
 var GetLiveUserbotClient func() *gotgproto.Client
