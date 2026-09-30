@@ -71,6 +71,12 @@ type config struct {
 
 	// Worker health check interval in seconds (default: 30)
 	WorkerHealthIntervalSec int `envconfig:"WORKER_HEALTH_INTERVAL_SEC" default:"30"`
+
+	// SkipDBWorkers — true असेल तर startup ला DB मधून workers load करणार नाही.
+	// फक्त WORKER_URLS env var मधले workers वापरले जातात.
+	// New machine साठी — old machine च्या workers शी conflict टाळायला.
+	// Old machine madhe hya varची गरज नाही (default false → DB workers load होतात).
+	SkipDBWorkers bool `envconfig:"SKIP_DB_WORKERS" default:"false"`
 }
 
 var botTokenRegex = regexp.MustCompile(`MULTI\_TOKEN\d+=(.*)`)
