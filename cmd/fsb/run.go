@@ -102,6 +102,7 @@ func runApp(cmd *cobra.Command, args []string) {
 	commands.UserbotStop = bot.UserBot.Stop
 	commands.UserbotStartFromSession = bot.UserBot.StartFromSession
 	commands.GetLiveUserbotClient = bot.UserBot.GetClient
+	commands.NotifyAdmins = bot.NotifyAllowedUsers
 	commands.SendTelegramDMWithMarkup = func(userID int64, text string, markup interface{}) error {
 		if m, ok := markup.(tg.ReplyMarkupClass); ok {
 			return bot.SendTelegramDMWithMarkup(userID, text, m)
