@@ -89,26 +89,30 @@ func Init(log *zap.Logger) {
 	var nodes []*WorkerNode
 
 	// ── 1. DB workers — these were admin-added ────────────────────────────
-	dbWorkers, err := db.GetActiveWorkers()
-	if err != nil {
-		Default.log.Warn("failed to load workers from DB — using env only", zap.Error(err))
+	if config.ValueOf.SkipDBWorkers {
+		Default.log.Info("SKIP_DB_WORKERS=true — DB workers skip केले, फक्त WORKER_URLS वापरले जातील")
 	} else {
-		for _, w := range dbWorkers {
-			u := strings.TrimRight(w.URL, "/")
-			if u == "" {
-				continue
-			}
-			addedBy := w.AddedBy
-			if addedBy == "" {
-				addedBy = addedByAdmin // legacy rows default to admin
-			}
-			if _, seen := urlSet[u]; !seen {
-				urlSet[u] = struct{}{}
-				nodes = append(nodes, &WorkerNode{
-					BaseURL: u,
-					Healthy: false,
-					AddedBy: addedBy,
-				})
+		dbWorkers, err := db.GetActiveWorkers()
+		if err != nil {
+			Default.log.Warn("failed to load workers from DB — using env only", zap.Error(err))
+		} else {
+			for _, w := range dbWorkers {
+				u := strings.TrimRight(w.URL, "/")
+				if u == "" {
+					continue
+				}
+				addedBy := w.AddedBy
+				if addedBy == "" {
+					addedBy = addedByAdmin // legacy rows default to admin
+				}
+				if _, seen := urlSet[u]; !seen {
+					urlSet[u] = struct{}{}
+					nodes = append(nodes, &WorkerNode{
+						BaseURL: u,
+						Healthy: false,
+						AddedBy: addedBy,
+					})
+				}
 			}
 		}
 	}
@@ -196,8 +200,12 @@ func RegisterWorker(url string) {
 		return
 	}
 
-	if err := db.UpsertWorker(url, addedByAdmin); err != nil {
-		Default.log.Warn("RegisterWorker: DB upsert failed", zap.String("url", url), zap.Error(err))
+	// SKIP_DB_WORKERS=true असेल तर DB मध्ये save करायचं नाही —
+	// नाहीतर old machine ला next restart ला नवीन workers दिसतील.
+	if !config.ValueOf.SkipDBWorkers {
+		if err := db.UpsertWorker(url, addedByAdmin); err != nil {
+			Default.log.Warn("RegisterWorker: DB upsert failed", zap.String("url", url), zap.Error(err))
+		}
 	}
 
 	Default.mu.Lock()
@@ -300,8 +308,10 @@ func HeartbeatWorker(url string) {
 		return
 	}
 
-	if err := db.UpdateWorkerLastSeen(url); err != nil {
-		Default.log.Warn("HeartbeatWorker: DB update failed", zap.String("url", url), zap.Error(err))
+	if !config.ValueOf.SkipDBWorkers {
+		if err := db.UpdateWorkerLastSeen(url); err != nil {
+			Default.log.Warn("HeartbeatWorker: DB update failed", zap.String("url", url), zap.Error(err))
+		}
 	}
 
 	Default.mu.Lock()
