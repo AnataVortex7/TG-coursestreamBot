@@ -1290,6 +1290,21 @@ var (
 )
 
 // SetUserTelegramID links a website user record to a Telegram user ID.
+// SetUserTgApiCreds — per-user Telegram API credentials save करतो.
+// apiID = 0 आणि apiHash = "" केल्यास credentials clear होतात (global config वापरला जाईल).
+func SetUserTgApiCreds(userID primitive.ObjectID, apiID int32, apiHash string) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := ColUsers.UpdateOne(ctx,
+		bson.M{"_id": userID},
+		bson.M{"$set": bson.M{
+			"tg_api_id":   apiID,
+			"tg_api_hash": apiHash,
+		}},
+	)
+	return err
+}
+
 // One user <-> one Telegram ID, कायमचं — एकदा link झाल्यावर relink करता येत नाही
 // (admin च्या /unlinktg शिवाय). दोन्ही बाजूंनी uniqueness check करतो.
 // Called by: admin चा /settg command, आणि bot चा auto-link (/start totp_<token>) flow.

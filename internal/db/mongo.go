@@ -61,6 +61,12 @@ type User struct {
 	// Not nil jevha user ne "24h madhe session delete kara" request keli.
 	// Time pass zala ki next login la fingerprint reset hoто, nava device allow.
 	SessionDeleteAt *time.Time `bson:"session_delete_at"   json:"-"`
+	// ─── Per-user Telegram API credentials ──────────────────────────────
+	// Optional. Set asatil tar Userbot login saathi global API_ID/HASH aivaji
+	// he vaparlele jatat. Telegram rate-limit avoid hota.
+	// 0/"" = use global config.
+	TgApiID   int32  `bson:"tg_api_id,omitempty"   json:"-"`
+	TgApiHash string `bson:"tg_api_hash,omitempty" json:"-"`
 }
 
 // Session — one active session per user (new login kills old)
