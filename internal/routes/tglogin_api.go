@@ -34,17 +34,20 @@ func tgStatus(c *gin.Context) {
 }
 
 // POST /api/admin/tg/send-code
-// Body: { "phone": "+919876543210" }
+// Body: { "phone": "+919876543210", "api_id": 12345, "api_hash": "abc..." }
+// api_id / api_hash optional — nasel tar global config vaparlela jaiel.
 func tgSendCode(c *gin.Context) {
 	var req struct {
-		Phone string `json:"phone"`
+		Phone   string `json:"phone"`
+		ApiID   int    `json:"api_id"`
+		ApiHash string `json:"api_hash"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Phone) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Phone number required — e.g. +919876543210"})
 		return
 	}
 
-	phoneHash, err := bot.UserBot.SendCode(strings.TrimSpace(req.Phone))
+	phoneHash, err := bot.UserBot.SendCode(strings.TrimSpace(req.Phone), req.ApiID, req.ApiHash)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
