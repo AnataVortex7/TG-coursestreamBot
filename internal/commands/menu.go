@@ -530,7 +530,6 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 
 	case loginPhaseApiID:
 		apiID := 0
-		apiHash := ""
 		if text != "-" && text != "" {
 			n, e := strconv.Atoi(strings.TrimSpace(text))
 			if e != nil || n <= 0 {
