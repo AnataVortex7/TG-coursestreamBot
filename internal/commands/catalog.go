@@ -1370,7 +1370,8 @@ func deliverLectureCore(
 			"logChannelMsgID", cached.LogChannelMsgID, "chatID", targetChatID)
 		if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, cached.LogChannelMsgID, targetChatID); fErr == nil {
 			if newMsgID := extractNewMessageID(fwdUpdates); newMsgID != 0 {
-				_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, newMsgID)
+				_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, newMsgID, botClient.Self.ID)
+				_ = db.AddPendingDeletion(dbUser.ID, courseID, targetChatID, newMsgID, botClient.Self.ID)
 			}
 			return true, nil
 		} else {
@@ -1704,7 +1705,8 @@ func deliverLectureCore(
 	}
 
 	if sentMessageID != 0 {
-		_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, sentMessageID)
+		_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, sentMessageID, botClient.Self.ID)
+		_ = db.AddPendingDeletion(dbUser.ID, courseID, targetChatID, sentMessageID, botClient.Self.ID)
 	}
 	return true, nil
 }

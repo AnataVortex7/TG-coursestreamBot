@@ -12,6 +12,7 @@ package commands
 import (
 	"context"
 	"math/rand"
+	"strings"
 	"time"
 
 	"EverythingSuckz/fsb/internal/db"
@@ -26,6 +27,10 @@ import (
 func StartExpiryCleanup(ctx context.Context, client *gotgproto.Client, log *zap.Logger) {
 	log = log.Named("expiry_cleanup")
 	log.Info("Expiry-cleanup worker started — runs every 15 minutes")
+
+	// pending_msg_deletions worker — old machine ने sent_lecture_msgs corrupt
+	// केली तरी हा independent राहतो. Every 10 minutes retry.
+	go startPendingDeletionWorker(ctx, client, log.Named("pending_del"))
 
 	ticker := time.NewTicker(15 * time.Minute)
 	defer ticker.Stop()
@@ -43,6 +48,97 @@ func StartExpiryCleanup(ctx context.Context, client *gotgproto.Client, log *zap.
 	}
 }
 
+// startPendingDeletionWorker — pending_msg_deletions independently process करतो.
+// Old machine ने sent_lecture_msgs delete केल्या तरी हे records safe आहेत.
+// फक्त expired/revoked access चे messages delete करतो — active access ला touch नाही.
+func startPendingDeletionWorker(ctx context.Context, client *gotgproto.Client, log *zap.Logger) {
+	log.Info("Pending-deletion worker started — runs every 10 minutes")
+
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	runPendingDeletionWorker(client, log)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runPendingDeletionWorker(client, log)
+		}
+	}
+}
+
+const maxPendingAttempts = 10 // 10 attempts नंतर give up (message manually deleted असेल)
+
+func runPendingDeletionWorker(client *gotgproto.Client, log *zap.Logger) {
+	botID := int64(0)
+	if client != nil && client.Self != nil {
+		botID = client.Self.ID
+	}
+	if botID == 0 {
+		return
+	}
+
+	pending, err := db.GetPendingDeletionsForBot(botID)
+	if err != nil || len(pending) == 0 {
+		return
+	}
+
+	gctx := client.CreateContext()
+
+	for _, p := range pending {
+		// Max attempts check — give up करतो
+		if p.Attempts >= maxPendingAttempts {
+			log.Warn("Giving up on pending deletion after max attempts",
+				zap.Int64("chat_id", p.ChatID),
+				zap.Int("msg_id", p.MessageID),
+				zap.Int("attempts", p.Attempts))
+			_ = db.RemovePendingDeletion(p.ID)
+			continue
+		}
+
+		// Access expired/revoked आहे का check करा — active असेल तर delete नाही
+		accesses, err := db.ActiveAccessForUser(p.UserID)
+		if err == nil {
+			stillActive := false
+			for _, a := range accesses {
+				if a.CourseID == p.CourseID {
+					stillActive = true
+					break
+				}
+			}
+			if stillActive {
+				continue // access अजून valid आहे — delete नको
+			}
+		}
+
+		// Delete attempt
+		err = gctx.DeleteMessages(p.ChatID, []int{p.MessageID})
+		if err != nil {
+			errStr := err.Error()
+			alreadyGone := strings.Contains(errStr, "MESSAGE_ID_INVALID") ||
+				strings.Contains(errStr, "message not found") ||
+				strings.Contains(errStr, "MESSAGE_DELETE_FORBIDDEN")
+
+			if alreadyGone {
+				// Already deleted — record काढा
+				_ = db.RemovePendingDeletion(p.ID)
+			} else {
+				_ = db.IncrementPendingDeletionAttempt(p.ID)
+				log.Warn("Pending deletion failed — will retry",
+					zap.Int64("chat_id", p.ChatID),
+					zap.Int("msg_id", p.MessageID),
+					zap.Int("attempt", p.Attempts+1),
+					zap.Error(err))
+			}
+		} else {
+			_ = db.RemovePendingDeletion(p.ID)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
 func runExpiryCleanup(client *gotgproto.Client, log *zap.Logger) {
 	expired, err := db.ExpiredUncleanedAccess()
 	if err != nil {
@@ -57,19 +153,29 @@ func runExpiryCleanup(client *gotgproto.Client, log *zap.Logger) {
 	gctx := client.CreateContext()
 	for _, acc := range expired {
 		purgeSentLecturesForAccess(gctx, acc.UserID, acc.CourseID, log)
-		_ = db.MarkAccessContentCleaned(acc.ID)
+		// सगळ्या bots नी delete केल्यावरच cleaned mark करतो
+		if pending, err := db.HasPendingSentMsgs(acc.UserID, acc.CourseID); err == nil && !pending {
+			_ = db.MarkAccessContentCleaned(acc.ID)
+		}
 	}
 }
 
 // purgeSentLecturesForAccess — शेअर्ड helper: cmdRevokeAccess (instant manual
 // revoke) आणि background worker (natural expiry) दोघेही हेच वापरतात.
-// फक्त student च्या chat मधले messages delete करतो — LOG_CHANNEL cache
-// (db.DeliveredCache) touch करत नाही, renew झाल्यावर तीच वापरली जाते.
+// Multi-bot setup: फक्त या machine च्या bot ने पाठवलेले messages delete करतो.
+// दुसऱ्या bot चे messages त्या machine च्या cleanup run मध्ये delete होतील.
+// सगळ्या bots नी delete केल्यावरच access ला "cleaned" mark होतो.
 func purgeSentLecturesForAccess(gctx *ext.Context, userID, courseID primitive.ObjectID, log *zap.Logger) {
-	msgs, err := db.GetSentLectureMsgsForAccess(userID, courseID)
+	// या bot चा ID काढा
+	botID := int64(0)
+	if botClient := MainBotClient; botClient != nil && botClient.Self != nil {
+		botID = botClient.Self.ID
+	}
+
+	msgs, err := db.GetSentLectureMsgsByBot(userID, courseID, botID)
 	if err != nil {
 		if log != nil {
-			log.Warn("GetSentLectureMsgsForAccess failed", zap.Error(err))
+			log.Warn("GetSentLectureMsgsByBot failed", zap.Error(err))
 		}
 		return
 	}
@@ -77,32 +183,66 @@ func purgeSentLecturesForAccess(gctx *ext.Context, userID, courseID primitive.Ob
 		return
 	}
 
-	// chatID नुसार group करून batch delete (एकाच user साठी सगळे same chatID
-	// असतील साधारण, तरी सुरक्षिततेसाठी group करतो).
+	// chatID नुसार group — batch delete
 	byChat := map[int64][]int{}
 	for _, m := range msgs {
 		byChat[m.ChatID] = append(byChat[m.ChatID], m.MessageID)
 	}
+
+	var successfulMsgIDs []int // फक्त successfully deleted IDs track करतो
 	for chatID, ids := range byChat {
-		// Telegram delete API ला एका वेळी 100 पर्यंत ठीक असतं — chunk करतो.
 		for i := 0; i < len(ids); i += 100 {
 			end := i + 100
 			if end > len(ids) {
 				end = len(ids)
 			}
-			if err := gctx.DeleteMessages(chatID, ids[i:end]); err != nil && log != nil {
-				log.Warn("Failed to delete expired lecture messages",
-					zap.Int64("chat_id", chatID), zap.Error(err))
+			chunk := ids[i:end]
+			if err := gctx.DeleteMessages(chatID, chunk); err != nil {
+				// "message not found" = user ने आधीच delete केला → success मानतो
+				errStr := err.Error()
+				alreadyGone := strings.Contains(errStr, "MESSAGE_ID_INVALID") ||
+					strings.Contains(errStr, "message not found") ||
+					strings.Contains(errStr, "MESSAGE_DELETE_FORBIDDEN")
+				if alreadyGone {
+					successfulMsgIDs = append(successfulMsgIDs, chunk...)
+				} else {
+					if log != nil {
+						log.Warn("Failed to delete expired lecture messages — will retry next run",
+							zap.Int64("chat_id", chatID),
+							zap.Int64("bot_id", botID),
+							zap.Int("count", len(chunk)),
+							zap.Error(err))
+					}
+				}
+				time.Sleep(300 * time.Millisecond)
+				continue
 			}
+			successfulMsgIDs = append(successfulMsgIDs, chunk...)
 			time.Sleep(300 * time.Millisecond)
 		}
 	}
-	_ = db.DeleteSentLectureMsgsForAccess(userID, courseID)
 
-	// Student ला courteous notice — Buy/Renew button सकट.
-	if botClient := MainBotClient; botClient != nil && len(byChat) > 0 {
-		for chatID := range byChat {
-			toPeer := gctx.PeerStorage.GetInputPeerById(chatID)
+	// फक्त successfully deleted messages चे DB records काढतो
+	if len(successfulMsgIDs) > 0 {
+		_ = db.DeleteSentLectureMsgsByIDs(successfulMsgIDs)
+	}
+
+	// Student ला notice — फक्त successfully deleted असतील तरच
+	if len(successfulMsgIDs) == 0 {
+		return // सगळे fail → notice नको, next run retry करेल
+	}
+	successSet := make(map[int]bool, len(successfulMsgIDs))
+	for _, id := range successfulMsgIDs {
+		successSet[id] = true
+	}
+	notifiedChats := map[int64]bool{}
+	if botClient := MainBotClient; botClient != nil {
+		for _, m := range msgs {
+			if !successSet[m.MessageID] || notifiedChats[m.ChatID] {
+				continue
+			}
+			notifiedChats[m.ChatID] = true
+			toPeer := gctx.PeerStorage.GetInputPeerById(m.ChatID)
 			if toPeer.Zero() {
 				continue
 			}

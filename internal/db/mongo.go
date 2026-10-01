@@ -148,6 +148,9 @@ type SentLectureMsg struct {
 	CourseID  primitive.ObjectID `bson:"course_id"`
 	ChatID    int64              `bson:"chat_id"`
 	MessageID int                `bson:"message_id"`
+	// BotID — कोणत्या bot ने हा message पाठवला. Multi-bot setup मध्ये
+	// delete करताना योग्य bot client वापरण्यासाठी. 0 = legacy record (bot unknown).
+	BotID     int64              `bson:"bot_id,omitempty"`
 	CreatedAt time.Time          `bson:"created_at"`
 }
 
