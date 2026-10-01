@@ -164,17 +164,23 @@ func RecordPoll(workerID string) {
 	localPollCache.lastPoll[workerID] = time.Now()
 	localPollCache.mu.Unlock()
 
-	// DB write इथे block करत नाही (poll response लगेच जायला हवा) — पण
-	// error आला तर log जरूर करतो, नाहीतर हा दुसरा silent-failure bug बनेल.
+	// SKIP_DB_WORKERS=true → DB ला लिहायचं नाही.
+	// नाहीतर old machine ला new machine चे workers दिसतील → conflict.
+	if config.ValueOf.SkipDBWorkers {
+		return
+	}
 	if err := db.RecordColabPoll(workerID); err != nil {
 		log.Printf("wmqueue: RecordColabPoll (DB) failed for worker %s: %v", workerID, err)
 	}
 }
 
 // IsColabOnline — कुठलाही 1 worker तरी online आहे का (overall system status).
-// DB मधून बघतो (सगळ्या replicas मध्ये accurate राहण्यासाठी); DB error आला
-// तरच याच process च्या local cache वर fallback करतो.
+// SKIP_DB_WORKERS=true → local cache वापरतो (फक्त या machine ला poll केलेले workers).
+// नाहीतर DB मधून बघतो (सगळ्या replicas मध्ये accurate राहण्यासाठी).
 func IsColabOnline() bool {
+	if config.ValueOf.SkipDBWorkers {
+		return isOnlineLocalFallback()
+	}
 	online, err := db.IsColabOnlineDB(workerOfflineThreshold)
 	if err != nil {
 		log.Printf("wmqueue: IsColabOnlineDB failed, falling back to local cache: %v", err)
@@ -194,8 +200,20 @@ func isOnlineLocalFallback() bool {
 	return false
 }
 
-// ActiveWorkers — सध्या online असलेले worker IDs (DB-backed).
+// ActiveWorkers — सध्या online असलेले worker IDs.
+// SKIP_DB_WORKERS=true → local cache (फक्त या machine ला poll केलेले).
 func ActiveWorkers() []string {
+	if config.ValueOf.SkipDBWorkers {
+		localPollCache.mu.Lock()
+		defer localPollCache.mu.Unlock()
+		var ids []string
+		for id, t := range localPollCache.lastPoll {
+			if time.Since(t) < workerOfflineThreshold {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
 	ids, err := db.ActiveColabWorkersDB(workerOfflineThreshold)
 	if err != nil {
 		log.Printf("wmqueue: ActiveColabWorkersDB failed: %v", err)
@@ -204,8 +222,23 @@ func ActiveWorkers() []string {
 	return ids
 }
 
-// LastPollAgo — सर्वात recent poll कधी झाला (कुठल्याही worker कडून, DB-backed).
+// LastPollAgo — सर्वात recent poll कधी झाला.
+// SKIP_DB_WORKERS=true → local cache वापरतो.
 func LastPollAgo() string {
+	if config.ValueOf.SkipDBWorkers {
+		localPollCache.mu.Lock()
+		defer localPollCache.mu.Unlock()
+		var latest time.Time
+		for _, t := range localPollCache.lastPoll {
+			if t.After(latest) {
+				latest = t
+			}
+		}
+		if latest.IsZero() {
+			return "never"
+		}
+		return time.Since(latest).Round(time.Second).String()
+	}
 	latest, err := db.LastColabPollAgoDB()
 	if err != nil {
 		log.Printf("wmqueue: LastColabPollAgoDB failed: %v", err)
@@ -214,12 +247,23 @@ func LastPollAgo() string {
 	if latest.IsZero() {
 		return "never"
 	}
-	d := time.Since(latest).Round(time.Second)
-	return d.String()
+	return time.Since(latest).Round(time.Second).String()
 }
 
-// snapshotOnlineWorkers — सध्या online असलेल्या workers चा set (StartColabWatcher साठी, DB-backed).
+// snapshotOnlineWorkers — सध्या online असलेल्या workers चा set (StartColabWatcher साठी).
+// SKIP_DB_WORKERS=true → local cache वापरतो.
 func snapshotOnlineWorkers() map[string]bool {
+	if config.ValueOf.SkipDBWorkers {
+		localPollCache.mu.Lock()
+		defer localPollCache.mu.Unlock()
+		set := make(map[string]bool, len(localPollCache.lastPoll))
+		for id, t := range localPollCache.lastPoll {
+			if time.Since(t) < workerOfflineThreshold {
+				set[id] = true
+			}
+		}
+		return set
+	}
 	ids, err := db.ActiveColabWorkersDB(workerOfflineThreshold)
 	if err != nil {
 		log.Printf("wmqueue: snapshotOnlineWorkers (DB) failed: %v", err)
@@ -232,12 +276,15 @@ func snapshotOnlineWorkers() map[string]bool {
 	return set
 }
 
-// forgetWorker — worker बराच वेळ offline राहिला तर tracker मधून काढतो (local + DB cleanup).
+// forgetWorker — worker बराच वेळ offline राहिला तर tracker मधून काढतो.
 func forgetWorker(workerID string) {
 	localPollCache.mu.Lock()
 	delete(localPollCache.lastPoll, workerID)
 	localPollCache.mu.Unlock()
 
+	if config.ValueOf.SkipDBWorkers {
+		return
+	}
 	if err := db.ForgetColabWorkerDB(workerID); err != nil {
 		log.Printf("wmqueue: ForgetColabWorkerDB failed for worker %s: %v", workerID, err)
 	}
