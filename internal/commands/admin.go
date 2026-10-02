@@ -8,6 +8,7 @@ import (
 	"EverythingSuckz/fsb/internal/utils"
 	"EverythingSuckz/fsb/internal/wmqueue"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -492,9 +493,62 @@ func cmdRevokeAccess(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ "+err.Error())
 		return dispatcher.EndGroups
 	}
-	purgeSentLecturesForAccess(ctx, user.ID, courseID, nil)
 
-	reply(ctx, u, fmt.Sprintf("✅ Access revoked for user: %s", user.Username))
+	reply(ctx, u, fmt.Sprintf("✅ Access revoked for user: %s\n⏳ पाठवलेले lectures delete होत आहेत...", user.Username))
+
+	go func() {
+		_, _, _ = ClearTrackedMsgs(MainBotClient, user.ID, courseID, nil)
+	}()
+
+	return dispatcher.EndGroups
+}
+
+// ─── cmdClearUserChat ─────────────────────────────────────────────────────────
+// Admin → user च्या chat मधून bot ने पाठवलेले (tracked) सगळे lectures delete करतो,
+// access expiry शिवाय. Bot account ला chat history वाचता येत नाही, म्हणून फक्त
+// tracking मध्ये असलेले messages delete होतात.
+func cmdClearUserChat(ctx *ext.Context, u *ext.Update) error {
+	a := args(u)
+	if len(a) < 1 {
+		reply(ctx, u, "Usage: /clearchat <mobile_or_email>")
+		return dispatcher.EndGroups
+	}
+
+	user, err := db.GetUserByMobileOrEmail(strings.ToLower(a[0]))
+	if err != nil || user == nil {
+		reply(ctx, u, "❌ User not found.")
+		return dispatcher.EndGroups
+	}
+	if user.TelegramID == 0 {
+		reply(ctx, u, "❌ या user ने Telegram account link केलेलं नाही.")
+		return dispatcher.EndGroups
+	}
+
+	reply(ctx, u, fmt.Sprintf("🗑 `%s` चे lectures delete होत आहेत...\n\n⏳ थोडा वेळ लागू शकतो.", user.FullName))
+
+	adminID := u.EffectiveUser().GetID()
+	go func() {
+		deleted, failed, cErr := ClearTrackedMsgs(MainBotClient, user.ID, primitive.NilObjectID, nil)
+
+		msg := fmt.Sprintf("✅ `%s` — %d messages delete झाले.", user.FullName, deleted)
+		if failed > 0 {
+			msg += fmt.Sprintf("\n⚠️ %d राहिले (पुन्हा try करा).", failed)
+		}
+		if cErr != nil {
+			msg = "❌ Clear करताना error: " + cErr.Error()
+		}
+
+		adminPeer := ctx.PeerStorage.GetInputPeerById(adminID)
+		if adminPeer.Zero() {
+			return
+		}
+		_, _ = MainBotClient.API().MessagesSendMessage(ctx, &tg.MessagesSendMessageRequest{
+			Peer:     adminPeer,
+			Message:  msg,
+			RandomID: rand.Int63(),
+		})
+	}()
+
 	return dispatcher.EndGroups
 }
 

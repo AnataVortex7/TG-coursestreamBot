@@ -11,14 +11,15 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"math/rand"
+	"strconv"
 	"strings"
 	"time"
 
 	"EverythingSuckz/fsb/internal/db"
 
 	"github.com/celestix/gotgproto"
-	"github.com/celestix/gotgproto/ext"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
@@ -98,19 +99,24 @@ func runPendingDeletionWorker(client *gotgproto.Client, log *zap.Logger) {
 			continue
 		}
 
-		// Access expired/revoked आहे का check करा — active असेल तर delete नाही
+		// Access expired/revoked आहे का check करा — active असेल तर delete नाही.
+		// DB error आल्यास safe side → skip (चुकून active user चे messages delete नको).
 		accesses, err := db.ActiveAccessForUser(p.UserID)
-		if err == nil {
-			stillActive := false
-			for _, a := range accesses {
-				if a.CourseID == p.CourseID {
-					stillActive = true
-					break
-				}
+		if err != nil {
+			log.Warn("Access check failed — skipping deletion for safety",
+				zap.String("user_id", p.UserID.Hex()),
+				zap.Error(err))
+			continue
+		}
+		stillActive := false
+		for _, a := range accesses {
+			if a.CourseID == p.CourseID {
+				stillActive = true
+				break
 			}
-			if stillActive {
-				continue // access अजून valid आहे — delete नको
-			}
+		}
+		if stillActive {
+			continue // access अजून valid आहे — delete नको
 		}
 
 		// Delete attempt
@@ -152,110 +158,164 @@ func runExpiryCleanup(client *gotgproto.Client, log *zap.Logger) {
 
 	gctx := client.CreateContext()
 	for _, acc := range expired {
-		purgeSentLecturesForAccess(gctx, acc.UserID, acc.CourseID, log)
-		// सगळ्या bots नी delete केल्यावरच cleaned mark करतो
-		if pending, err := db.HasPendingSentMsgs(acc.UserID, acc.CourseID); err == nil && !pending {
-			_ = db.MarkAccessContentCleaned(acc.ID)
+		deleted, failed, err := ClearTrackedMsgs(client, acc.UserID, acc.CourseID, log)
+		if err != nil {
+			log.Warn("ClearTrackedMsgs failed", zap.Error(err))
+			continue // पुढच्या run ला retry
 		}
+		if failed > 0 {
+			continue // काही राहिले → cleaned mark नाही, 15 min नंतर retry
+		}
+
+		_ = db.MarkAccessContentCleaned(acc.ID)
+
+		// काहीतरी delete झालं असेल तरच user ला notice
+		if deleted == 0 {
+			continue
+		}
+		user, uErr := db.GetUserByID(acc.UserID)
+		if uErr != nil || user == nil || user.TelegramID == 0 {
+			continue
+		}
+		toPeer := gctx.PeerStorage.GetInputPeerById(user.TelegramID)
+		if toPeer.Zero() {
+			continue
+		}
+		_, _ = client.API().MessagesSendMessage(gctx, &tg.MessagesSendMessageRequest{
+			Peer:     toPeer,
+			Message:  "⌛ तुमचा course access expire झाला आहे — पाठवलेले lectures काढून टाकले आहेत.\n\nRenew केल्यावर लगेच परत मिळतील.",
+			RandomID: rand.Int63(),
+			ReplyMarkup: &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
+				{Buttons: []tg.KeyboardButtonClass{
+					&tg.KeyboardButtonCallback{
+						Text: "🔁 Renew करा",
+						Data: []byte("wc:course:" + acc.CourseID.Hex()),
+					},
+				}},
+			}},
+		})
 	}
 }
 
-// purgeSentLecturesForAccess — शेअर्ड helper: cmdRevokeAccess (instant manual
-// revoke) आणि background worker (natural expiry) दोघेही हेच वापरतात.
-// Multi-bot setup: फक्त या machine च्या bot ने पाठवलेले messages delete करतो.
-// दुसऱ्या bot चे messages त्या machine च्या cleanup run मध्ये delete होतील.
-// सगळ्या bots नी delete केल्यावरच access ला "cleaned" mark होतो.
-func purgeSentLecturesForAccess(gctx *ext.Context, userID, courseID primitive.ObjectID, log *zap.Logger) {
-	// या bot चा ID काढा
-	botID := int64(0)
-	if botClient := MainBotClient; botClient != nil && botClient.Self != nil {
-		botID = botClient.Self.ID
+// ─── ClearTrackedMsgs ────────────────────────────────────────────────────────
+// Bot account ला chat history वाचता येत नाही (messages.getHistory = users only),
+// म्हणून bot ने स्वतः पाठवलेले messages tracking records (sent_lecture_msgs +
+// pending_msg_deletions) वरून delete करतो. FloodWait handled.
+//
+// courseID zero (primitive.NilObjectID) → user चे सगळे courses.
+// फक्त या bot चे records (message ID bot-wise असतात — दुसऱ्या bot चे ID वापरणं धोकादायक).
+// Returns: deleted = chat मधून गेलेले, failed = अजून राहिलेले (retry होतील).
+func ClearTrackedMsgs(client *gotgproto.Client, userID, courseID primitive.ObjectID, log *zap.Logger) (deleted, failed int, err error) {
+	if client == nil || client.Self == nil {
+		return 0, 0, errors.New("bot client ready नाही")
 	}
+	botID := client.Self.ID
 
-	msgs, err := db.GetSentLectureMsgsByBot(userID, courseID, botID)
-	if err != nil {
-		if log != nil {
-			log.Warn("GetSentLectureMsgsByBot failed", zap.Error(err))
-		}
-		return
+	user, uErr := db.GetUserByID(userID)
+	if uErr != nil || user == nil || user.TelegramID == 0 {
+		return 0, 0, nil // TG link नाही → chat मध्ये काही पाठवलेलंच नाही
 	}
-	if len(msgs) == 0 {
-		return
-	}
+	chatID := user.TelegramID
 
-	// chatID नुसार group — batch delete
-	byChat := map[int64][]int{}
-	for _, m := range msgs {
-		byChat[m.ChatID] = append(byChat[m.ChatID], m.MessageID)
-	}
-
-	var successfulMsgIDs []int // फक्त successfully deleted IDs track करतो
-	for chatID, ids := range byChat {
-		for i := 0; i < len(ids); i += 100 {
-			end := i + 100
-			if end > len(ids) {
-				end = len(ids)
+	// दोन्ही collections मधून unique message IDs गोळा करा
+	idSet := map[int]bool{}
+	if recs, e := db.GetSentLectureMsgsForUser(userID, courseID, botID); e == nil {
+		for _, r := range recs {
+			if r.ChatID == chatID {
+				idSet[r.MessageID] = true
 			}
-			chunk := ids[i:end]
-			if err := gctx.DeleteMessages(chatID, chunk); err != nil {
-				// "message not found" = user ने आधीच delete केला → success मानतो
-				errStr := err.Error()
-				alreadyGone := strings.Contains(errStr, "MESSAGE_ID_INVALID") ||
-					strings.Contains(errStr, "message not found") ||
-					strings.Contains(errStr, "MESSAGE_DELETE_FORBIDDEN")
-				if alreadyGone {
-					successfulMsgIDs = append(successfulMsgIDs, chunk...)
-				} else {
-					if log != nil {
-						log.Warn("Failed to delete expired lecture messages — will retry next run",
-							zap.Int64("chat_id", chatID),
-							zap.Int64("bot_id", botID),
-							zap.Int("count", len(chunk)),
-							zap.Error(err))
-					}
+		}
+	}
+	if recs, e := db.GetPendingDeletionsForUser(userID, courseID, botID); e == nil {
+		for _, r := range recs {
+			if r.ChatID == chatID {
+				idSet[r.MessageID] = true
+			}
+		}
+	}
+	if len(idSet) == 0 {
+		return 0, 0, nil
+	}
+	ids := make([]int, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+
+	gctx := client.CreateContext()
+	var doneIDs []int // chat मधून गेले किंवा कधीच delete होणार नाहीत → record काढायचे
+
+	for i := 0; i < len(ids); i += 100 {
+		end := i + 100
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunk := ids[i:end]
+
+		ok := false
+		for attempt := 0; attempt < 3 && !ok; attempt++ {
+			dErr := gctx.DeleteMessages(chatID, chunk)
+			switch {
+			case dErr == nil:
+				deleted += len(chunk)
+				doneIDs = append(doneIDs, chunk...)
+				ok = true
+			case strings.Contains(dErr.Error(), "FLOOD_WAIT"):
+				secs, _ := parseFloodWait(dErr)
+				if log != nil {
+					log.Info("FloodWait on DeleteMessages — waiting", zap.Int("secs", secs))
 				}
-				time.Sleep(300 * time.Millisecond)
-				continue
+				time.Sleep(time.Duration(secs+2) * time.Second)
+			case isMsgGone(dErr):
+				// आधीच delete झाले / delete करता येणार नाहीत → retry निरुपयोगी, record काढा
+				if log != nil {
+					log.Warn("Messages undeletable/already gone — dropping records",
+						zap.Int("count", len(chunk)), zap.Error(dErr))
+				}
+				doneIDs = append(doneIDs, chunk...)
+				ok = true
+			default:
+				if log != nil {
+					log.Warn("DeleteMessages failed — will retry later", zap.Error(dErr))
+				}
+				attempt = 3 // इथेच थांबा, पुढच्या run ला retry
 			}
-			successfulMsgIDs = append(successfulMsgIDs, chunk...)
-			time.Sleep(300 * time.Millisecond)
 		}
+		if !ok {
+			failed += len(chunk)
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 
-	// फक्त successfully deleted messages चे DB records काढतो
-	if len(successfulMsgIDs) > 0 {
-		_ = db.DeleteSentLectureMsgsByIDs(successfulMsgIDs)
-	}
+	// फक्त यशस्वी/निरर्थक IDs चे records काढा; failed ठेवा
+	_ = db.DeleteSentLectureMsgsByIDs(userID, doneIDs)
+	_ = db.RemovePendingDeletionsByMsgIDs(userID, botID, doneIDs)
+	return deleted, failed, nil
+}
 
-	// Student ला notice — फक्त successfully deleted असतील तरच
-	if len(successfulMsgIDs) == 0 {
-		return // सगळे fail → notice नको, next run retry करेल
+// isMsgGone — message आधीच नाही / delete करण्याची परवानगी नाही (retry होऊ शकत नाही).
+func isMsgGone(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "MESSAGE_ID_INVALID") ||
+		strings.Contains(s, "MESSAGE_DELETE_FORBIDDEN") ||
+		strings.Contains(s, "message not found")
+}
+
+// parseFloodWait — FLOOD_WAIT error मधून seconds काढतो.
+func parseFloodWait(err error) (int, bool) {
+	if err == nil {
+		return 0, false
 	}
-	successSet := make(map[int]bool, len(successfulMsgIDs))
-	for _, id := range successfulMsgIDs {
-		successSet[id] = true
+	s := err.Error()
+	if !strings.Contains(s, "FLOOD_WAIT") {
+		return 0, false
 	}
-	notifiedChats := map[int64]bool{}
-	if botClient := MainBotClient; botClient != nil {
-		for _, m := range msgs {
-			if !successSet[m.MessageID] || notifiedChats[m.ChatID] {
-				continue
-			}
-			notifiedChats[m.ChatID] = true
-			toPeer := gctx.PeerStorage.GetInputPeerById(m.ChatID)
-			if toPeer.Zero() {
-				continue
-			}
-			_, _ = botClient.API().MessagesSendMessage(gctx, &tg.MessagesSendMessageRequest{
-				Peer:     toPeer,
-				Message:  "⌛ तुमचा course access expire झाला आहे — पाठवलेले lectures काढून टाकले आहेत.\n\nरिन्यू केल्यावर आधी बघितलेले lectures परत लगेच (जलद) मिळतील.",
-				RandomID: rand.Int63(),
-				ReplyMarkup: &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
-					{Buttons: []tg.KeyboardButtonClass{
-						&tg.KeyboardButtonCallback{Text: "🔁 Course बघा / Renew करा", Data: []byte("wc:course:" + courseID.Hex())},
-					}},
-				}},
-			})
+	// "FLOOD_WAIT_42" or "FLOOD_WAIT 42"
+	for _, part := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == '_' || r == ' ' || r == ':'
+	}) {
+		if n, e := strconv.Atoi(part); e == nil && n > 0 {
+			return n, true
 		}
 	}
+	return 5, true // default 5s
 }

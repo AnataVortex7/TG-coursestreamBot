@@ -98,3 +98,49 @@ func RemovePendingDeletionsByAccess(userID, courseID primitive.ObjectID) error {
 	})
 	return err
 }
+
+// RemovePendingDeletionsByUser — user चे सगळे pending records delete करा.
+func RemovePendingDeletionsByUser(userID primitive.ObjectID) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := colPendingDeletions().DeleteMany(ctx, bson.M{"user_id": userID})
+	return err
+}
+
+// GetPendingDeletionsForUser — user चे pending records, फक्त या bot चे.
+// courseID zero असेल तर user चे सगळे courses.
+func GetPendingDeletionsForUser(userID, courseID primitive.ObjectID, botID int64) ([]PendingMsgDeletion, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	filter := bson.M{"user_id": userID, "bot_id": botID}
+	if !courseID.IsZero() {
+		filter["course_id"] = courseID
+	}
+	cursor, err := colPendingDeletions().Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var list []PendingMsgDeletion
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// RemovePendingDeletionsByMsgIDs — delete झालेल्या messages चे records काढा.
+func RemovePendingDeletionsByMsgIDs(userID primitive.ObjectID, botID int64, messageIDs []int) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := colPendingDeletions().DeleteMany(ctx, bson.M{
+		"user_id":    userID,
+		"bot_id":     botID,
+		"message_id": bson.M{"$in": messageIDs},
+	})
+	return err
+}

@@ -74,19 +74,50 @@ func GetSentLectureMsgsForAccess(userID, courseID primitive.ObjectID) ([]SentLec
 	return list, nil
 }
 
-// DeleteSentLectureMsgsByIDs — specific message IDs चे records delete करतो.
+// DeleteSentLectureMsgsByIDs — specific message IDs चे records delete करतो (त्या user साठी).
 // फक्त successfully deleted messages साठी call करा — failed ते DB मध्ये
 // राहतात आणि पुढच्या cleanup run मध्ये retry होतात.
-func DeleteSentLectureMsgsByIDs(messageIDs []int) error {
+func DeleteSentLectureMsgsByIDs(userID primitive.ObjectID, messageIDs []int) error {
 	if len(messageIDs) == 0 {
 		return nil
 	}
 	ctx, cancel := Ctx()
 	defer cancel()
 	_, err := colSentLectureMsgs().DeleteMany(ctx, bson.M{
+		"user_id":    userID,
 		"message_id": bson.M{"$in": messageIDs},
 	})
 	return err
+}
+
+// GetSentLectureMsgsForUser — user चे tracked messages, फक्त या bot चे (किंवा legacy bot_id नसलेले).
+// courseID zero (primitive.NilObjectID) असेल तर user चे सगळे courses.
+func GetSentLectureMsgsForUser(userID, courseID primitive.ObjectID, botID int64) ([]SentLectureMsg, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	filter := bson.M{
+		"user_id": userID,
+		"$or": bson.A{
+			bson.M{"bot_id": botID},
+			bson.M{"bot_id": bson.M{"$exists": false}},
+			bson.M{"bot_id": 0},
+		},
+	}
+	if !courseID.IsZero() {
+		filter["course_id"] = courseID
+	}
+	cursor, err := colSentLectureMsgs().Find(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var list []SentLectureMsg
+	if err = cursor.All(ctx, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
 }
 
 // DeleteSentLectureMsgsByBot — या bot ने पाठवलेले records delete करतो.
