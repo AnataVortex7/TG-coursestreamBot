@@ -41,6 +41,8 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 
 	d.AddHandler(handlers.NewCommand("grantaccess", adminOnly(cmdGrantAccess)))
 	d.AddHandler(handlers.NewCommand("revokeaccess", adminOnly(cmdRevokeAccess)))
+	d.AddHandler(handlers.NewCommand("clearchat", adminOnly(cmdClearUserChat)))
+	d.AddHandler(handlers.NewCommand("sendcourse", adminOnly(cmdSendCourse)))
 
 	d.AddHandler(handlers.NewCommand("addvideo", adminOnly(cmdAddVideo)))
 	d.AddHandler(handlers.NewCommand("syncchannel", adminOnly(cmdSyncChannel)))

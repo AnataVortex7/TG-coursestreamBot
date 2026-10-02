@@ -225,7 +225,7 @@ var categories = []category{
 		"listreplace", "setreplace", "delreplace", "clearreplace",
 	}},
 	{"users", "👥 Users Management", []string{
-		"listusers", "adduser", "deluser", "grantaccess", "revokeaccess", "clearchat",
+		"listusers", "adduser", "deluser", "grantaccess", "revokeaccess", "clearchat", "sendcourse",
 		"userinfo", "suspicious", "blockuser", "unblockuser", "settg", "unlinktg",
 	}},
 	{"sessions", "📱 Active Sessions", []string{"sessions", "kill", "killsession"}},
@@ -666,6 +666,10 @@ func init() {
 	}})
 	registerCmd(menuCmd{key: "clearchat", label: "🗑 Clear Chat History", kind: kindFlow, fn: cmdClearUserChat, steps: []cmdStep{
 		selectStep("🗑 कोणत्या user चा chat clear करायचा:", listUsersItems),
+	}})
+	registerCmd(menuCmd{key: "sendcourse", label: "📤 Send Course to User", kind: kindFlow, fn: cmdSendCourse, steps: []cmdStep{
+		selectStep("👤 कोणत्या User ला पाठवायचं:", listUsersItems),
+		selectStep("📚 कोणता Course पाठवायचा:", listCoursesItems),
 	}})
 	registerCmd(menuCmd{key: "addvideo", label: "🎬 Add Video", kind: kindFlow, fn: cmdAddVideo, steps: []cmdStep{
 		selectStep("🎬 कोणत्या Course मध्ये video add करायचा:", listCoursesItems),
