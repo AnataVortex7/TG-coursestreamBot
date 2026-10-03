@@ -81,6 +81,9 @@ func GetUserBotSessionDoc() (*UserBotSessionDoc, error) {
 
 // DeleteUserBotSession — logout kelavar session delete karto.
 func DeleteUserBotSession() error {
+	if doc, _ := GetUserBotSessionDoc(); doc != nil {
+		_ = DeleteSessionCreds(doc.Session)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, err := colUserbot().DeleteOne(ctx, bson.M{"key": userbotSessionKey})
@@ -129,6 +132,9 @@ func GetUserBotSessionDocForUser(ownerID int64) (*UserBotSessionDoc, error) {
 }
 
 func DeleteUserBotSessionForUser(ownerID int64) error {
+	if doc, _ := GetUserBotSessionDocForUser(ownerID); doc != nil {
+		_ = DeleteSessionCreds(doc.Session)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	key := userbotKey(ownerID)

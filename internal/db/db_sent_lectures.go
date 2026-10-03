@@ -37,11 +37,7 @@ func GetSentLectureMsgsByBot(userID, courseID primitive.ObjectID, botID int64) (
 	filter := bson.M{
 		"user_id":   userID,
 		"course_id": courseID,
-		"$or": bson.A{
-			bson.M{"bot_id": botID},
-			bson.M{"bot_id": bson.M{"$exists": false}},
-			bson.M{"bot_id": 0},
-		},
+		"bot_id": botID,
 	}
 	cursor, err := colSentLectureMsgs().Find(ctx, filter)
 	if err != nil {
@@ -98,11 +94,7 @@ func GetSentLectureMsgsForUser(userID, courseID primitive.ObjectID, botID int64)
 
 	filter := bson.M{
 		"user_id": userID,
-		"$or": bson.A{
-			bson.M{"bot_id": botID},
-			bson.M{"bot_id": bson.M{"$exists": false}},
-			bson.M{"bot_id": 0},
-		},
+		"bot_id": botID,
 	}
 	if !courseID.IsZero() {
 		filter["course_id"] = courseID
@@ -129,11 +121,7 @@ func DeleteSentLectureMsgsByBot(userID, courseID primitive.ObjectID, botID int64
 	filter := bson.M{
 		"user_id":   userID,
 		"course_id": courseID,
-		"$or": bson.A{
-			bson.M{"bot_id": botID},
-			bson.M{"bot_id": bson.M{"$exists": false}},
-			bson.M{"bot_id": 0},
-		},
+		"bot_id": botID,
 	}
 	_, err := colSentLectureMsgs().DeleteMany(ctx, filter)
 	return err

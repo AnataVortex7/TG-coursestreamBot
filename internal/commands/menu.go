@@ -467,6 +467,9 @@ func cmdUserbotLogout(ctx *ext.Context, u *ext.Update) error {
 	}
 	UserbotStop()
 	_ = db.DeleteUserBotSession()
+	if du, _ := db.GetUserByTelegramID(u.EffectiveUser().GetID()); du != nil {
+		_ = db.SetUserTgApiCreds(du.ID, 0, "")
+	}
 	reply(ctx, u, "✅ Userbot logout केला — session delete झाला.\n\nपुन्हा login करायला 🔑 Userbot Login वापरा.")
 	return dispatcher.EndGroups
 }

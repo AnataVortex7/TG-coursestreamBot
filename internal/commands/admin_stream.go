@@ -409,9 +409,10 @@ func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 		return nil, fmt.Errorf("Userbot account not connected. Please login first.")
 	}
 
+	apiID, apiHash := db.SessionAPICreds(doc.Session)
 	client, err := gotgproto.NewClient(
-		int(config.ValueOf.ApiID),
-		config.ValueOf.ApiHash,
+		apiID,
+		apiHash,
 		gotgproto.ClientTypePhone(""),
 		&gotgproto.ClientOpts{
 			Session:          sessionMaker.PyrogramSession(doc.Session),
@@ -424,6 +425,14 @@ func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 
 	userbotClients[userID] = client
 	return client, nil
+}
+
+// dropUserbotClient — logout नंतर cached client काढा, नाहीतर नवीन API creds/session ने
+// पुन्हा login केल्यावरही restart पर्यंत जुना client वापरला जाईल.
+func dropUserbotClient(userID int64) {
+	userbotClientsMu.Lock()
+	delete(userbotClients, userID)
+	userbotClientsMu.Unlock()
 }
 
 func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, channelID int64) *tg.InputPeerChannel {

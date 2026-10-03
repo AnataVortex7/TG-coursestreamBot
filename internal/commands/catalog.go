@@ -333,6 +333,10 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 
 	case "userbot_logout":
 		_ = db.DeleteUserBotSessionForUser(chatID)
+		dropUserbotClient(chatID)
+		if du, _ := db.GetUserByTelegramID(chatID); du != nil {
+			_ = db.SetUserTgApiCreds(du.ID, 0, "")
+		}
 		text, markup := renderPremiumMenuView(chatID)
 		editCatalogMessage(ctx, u, "🚪 Userbot Account Logout केला!\n\n"+text, markup)
 

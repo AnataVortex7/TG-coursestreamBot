@@ -103,6 +103,13 @@ func args(u *ext.Update) []string {
 // USER COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+
+// looksEmail — "@" आणि त्यानंतर "." असेल तरच email समजतो (password मधला "@" email समजू नये).
+func looksEmail(s string) bool {
+	at := strings.Index(s, "@")
+	return at > 0 && strings.Contains(s[at:], ".")
+}
+
 func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	// Menu flow: /adduser <mobile> <email> <password> [full name]
@@ -116,7 +123,7 @@ func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 
 	// Menu flow पाठवतो: mobile email password [name...]
 	// a[0] आणि a[1] दोन्ही "-" नाहीत किंवा a[1] "@" नाही तर backward-compat mode
-	if len(a) >= 3 && (strings.Contains(a[0], "@") || a[0] == "-" || (!strings.Contains(a[0], "@") && (strings.Contains(a[1], "@") || a[1] == "-"))) {
+	if len(a) >= 3 && (a[0] == "-" || a[1] == "-" || looksEmail(a[0]) || looksEmail(a[1])) {
 		// New menu flow: mobile email password [name...]
 		rawMobile := strings.TrimSpace(a[0])
 		rawEmail := strings.ToLower(strings.TrimSpace(a[1]))
@@ -145,6 +152,11 @@ func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 		} else {
 			mobile = identifier
 		}
+	}
+
+	// Admin ने mobile/email चुकीच्या step ला टाकले तर अदलाबदल करा
+	if looksEmail(mobile) && !looksEmail(email) {
+		mobile, email = email, mobile
 	}
 
 	if mobile == "" && email == "" {
@@ -449,7 +461,7 @@ func cmdGrantAccess(ctx *ext.Context, u *ext.Update) error {
 	}
 
 	adminID := u.EffectiveUser().GetID()
-	if err := db.GrantAccess(user.ID, courseID, adminID, days); err != nil {
+	if err := db.GrantAccessDays(user.ID, courseID, adminID, days); err != nil {
 		reply(ctx, u, "❌ "+err.Error())
 		return dispatcher.EndGroups
 	}

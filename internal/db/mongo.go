@@ -47,8 +47,8 @@ type User struct {
 	ID            primitive.ObjectID `bson:"_id,omitempty"       json:"id"`
 	Username      string             `bson:"username"            json:"username"` // unique, auto-set to mobile or email if blank
 	FullName      string             `bson:"full_name"           json:"full_name"`
-	Mobile        string             `bson:"mobile"              json:"mobile"` // e.g. "9876543210" (digits only, optional)
-	Email         string             `bson:"email"               json:"email"`  // optional
+	Mobile        string             `bson:"mobile,omitempty"      json:"mobile"` // e.g. "9876543210" (digits only, optional)
+	Email         string             `bson:"email,omitempty"       json:"email"`  // optional
 	PasswordHash  string             `bson:"password_hash"       json:"-"`
 	TelegramID    int64              `bson:"telegram_id"         json:"telegram_id"` // linked Telegram user ID (0 = not linked)
 	CreatedAt     time.Time          `bson:"created_at"          json:"created_at"`

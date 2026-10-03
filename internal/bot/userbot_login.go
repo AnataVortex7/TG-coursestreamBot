@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,8 @@ type pendingLogin struct {
 	verifyCh  chan verifyRequest
 	resultCh  chan loginResult
 	cancel    context.CancelFunc
+	apiID     int    // या login साठी वापरलेले creds — session सोबत save होतात
+	apiHash   string
 }
 
 var (
@@ -113,19 +116,24 @@ func (u *UserBotStruct) SendCode(phone string, apiID int, apiHash string) (strin
 	}
 	loginMu.Unlock()
 
+	const maxAttempts = 2
 	var lastErr error
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		hash, err := u.sendCodeAttempt(phone, apiID, apiHash)
 		if err == nil {
 			return hash, nil
 		}
 		lastErr = err
-		if attempt < 3 {
-			// exponential backoff — 3s, 6s
-			time.Sleep(time.Duration(attempt) * 3 * time.Second)
+		// फक्त connection timeout वर retry. Telegram ने दिलेले error (PHONE_NUMBER_INVALID,
+		// API_ID_INVALID, FLOOD_WAIT...) retry केल्याने बदलत नाहीत, उलट flood वाढतो.
+		if !strings.Contains(err.Error(), "connection timeout") {
+			return "", err
+		}
+		if attempt < maxAttempts {
+			time.Sleep(3 * time.Second)
 		}
 	}
-	return "", fmt.Errorf("%w (3 attempts failed)", lastErr)
+	return "", fmt.Errorf("%w (%d attempts failed)", lastErr, maxAttempts)
 }
 
 func (u *UserBotStruct) sendCodeAttempt(phone string, apiID int, apiHash string) (string, error) {
@@ -291,6 +299,8 @@ func (u *UserBotStruct) sendCodeAttempt(phone string, apiID int, apiHash string)
 			verifyCh:  verifyCh,
 			resultCh:  resultCh,
 			cancel:    cancel,
+			apiID:     apiID,
+			apiHash:   apiHash,
 		}
 		loginMu.Unlock()
 		return hash, nil
@@ -342,6 +352,10 @@ func (u *UserBotStruct) VerifyCode(phone, phoneHash, code, password string) (str
 			activePending = nil
 		}
 		loginMu.Unlock()
+		// Manual दिलेले API ID/Hash या session सोबत बांधा — logout पर्यंत तेच वापरले जातील
+		if res.err == nil && res.sessionStr != "" {
+			_ = db.SaveSessionCreds(res.sessionStr, p.apiID, p.apiHash)
+		}
 		return res.sessionStr, res.info, res.err
 	case <-time.After(30 * time.Second):
 		return "", UserBotInfo{}, errors.New("Verify timeout — dobara try kara")
@@ -356,9 +370,10 @@ func (u *UserBotStruct) StartFromSession(sessionStr string) {
 	}
 	log := u.log.Named("restart")
 	go func() {
+		apiID, apiHash := db.SessionAPICreds(sessionStr)
 		client, err := gotgproto.NewClient(
-			int(config.ValueOf.ApiID),
-			config.ValueOf.ApiHash,
+			apiID,
+			apiHash,
 			gotgproto.ClientTypePhone(""),
 			&gotgproto.ClientOpts{
 				Session:          sessionMaker.PyrogramSession(sessionStr),

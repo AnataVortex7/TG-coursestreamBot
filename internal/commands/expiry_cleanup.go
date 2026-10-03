@@ -88,6 +88,7 @@ func runPendingDeletionWorker(client *gotgproto.Client, log *zap.Logger) {
 
 	gctx := client.CreateContext()
 
+	accessCache := map[primitive.ObjectID][]db.Access{} // प्रति run, user मागे एकच query
 	for _, p := range pending {
 		// Max attempts check — give up करतो
 		if p.Attempts >= maxPendingAttempts {
@@ -101,12 +102,17 @@ func runPendingDeletionWorker(client *gotgproto.Client, log *zap.Logger) {
 
 		// Access expired/revoked आहे का check करा — active असेल तर delete नाही.
 		// DB error आल्यास safe side → skip (चुकून active user चे messages delete नको).
-		accesses, err := db.ActiveAccessForUser(p.UserID)
-		if err != nil {
-			log.Warn("Access check failed — skipping deletion for safety",
-				zap.String("user_id", p.UserID.Hex()),
-				zap.Error(err))
-			continue
+		accesses, cached := accessCache[p.UserID]
+		if !cached {
+			var err error
+			accesses, err = db.ActiveAccessForUser(p.UserID)
+			if err != nil {
+				log.Warn("Access check failed — skipping deletion for safety",
+					zap.String("user_id", p.UserID.Hex()),
+					zap.Error(err))
+				continue
+			}
+			accessCache[p.UserID] = accesses
 		}
 		stillActive := false
 		for _, a := range accesses {
