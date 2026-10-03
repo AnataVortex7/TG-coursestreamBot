@@ -84,6 +84,12 @@ type WatermarkJob struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 	WorkerID          string    `json:"-"` // job ज्या Colab worker ला assign झाला आहे
 
+	// ── Transient-failure auto-retry (server-side; worker बदलावी लागत नाही) ──
+	// retries — network timeout सारख्या तात्पुरत्या failure मुळे किती वेळा परत queue केला.
+	retries int `json:"-"`
+	// retryNotice — retry चालू असताना user ला "❌ Download failed" ऐवजी दाखवायचा संदेश.
+	retryNotice string `json:"-"`
+
 
 
 	// SentMessageID — Colab ने प्रत्यक्ष पाठवलेल्या message चा ID (student
@@ -472,6 +478,7 @@ func (q *Queue) Poll(workerID string) *WatermarkJob {
 		job.Status = StatusProcessing
 		job.WorkerID = workerID
 		job.UpdatedAt = time.Now()
+		job.retryNotice = ""
 		return job
 	}
 	return nil
@@ -1350,4 +1357,83 @@ var wmHTTPClient = &http.Client{
 		TLSHandshakeTimeout: 30 * time.Second,
 	},
 	Timeout: 35 * time.Second,
+}
+
+// ── Transient failure auto-retry ──────────────────────────────────────────────
+// Worker "download failed" कळवतो तेव्हा कारण network timeout / connection reset
+// सारखं तात्पुरतं असेल तर job "failed" न करता थोड्या वेळाने परत queue करतो —
+// user ला पुन्हा request करावी लागत नाही. FFmpeg/encode errors आणि FLOOD_WAIT
+// retry करत नाही (त्यांनी निकाल बदलत नाही / वेळ वाया जातो).
+const maxTransientRetries = 3
+
+var transientErrMarkers = []string{
+	"read timed out", "connect timeout", "connecttimeout", "connectionpool",
+	"connection aborted", "connection reset", "connection refused",
+	"remote end closed", "incompleteread", "chunkedencodingerror",
+	"max retries exceeded", "bad gateway", "service unavailable",
+	"gateway time-out", "eof occurred", "timeouterror", "connectionerror",
+}
+
+func isTransientError(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, k := range transientErrMarkers {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// RetryIfTransient — true = job परत queue होणार (caller ने failed mark करू नये).
+// Backoff: 15s, 30s, 45s. Retries संपले तर false → normal failure.
+func (q *Queue) RetryIfTransient(jobID, errMsg string) bool {
+	if !isTransientError(errMsg) {
+		return false
+	}
+	q.mu.Lock()
+	job, ok := q.jobs[jobID]
+	if !ok || job.Status == StatusDone || job.Status == StatusFailed || job.retries >= maxTransientRetries {
+		q.mu.Unlock()
+		return false
+	}
+	job.retries++
+	attempt := job.retries
+	job.Status = StatusPending
+	job.Error = ""
+	job.WorkerID = ""
+	job.LastProgressSeq = 0
+	job.progressBusy = false
+	job.UpdatedAt = time.Now()
+	job.retryNotice = fmt.Sprintf("🔁 Network timeout — पुन्हा प्रयत्न होतोय (%d/%d)...\n📄 `%s`",
+		attempt, maxTransientRetries, job.FileName)
+	q.mu.Unlock()
+
+	saveJobToDB(job)
+
+	delay := time.Duration(attempt) * 15 * time.Second
+	log.Printf("[wmqueue] job %s transient failure — retry %d/%d in %s: %s",
+		jobID, attempt, maxTransientRetries, delay, errMsg)
+
+	time.AfterFunc(delay, func() {
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		if j, ok := q.jobs[jobID]; ok && j.Status == StatusPending {
+			q.pending = append([]string{jobID}, q.pending...)
+		}
+	})
+	return true
+}
+
+// AdjustProgress — retry चालू असताना worker चा "❌ ..." progress message user ला
+// दाखवू नये; त्याऐवजी "पुन्हा प्रयत्न होतोय" notice दाखवतो.
+func (q *Queue) AdjustProgress(jobID, msg string) string {
+	if !strings.HasPrefix(msg, "❌") {
+		return msg
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if job, ok := q.jobs[jobID]; ok && job.Status == StatusPending && job.retryNotice != "" {
+		return job.retryNotice
+	}
+	return msg
 }

@@ -115,6 +115,9 @@ func handleColabProgress(c *gin.Context) {
 	// [NEW] Telegram edit (खाली) फक्त ProgressMsgID>0 असेल तरच होतो — पण
 	// stage/percent text इथेच नेहमी साठवतो, जेणेकरून ProgressMsgID==0 असलेल्या
 	// jobs साठी (उदा. silent /predownload) सुद्धा कुणीतरी नंतर वाचू शकेल.
+	// Retry चालू असेल तर "❌ Download failed" ऐवजी retry notice दाखवा
+	req.Message = wmqueue.Default.AdjustProgress(req.JobID, req.Message)
+
 	if job.MsgID > 0 {
 		req.Message += fmt.Sprintf("\n📌 Msg: `%d`", job.MsgID)
 	}
@@ -203,6 +206,11 @@ func handleColabFailed(c *gin.Context) {
 	}
 	wmqueue.RecordPoll(workerID)
 
+	// Network timeout सारखी तात्पुरती failure → job failed न करता auto-retry
+	if wmqueue.Default.RetryIfTransient(req.JobID, req.Error) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "retrying": true})
+		return
+	}
 	wmqueue.Default.UpdateStatus(req.JobID, wmqueue.StatusFailed, req.Error)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
