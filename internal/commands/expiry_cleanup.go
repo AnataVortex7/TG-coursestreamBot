@@ -86,8 +86,6 @@ func runPendingDeletionWorker(client *gotgproto.Client, log *zap.Logger) {
 		return
 	}
 
-	gctx := client.CreateContext()
-
 	accessCache := map[primitive.ObjectID][]db.Access{} // प्रति run, user मागे एकच query
 	for _, p := range pending {
 		// Max attempts check — give up करतो
@@ -125,27 +123,19 @@ func runPendingDeletionWorker(client *gotgproto.Client, log *zap.Logger) {
 			continue // access अजून valid आहे — delete नको
 		}
 
-		// Delete attempt
-		err = gctx.DeleteMessages(p.ChatID, []int{p.MessageID})
-		if err != nil {
-			errStr := err.Error()
-			alreadyGone := strings.Contains(errStr, "MESSAGE_ID_INVALID") ||
-				strings.Contains(errStr, "message not found") ||
-				strings.Contains(errStr, "MESSAGE_DELETE_FORBIDDEN")
-
-			if alreadyGone {
-				// Already deleted — record काढा
-				_ = db.RemovePendingDeletion(p.ID)
-			} else {
-				_ = db.IncrementPendingDeletionAttempt(p.ID)
-				log.Warn("Pending deletion failed — will retry",
-					zap.Int64("chat_id", p.ChatID),
-					zap.Int("msg_id", p.MessageID),
-					zap.Int("attempt", p.Attempts+1),
-					zap.Error(err))
-			}
-		} else {
+		// Delete attempt — जुना message (48h+) असेल तर delete ऐवजी placeholder
+		// (same dummy video/PDF/photo + "renew करा" caption) ने बदलतो.
+		courseOf := map[int]primitive.ObjectID{p.MessageID: p.CourseID}
+		done, _, _, retry := deleteOrPlaceholder(client, p.ChatID, []int{p.MessageID}, courseOf, log)
+		if len(done) > 0 {
 			_ = db.RemovePendingDeletion(p.ID)
+			_ = db.DeleteSentLectureMsgsByIDs(p.UserID, done)
+		} else if len(retry) > 0 {
+			_ = db.IncrementPendingDeletionAttempt(p.ID)
+			log.Warn("Pending deletion failed — will retry",
+				zap.Int64("chat_id", p.ChatID),
+				zap.Int("msg_id", p.MessageID),
+				zap.Int("attempt", p.Attempts+1))
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -225,10 +215,12 @@ func ClearTrackedMsgs(client *gotgproto.Client, userID, courseID primitive.Objec
 
 	// दोन्ही collections मधून unique message IDs गोळा करा
 	idSet := map[int]bool{}
+	courseOf := map[int]primitive.ObjectID{} // message ID → course (placeholder caption/बटणासाठी)
 	if recs, e := db.GetSentLectureMsgsForUser(userID, courseID, botID); e == nil {
 		for _, r := range recs {
 			if r.ChatID == chatID {
 				idSet[r.MessageID] = true
+				courseOf[r.MessageID] = r.CourseID
 			}
 		}
 	}
@@ -236,6 +228,7 @@ func ClearTrackedMsgs(client *gotgproto.Client, userID, courseID primitive.Objec
 		for _, r := range recs {
 			if r.ChatID == chatID {
 				idSet[r.MessageID] = true
+				courseOf[r.MessageID] = r.CourseID
 			}
 		}
 	}
@@ -247,47 +240,21 @@ func ClearTrackedMsgs(client *gotgproto.Client, userID, courseID primitive.Objec
 		ids = append(ids, id)
 	}
 
-	gctx := client.CreateContext()
-	var doneIDs []int // chat मधून गेले किंवा कधीच delete होणार नाहीत → record काढायचे
+	var doneIDs []int // chat मधून गेले / placeholder झाले / कधीच जमणार नाहीत → record काढायचे
 
 	for i := 0; i < len(ids); i += 100 {
 		end := i + 100
 		if end > len(ids) {
 			end = len(ids)
 		}
-		chunk := ids[i:end]
-
-		ok := false
-		for attempt := 0; attempt < 3 && !ok; attempt++ {
-			dErr := gctx.DeleteMessages(chatID, chunk)
-			switch {
-			case dErr == nil:
-				deleted += len(chunk)
-				doneIDs = append(doneIDs, chunk...)
-				ok = true
-			case strings.Contains(dErr.Error(), "FLOOD_WAIT"):
-				secs, _ := parseFloodWait(dErr)
-				if log != nil {
-					log.Info("FloodWait on DeleteMessages — waiting", zap.Int("secs", secs))
-				}
-				time.Sleep(time.Duration(secs+2) * time.Second)
-			case isMsgGone(dErr):
-				// आधीच delete झाले / delete करता येणार नाहीत → retry निरुपयोगी, record काढा
-				if log != nil {
-					log.Warn("Messages undeletable/already gone — dropping records",
-						zap.Int("count", len(chunk)), zap.Error(dErr))
-				}
-				doneIDs = append(doneIDs, chunk...)
-				ok = true
-			default:
-				if log != nil {
-					log.Warn("DeleteMessages failed — will retry later", zap.Error(dErr))
-				}
-				attempt = 3 // इथेच थांबा, पुढच्या run ला retry
-			}
-		}
-		if !ok {
-			failed += len(chunk)
+		// आधी delete; 48h+ जुने असल्यामुळे delete न झालेले → dummy media + "renew करा" caption.
+		// placeholder ने बदललेले पण "काढले" म्हणून मोजतो (user ला notice जावा म्हणून).
+		d, del, rep, retry := deleteOrPlaceholder(client, chatID, ids[i:end], courseOf, log)
+		doneIDs = append(doneIDs, d...)
+		deleted += del + rep
+		failed += len(retry)
+		if log != nil && rep > 0 {
+			log.Info("Old messages replaced with placeholder", zap.Int("deleted", del), zap.Int("replaced", rep))
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
