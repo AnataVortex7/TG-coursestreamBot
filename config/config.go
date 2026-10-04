@@ -78,6 +78,12 @@ type config struct {
 	// Old machine madhe hya varची गरज नाही (default false → DB workers load होतात).
 	SkipDBWorkers bool `envconfig:"SKIP_DB_WORKERS" default:"false"`
 
+	// BulkMinCachedPercent — "संपूर्ण Folder/Course Download" फक्त तेव्हाच चालतो जेव्हा
+	// त्या user साठी किमान इतके % lectures आधीच LOG_CHANNEL मध्ये cache झालेले असतील.
+	// Cache असलेलेच forward होतात; नसलेले skip (watermark/process होत नाहीत) — main server वर load नको.
+	// 0 = गेट बंद (जुनं वर्तन, पण uncached सुद्धा process होतील). Single lecture वर परिणाम नाही.
+	BulkMinCachedPercent int `envconfig:"BULK_MIN_CACHED_PERCENT" default:"40"`
+
 	// SkipUserbot — true असेल तर या server वर userbot (DB चा TG session) start होणार नाही
 	// आणि /userbotdl jobs auto-resume होणार नाहीत.
 	// Old + New एकच DB वापरतात; एकच user session दोन ठिकाणी एकाच वेळी चालला तर

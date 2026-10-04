@@ -1214,7 +1214,28 @@ func alertAdminsUnwatermarkedDelivery(ctx *ext.Context, dbUser *db.User, course 
 	}
 }
 
+// bulkCachedSplit — msgIDs पैकी ज्यांची LOG_CHANNEL copy (DeliveredCache) आधीच आहे ते वेगळे करतो.
+// ok = cached% >= BULK_MIN_CACHED_PERCENT.
+func bulkCachedSplit(userID, courseID primitive.ObjectID, msgIDs []int) (cached []int, pct int, ok bool) {
+	for _, id := range msgIDs {
+		if c, err := db.GetDeliveredCache(userID, courseID, id); err == nil && c != nil && c.LogChannelMsgID != 0 {
+			cached = append(cached, id)
+		}
+	}
+	if len(msgIDs) > 0 {
+		pct = len(cached) * 100 / len(msgIDs)
+	}
+	min := config.ValueOf.BulkMinCachedPercent
+	ok = min <= 0 || (len(msgIDs) > 0 && len(cached)*100 >= min*len(msgIDs))
+	return
+}
+
 func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID primitive.ObjectID, messageID int, isBulk bool) error {
+	return handlePlayLectureOpt(ctx, u, chatID, courseID, messageID, isBulk, false)
+}
+
+// handlePlayLectureOpt — cachedOnly=true असेल तर cache नसलेला lecture process न करता error देतो.
+func handlePlayLectureOpt(ctx *ext.Context, u *ext.Update, chatID int64, courseID primitive.ObjectID, messageID int, isBulk, cachedOnly bool) error {
 	busyKey := fmt.Sprintf("%d:%d", chatID, messageID)
 	if !lockPlay(busyKey) {
 		if u.CallbackQuery != nil && !isBulk {
@@ -1286,7 +1307,7 @@ func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID p
 		}
 	}
 
-	delivered, dErr := deliverLectureCore(ctx, botClient, dbUser, course, courseID, messageID, chatID, progressMsgID, false, editProgress)
+	delivered, dErr := deliverLectureCoreOpt(ctx, botClient, dbUser, course, courseID, messageID, chatID, progressMsgID, false, editProgress, cachedOnly)
 	if dErr != nil {
 		if !isBulk {
 			editCatalogMessage(ctx, u, "❌ "+dErr.Error(), &tg.ReplyInlineMarkup{Rows: backRow})
@@ -1362,6 +1383,22 @@ func deliverLectureCore(
 	silent bool,
 	editProgress func(string),
 ) (delivered bool, err error) {
+	return deliverLectureCoreOpt(ctx, botClient, dbUser, course, courseID, messageID, targetChatID, progressMsgID, silent, editProgress, false)
+}
+
+func deliverLectureCoreOpt(
+	ctx *ext.Context,
+	botClient *gotgproto.Client,
+	dbUser *db.User,
+	course *db.Course,
+	courseID primitive.ObjectID,
+	messageID int,
+	targetChatID int64,
+	progressMsgID int,
+	silent bool,
+	editProgress func(string),
+	cachedOnly bool,
+) (delivered bool, err error) {
 	// ── Cache hit — आधीच watermark लावलेली copy LOG_CHANNEL मध्ये आहे ─────
 	if cached, cErr := db.GetDeliveredCache(dbUser.ID, courseID, messageID); cErr == nil && cached != nil && cached.LogChannelMsgID != 0 {
 		if silent {
@@ -1392,6 +1429,11 @@ func deliverLectureCore(
 	} else {
 		utils.Logger.Sugar().Infow("catalog: DeliveredCache miss — no cached entry for this user/lecture",
 			"userID", dbUser.ID.Hex(), "courseID", courseID.Hex(), "messageID", messageID)
+	}
+
+	if cachedOnly {
+		// Bulk download: cache नसेल तर process करत नाही (main server load टाळायला).
+		return false, fmt.Errorf("cache उपलब्ध नाही — bulk मध्ये skip")
 	}
 
 	channelPeer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, course.ChannelID)
@@ -1781,7 +1823,16 @@ func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, f
 	}
 
 	total := len(msgIDs)
-	editCatalogMessage(ctx, u, fmt.Sprintf("📥 Folder मधले %d lectures पाठवायला सुरुवात करत आहोत...\n(एकावेळी एक — थोडा वेळ लागू शकतो)", total),
+	cachedIDs, cachedPct, gateOK := bulkCachedSplit(dbUser.ID, courseID, msgIDs)
+	if !gateOK || len(cachedIDs) == 0 {
+		editCatalogMessage(ctx, u, fmt.Sprintf("⏳ हा folder अजून तयार नाही.\n\nतयार (cached): %d / %d (%d%%) — किमान %d%% हवे.\nथोड्या वेळाने पुन्हा प्रयत्न करा, किंवा lectures एकेक करून उघडा.",
+			len(cachedIDs), total, cachedPct, config.ValueOf.BulkMinCachedPercent),
+			&tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+	skippedFolder := total - len(cachedIDs)
+	msgIDs = cachedIDs
+	editCatalogMessage(ctx, u, fmt.Sprintf("📥 Folder मधले %d (एकूण %d पैकी तयार) lectures पाठवायला सुरुवात करत आहोत...\n(एकावेळी एक — थोडा वेळ लागू शकतो)", len(cachedIDs), total),
 		&tg.ReplyInlineMarkup{Rows: backRow})
 
 	go func() {
@@ -1798,7 +1849,7 @@ func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, f
 							failed++
 						}
 					}()
-					err := handlePlayLecture(ctx, u, chatID, courseID, msgID, true)
+					err := handlePlayLectureOpt(ctx, u, chatID, courseID, msgID, true, true)
 					if err != nil {
 						if waitSecs, isFlood := extractFloodWaitSeconds(err); isFlood {
 							utils.Logger.Sugar().Warnw("handlePlayFolder: FLOOD_WAIT hit, sleeping and retrying", "waitSecs", waitSecs)
@@ -1819,6 +1870,9 @@ func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, f
 		}
 
 		summaryText := fmt.Sprintf("✅ *Folder Download पूर्ण!*\n📦 एकूण: %d\n📤 पाठवले: %d", total, sent)
+		if skippedFolder > 0 {
+			summaryText += fmt.Sprintf("\n⏭ अजून तयार नाहीत (skip): %d — हे नंतर किंवा एकेक करून उघडा", skippedFolder)
+		}
 		if failed > 0 {
 			summaryText += fmt.Sprintf("\n❌ अयशस्वी: %d (यांच्यासाठी वेगळं try कर)", failed)
 		}
@@ -1908,13 +1962,40 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 		return
 	}
 
+	// ── Bulk gate: किमान BULK_MIN_CACHED_PERCENT% lectures cached असतील तरच; फक्त cached पाठवतो ──
+	allIDs := make([]int, 0, len(files))
+	for _, f := range files {
+		allIDs = append(allIDs, f.MessageID)
+	}
+	cachedList, cachedPctC, gateOKC := bulkCachedSplit(dbUser.ID, courseID, allIDs)
+	if !gateOKC || len(cachedList) == 0 {
+		editCatalogMessage(ctx, u, fmt.Sprintf("⏳ हा course अजून पूर्ण तयार नाही.\n\nतयार (cached): %d / %d (%d%%) — किमान %d%% हवे.\nथोड्या वेळाने पुन्हा प्रयत्न करा, किंवा lectures एकेक करून उघडा.",
+			len(cachedList), total, cachedPctC, config.ValueOf.BulkMinCachedPercent),
+			&tg.ReplyInlineMarkup{Rows: backRow})
+		return
+	}
+	cachedSet := make(map[int]bool, len(cachedList))
+	for _, id := range cachedList {
+		cachedSet[id] = true
+	}
+	for _, g := range groups {
+		kept := g.msgIDs[:0:0]
+		for _, id := range g.msgIDs {
+			if cachedSet[id] {
+				kept = append(kept, id)
+			}
+		}
+		g.msgIDs = kept
+	}
+	skippedCourse := total - len(cachedList)
+
 	// File lookup map बनवतो — MessageID वरून Title/FileName मिळवण्यासाठी
 	fileMap := make(map[int]db.CachedFile, len(files))
 	for _, f := range files {
 		fileMap[f.MessageID] = f
 	}
 
-	editCatalogMessage(ctx, u, fmt.Sprintf("📥 संपूर्ण course पाठवायला सुरुवात करत आहोत...\n📦 एकूण: %d फाईल्स, %d folders\n(एकावेळी एक — वेळ लागू शकतो)", total, len(groups)),
+	editCatalogMessage(ctx, u, fmt.Sprintf("📥 संपूर्ण course पाठवायला सुरुवात करत आहोत...\n📦 एकूण: %d फाईल्स (तयार: %d), %d folders\n(एकावेळी एक — वेळ लागू शकतो)", total, len(cachedList), len(groups)),
 		&tg.ReplyInlineMarkup{Rows: backRow})
 
 	go func() {
@@ -2000,7 +2081,7 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 								})
 							}
 						}()
-						err := handlePlayLecture(ctx, u, chatID, courseID, msgID, true)
+						err := handlePlayLectureOpt(ctx, u, chatID, courseID, msgID, true, true)
 						if err != nil {
 							if waitSecs, isFlood := extractFloodWaitSeconds(err); isFlood {
 								utils.Logger.Sugar().Warnw("handlePlayCourse: FLOOD_WAIT hit, sleeping and retrying", "waitSecs", waitSecs)
@@ -2037,6 +2118,9 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 		}
 
 		summaryText := fmt.Sprintf("✅ *Course Download पूर्ण!*\n📦 एकूण: %d\n📤 पाठवले: %d", total, sent)
+		if skippedCourse > 0 {
+			summaryText += fmt.Sprintf("\n⏭ अजून तयार नाहीत (skip): %d — हे नंतर किंवा एकेक करून उघडा", skippedCourse)
+		}
 		if failed > 0 {
 			summaryText += fmt.Sprintf("\n❌ अयशस्वी: %d", failed)
 		}
