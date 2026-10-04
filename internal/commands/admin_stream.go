@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -190,6 +191,7 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 		}
 	}()
 
+	resumeUserbotDLOnce.Do(func() { go ResumeUserbotDLJobs() })
 	d.AddHandler(handlers.NewCommand("adminstream", adminOnly(cmdAdminStream)))
 	d.AddHandler(handlers.NewCommand("userbotdl", cmdUserbotDL))
 	d.AddHandler(handlers.NewCommand("stopuserbotdl", cmdStopUserbotDL))
@@ -1374,21 +1376,61 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		}
 	}
 
+	p := &userbotDLParams{
+		SenderID:       senderID,
+		AdminChatID:    u.EffectiveChat().GetID(),
+		FirstName:      u.EffectiveUser().FirstName,
+		LastName:       u.EffectiveUser().LastName,
+		ChatIDRaw:      chatIDRaw,
+		ChatID:         chatID,
+		TopicID:        topicID,
+		StartMsg:       startMsg,
+		EndMsg:         endMsg,
+		SpecificMsgIDs: specificMsgIDs,
+	}
+	if err := runUserbotDL(p, nil); err != nil {
+		reply(ctx, u, err.Error())
+	}
+	return dispatcher.EndGroups
+}
+
+// userbotDLParams — /userbotdl चे parsed params (command आणि auto-resume दोन्हीसाठी).
+type userbotDLParams struct {
+	SenderID       int64
+	AdminChatID    int64
+	FirstName      string
+	LastName       string
+	ChatIDRaw      int64
+	ChatID         int64
+	TopicID        int
+	StartMsg       int
+	EndMsg         int
+	SpecificMsgIDs []int
+}
+
+// runUserbotDL — validation + background goroutine सुरू करतो. resumeJob != nil म्हणजे
+// restart नंतर auto-resume (NextIdx पासून). error परत आला तर काहीच सुरू झालेलं नाही.
+func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
+	senderID := p.SenderID
+	chatIDRaw, chatID, topicID := p.ChatIDRaw, p.ChatID, p.TopicID
+	startMsg, endMsg, specificMsgIDs := p.StartMsg, p.EndMsg, p.SpecificMsgIDs
+
 	userbotClient, err := GetUserbotClientForUser(senderID)
 	if err != nil || userbotClient == nil {
-		reply(ctx, u, "❌ Userbot Client ready नाही. आधी 🔑 Connect Userbot Account वरून Login करा.")
-		return dispatcher.EndGroups
+		return errors.New("❌ Userbot Client ready नाही. आधी 🔑 Connect Userbot Account वरून Login करा.")
 	}
 
 	botClient := MainBotClient
 	if botClient == nil {
-		reply(ctx, u, "❌ Bot client चालू नाही.")
-		return dispatcher.EndGroups
+		return errors.New("❌ Bot client चालू नाही.")
 	}
+
+	// ctx — command update शिवाय (restart auto-resume मध्ये u नसतो) bot client वरून
+	ctx := botClient.CreateContext()
 
 	// आधी एखादा process चालू असेल तर warn करा
 
-	adminChatID := u.EffectiveChat().GetID()
+	adminChatID := p.AdminChatID
 	botPeer := botClient.PeerStorage.GetInputPeerById(adminChatID)
 
 	sourcePeerForSend := getChannelPeerIfBotAdmin(ctx, botClient, chatID)
@@ -1421,7 +1463,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		}
 		if peer != nil {
 			userbotLogGroupPeer = peer
-			tID, err := getUserbotLogTopic(ctx, botClient, senderID, u.EffectiveUser().FirstName, u.EffectiveUser().LastName, logGroupID, peer)
+			tID, err := getUserbotLogTopic(ctx, botClient, senderID, p.FirstName, p.LastName, logGroupID, peer)
 			if err == nil {
 				userbotTopicID = tID
 			}
@@ -1458,14 +1500,34 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		watermarkStr = fmt.Sprintf("\n💧 Watermark: `%s`", wmText)
 	}
 
-	sentMsg, _ := ctx.Reply(u, ext.ReplyTextString(fmt.Sprintf(
+	startText := fmt.Sprintf(
 		"⏳ Starting...\n📡 Channel: `%d`\n📋 %s%s%s%s\n\n🛑 Stop: /stopuserbotdl",
 		chatIDRaw, rangeStr, topicStr, channelStr, watermarkStr,
-	)), nil)
+	)
+	if resumeJob != nil {
+		startText = fmt.Sprintf("🔄 *Auto-resume* (server restart नंतर) — %d/%d पासून पुढे\n\n", resumeJob.NextIdx+1, totalMsgs) + startText
+	}
+	sentMsgID := int(wmqueue.SendTgMessage(os.Getenv("BOT_TOKEN"), adminChatID, startText))
 
-	sentMsgID := 0
-	if sentMsg != nil {
-		sentMsgID = sentMsg.ID
+	// ── Job checkpoint (restart वर auto-resume साठी) ─────────────────────────
+	var jobID primitive.ObjectID
+	startIdx, initSuccess, initSkip, initErr := 0, 0, 0, 0
+	if resumeJob != nil {
+		jobID = resumeJob.ID
+		startIdx, initSuccess, initSkip, initErr = resumeJob.NextIdx, resumeJob.Success, resumeJob.Skip, resumeJob.Errors
+		db.IncUserbotDLJobResumes(jobID)
+	} else {
+		id, jErr := db.CreateUserbotDLJob(&db.UserbotDLJob{
+			SenderID: senderID, AdminChatID: adminChatID,
+			FirstName: p.FirstName, LastName: p.LastName,
+			ChatIDRaw: chatIDRaw, ChatID: chatID, TopicID: topicID,
+			StartMsg: startMsg, EndMsg: endMsg, SpecificMsgIDs: specificMsgIDs,
+		})
+		if jErr != nil {
+			utils.Logger.Warn("userbotdl job save failed — auto-resume चालणार नाही", zap.Error(jErr))
+		} else {
+			jobID = id
+		}
 	}
 
 	// ── Goroutine: process all messages ──────────────────────────────────────
@@ -1499,8 +1561,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			editMu.Unlock()
 			if currentMsgID != 0 {
 				botToken := os.Getenv("BOT_TOKEN")
-				wmqueue.DeleteTgMessage(botToken, u.EffectiveChat().GetID(), int64(currentMsgID))
-				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+				wmqueue.DeleteTgMessage(botToken, adminChatID, int64(currentMsgID))
+				newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
 				if newID != 0 {
 					editMu.Lock()
 					sentMsgID = int(newID)
@@ -1530,7 +1592,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 			go func(msgID int) {
 				if needsNewMsg {
-					newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+					newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
 					if newID != 0 {
 						editMu.Lock()
 						sentMsgID = int(newID)
@@ -1546,7 +1608,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				success := wmqueue.EditTgMessage(botToken, adminChatID, msgID, text)
 				if !success {
 					// Edit failed (possibly FloodWait), delete and send new
-					newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+					newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
 					if newID != 0 {
 						editMu.Lock()
 						sentMsgID = int(newID)
@@ -1575,9 +1637,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			})
 		}
 
-		successCount := 0
-		skipCount := 0
-		errorCount := 0
+		successCount := initSuccess
+		skipCount := initSkip
+		errorCount := initErr
 		stopped := false
 
 		summaryMsgID := 0
@@ -1639,7 +1701,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			summaryEditMu.Lock()
 			if summaryMsgID == 0 {
 				summaryEditMu.Unlock()
-				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+				newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
 				if newID != 0 {
 					summaryEditMu.Lock()
 					summaryMsgID = int(newID)
@@ -1661,7 +1723,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			summaryEditMu.Unlock()
 
 			if needsNewMsg {
-				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+				newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
 				if newID != 0 {
 					summaryEditMu.Lock()
 					summaryMsgID = int(newID)
@@ -1675,7 +1737,7 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 			success := wmqueue.EditTgMessage(botToken, adminChatID, currentSummaryID, text)
 			if !success {
-				newID := wmqueue.SendTgMessage(botToken, u.EffectiveChat().GetID(), text)
+				newID := wmqueue.SendTgMessage(botToken, adminChatID, text)
 				if newID != 0 {
 					summaryEditMu.Lock()
 					summaryMsgID = int(newID)
@@ -1766,7 +1828,16 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 			}
 		}
 
-		for msgIdx, msgID := range msgIDList {
+		// user ने /stopuserbotdl केला तर job "stopped" (restart वर resume नाही).
+		// Server restart/crash मध्ये process मरतो — status "running" राहतो → resume.
+		defer func() {
+			if stopped {
+				db.SetUserbotDLJobStatus(jobID, db.UserbotDLStopped)
+			}
+		}()
+
+		for msgIdx := startIdx; msgIdx < len(msgIDList); msgIdx++ {
+			msgID := msgIDList[msgIdx]
 
 			// Stop check
 			if bgCtx.Err() != nil {
@@ -1775,6 +1846,9 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 				updateSummary()
 				return
 			}
+
+			// Checkpoint: msgIDList[:msgIdx] पूर्ण झाले (success/error दोन्ही)
+			db.CheckpointUserbotDLJob(jobID, msgIdx, successCount, skipCount, errorCount)
 
 			currentIdx := msgIdx + 1
 			currentProcessingMsgID = msgID
@@ -1887,9 +1961,71 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 
 		deleteProgress()
 		updateSummary()
+		db.CheckpointUserbotDLJob(jobID, len(msgIDList), successCount, skipCount, errorCount)
+		db.SetUserbotDLJobStatus(jobID, db.UserbotDLDone)
 	}()
 
-	return dispatcher.EndGroups
+	return nil
+}
+
+// ── Auto-resume (server restart नंतर) ─────────────────────────────────────────
+
+var resumeUserbotDLOnce sync.Once
+
+// ResumeUserbotDLJobs — startup वर अर्धवट राहिलेले /userbotdl jobs आपोआप
+// शेवटच्या checkpoint पासून पुढे सुरू करतो. Human interaction लागत नाही.
+func ResumeUserbotDLJobs() {
+	deadline := time.Now().Add(15 * time.Minute)
+	for MainBotClient == nil || db.Database == nil {
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(3 * time.Second)
+	}
+	time.Sleep(20 * time.Second) // bot/userbot connections आणि peer storage settle होऊ द्या
+
+	jobs, err := db.ListRunningUserbotDLJobs()
+	if err != nil {
+		utils.Logger.Warn("userbotdl resume: jobs वाचता आले नाहीत", zap.Error(err))
+		return
+	}
+	// त्याच sender+chat चे अनेक असतील तर फक्त सर्वात नवीन
+	newest := map[string]int{}
+	for i, j := range jobs {
+		newest[fmt.Sprintf("%d:%d", j.SenderID, j.ChatID)] = i
+	}
+	for i := range jobs {
+		j := jobs[i]
+		if newest[fmt.Sprintf("%d:%d", j.SenderID, j.ChatID)] != i {
+			db.SetUserbotDLJobStatus(j.ID, db.UserbotDLSuperseded)
+			continue
+		}
+		utils.Logger.Info("userbotdl auto-resume", zap.String("job", j.ID.Hex()), zap.Int("next_idx", j.NextIdx))
+		go resumeUserbotDLJob(j)
+		time.Sleep(5 * time.Second)
+	}
+}
+
+func resumeUserbotDLJob(j db.UserbotDLJob) {
+	p := &userbotDLParams{
+		SenderID: j.SenderID, AdminChatID: j.AdminChatID,
+		FirstName: j.FirstName, LastName: j.LastName,
+		ChatIDRaw: j.ChatIDRaw, ChatID: j.ChatID, TopicID: j.TopicID,
+		StartMsg: j.StartMsg, EndMsg: j.EndMsg, SpecificMsgIDs: j.SpecificMsgIDs,
+	}
+	const maxTries = 30 // userbot session/peers तयार होईपर्यंत ~15 मिनिटं प्रयत्न
+	var lastErr error
+	for try := 1; try <= maxTries; try++ {
+		if lastErr = runUserbotDL(p, &j); lastErr == nil {
+			return
+		}
+		utils.Logger.Warn("userbotdl resume attempt failed",
+			zap.String("job", j.ID.Hex()), zap.Int("try", try), zap.Error(lastErr))
+		time.Sleep(30 * time.Second)
+	}
+	db.SetUserbotDLJobStatus(j.ID, db.UserbotDLFailed)
+	wmqueue.SendTgMessage(os.Getenv("BOT_TOKEN"), j.AdminChatID,
+		"❌ Auto-resume अयशस्वी: "+lastErr.Error()+"\nपुन्हा सुरू करा: /userbotdl")
 }
 
 // ── extractFloodWaitSeconds ────────────────────────────────────────────────────
