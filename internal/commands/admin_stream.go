@@ -1975,6 +1975,9 @@ var resumeUserbotDLOnce sync.Once
 // ResumeUserbotDLJobs — startup वर अर्धवट राहिलेले /userbotdl jobs आपोआप
 // शेवटच्या checkpoint पासून पुढे सुरू करतो. Human interaction लागत नाही.
 func ResumeUserbotDLJobs() {
+	if config.ValueOf.SkipUserbot {
+		return // userbot या machine वर बंद — jobs old machine चे
+	}
 	deadline := time.Now().Add(15 * time.Minute)
 	for MainBotClient == nil || db.Database == nil {
 		if time.Now().After(deadline) {

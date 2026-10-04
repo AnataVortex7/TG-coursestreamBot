@@ -77,6 +77,12 @@ type config struct {
 	// New machine साठी — old machine च्या workers शी conflict टाळायला.
 	// Old machine madhe hya varची गरज नाही (default false → DB workers load होतात).
 	SkipDBWorkers bool `envconfig:"SKIP_DB_WORKERS" default:"false"`
+
+	// SkipUserbot — true असेल तर या server वर userbot (DB चा TG session) start होणार नाही
+	// आणि /userbotdl jobs auto-resume होणार नाहीत.
+	// Old + New एकच DB वापरतात; एकच user session दोन ठिकाणी एकाच वेळी चालला तर
+	// Telegram AUTH_KEY_DUPLICATED देऊन session मारतो. New machine वर true ठेवा.
+	SkipUserbot bool `envconfig:"SKIP_USERBOT" default:"false"`
 }
 
 var botTokenRegex = regexp.MustCompile(`MULTI\_TOKEN\d+=(.*)`)

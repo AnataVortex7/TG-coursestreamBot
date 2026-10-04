@@ -400,6 +400,10 @@ func (u *UserBotStruct) Stop() {
 
 func StartUserBotFromDB(l *zap.Logger) {
 	log := l.Named("USERBOT")
+	if config.ValueOf.SkipUserbot {
+		log.Info("SKIP_USERBOT=true — userbot start करत नाही (session दुसऱ्या machine वर चालतो)")
+		return
+	}
 	sessionStr, err := db.GetUserBotSession()
 	if err != nil {
 		log.Error("DB session check failed", zap.Error(err))
