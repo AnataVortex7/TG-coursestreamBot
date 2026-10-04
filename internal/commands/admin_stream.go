@@ -183,6 +183,13 @@ func (m *command) LoadAdminStream(d dispatcher.Dispatcher) {
 	log := m.log.Named("admin_stream")
 	defer log.Sugar().Info("Loaded /adminstream /userbotdl /stopuserbotdl /copychannel /setreplace /listreplace /delreplace /clearreplace /setsendchannel /showsendchannel /clearsendchannel /setthumbnail /clearthumbnail /showthumbnail /setwatermark /clearwatermark /showwatermark commands")
 
+	cleanupStaleColabTemp()
+	go func() {
+		for range time.Tick(30 * time.Minute) {
+			cleanupStaleColabTemp()
+		}
+	}()
+
 	d.AddHandler(handlers.NewCommand("adminstream", adminOnly(cmdAdminStream)))
 	d.AddHandler(handlers.NewCommand("userbotdl", cmdUserbotDL))
 	d.AddHandler(handlers.NewCommand("stopuserbotdl", cmdStopUserbotDL))
@@ -1486,7 +1493,8 @@ func cmdUserbotDL(ctx *ext.Context, u *ext.Update) error {
 		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
 		
 		if isFinalMsg {
-			editMu.Lock()
+			// [FIX] editMu वर वरच Lock() आहे — इथे परत Lock() केल्याने self-deadlock होऊन
+			// पुढचे सगळे editProgress (download progress callbacks सह) कायमचे अडकायचे.
 			currentMsgID := sentMsgID
 			editMu.Unlock()
 			if currentMsgID != 0 {
@@ -2658,7 +2666,8 @@ func cmdCopyChannel(ctx *ext.Context, u *ext.Update) error {
 		isFinalMsg := strings.HasPrefix(text, "❌") || strings.HasPrefix(text, "✅")
 		
 		if isFinalMsg {
-			editMu.Lock()
+			// [FIX] editMu वर वरच Lock() आहे — इथे परत Lock() केल्याने self-deadlock होऊन
+			// पुढचे सगळे editProgress (download progress callbacks सह) कायमचे अडकायचे.
 			currentMsgID := sentMsgID
 			editMu.Unlock()
 			if currentMsgID != 0 {
@@ -3899,13 +3908,59 @@ func downloadWatermarkAndReupload(
 		tmpPath := tmpFile.Name()
 		defer os.Remove(tmpPath)
 
-		var dlWriter io.WriterAt = tmpFile
-		if onDownloadProgress != nil {
-			dlWriter = &progressWriter{w: tmpFile, total: file.FileSize, onProgress: onDownloadProgress}
-		}
+		// [FIX] एकच chunk RPC hang झाला (DC reconnect / network drop) तर download 93% वर
+		// 30 मिनिटं अडकायचा. आता: 90 सेकंद एकही byte आला नाही तर तो attempt cancel करून
+		// पुन्हा सुरू (जास्तीत जास्त 4 attempts). Stop (/stopuserbotdl) लगेच चालतो.
+		const (
+			maxDlAttempts = 4
+			dlStallLimit  = 90 * time.Second
+		)
+		for attempt := 1; attempt <= maxDlAttempts; attempt++ {
+			if dlCtx.Err() != nil {
+				err = dlCtx.Err()
+				break
+			}
+			_ = tmpFile.Truncate(0)
+			var beat atomic.Int64
+			beat.Store(time.Now().UnixNano())
+			attemptCtx, attemptCancel := context.WithCancel(dlCtx)
+			watchDone := make(chan struct{})
+			go func() {
+				tk := time.NewTicker(10 * time.Second)
+				defer tk.Stop()
+				for {
+					select {
+					case <-watchDone:
+						return
+					case <-tk.C:
+						if time.Since(time.Unix(0, beat.Load())) > dlStallLimit {
+							attemptCancel()
+							return
+						}
+					}
+				}
+			}()
 
-		d := downloader.NewDownloader()
-		_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(dlCtx, dlWriter)
+			var dlWriter io.WriterAt = &beatWriterAt{w: tmpFile, beat: &beat}
+			if onDownloadProgress != nil {
+				dlWriter = &progressWriter{w: dlWriter, total: file.FileSize, onProgress: onDownloadProgress}
+			}
+			d := downloader.NewDownloader()
+			_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(attemptCtx, dlWriter)
+			close(watchDone)
+			stalled := attemptCtx.Err() != nil && dlCtx.Err() == nil
+			attemptCancel()
+			if err == nil {
+				break
+			}
+			if dlCtx.Err() != nil || attempt == maxDlAttempts {
+				break
+			}
+			utils.Logger.Warn("pre-download failed — retrying",
+				zap.Int("attempt", attempt), zap.Bool("stalled", stalled),
+				zap.String("file", file.FileName), zap.Error(err))
+			time.Sleep(3 * time.Second)
+		}
 		tmpFile.Close()
 		if err != nil {
 			return nil, false, fmt.Errorf("pre-download failed: %w", err)
@@ -4376,6 +4431,31 @@ func (p *progressWriter) Read(b []byte) (int, error) {
 	return n, err
 }
 
+// beatWriterAt — प्रत्येक WriteAt ला "heartbeat" नोंदवतो (download stall detection साठी).
+type beatWriterAt struct {
+	w    io.WriterAt
+	beat *atomic.Int64
+}
+
+func (b *beatWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	n, err := b.w.WriteAt(p, off)
+	if n > 0 {
+		b.beat.Store(time.Now().UnixNano())
+	}
+	return n, err
+}
+
+// cleanupStaleColabTemp — crash/restart मुळे मागे राहिलेल्या colab-pre-*.tmp फाईल्स काढतो
+// (नाहीतर Koyeb/HF वर disk/RAM हळूहळू भरतं).
+func cleanupStaleColabTemp() {
+	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "colab-pre-*.tmp"))
+	for _, m := range matches {
+		if fi, err := os.Stat(m); err == nil && time.Since(fi.ModTime()) > 10*time.Minute {
+			_ = os.Remove(m)
+		}
+	}
+}
+
 // ── progressBar ──────────────────────────────────────────────────────────────
 
 func progressBar(pct int) string {
@@ -4573,4 +4653,3 @@ func (p *uploadProgressAdapter) Chunk(ctx context.Context, state uploader.Progre
 	}
 	return nil
 }
-
