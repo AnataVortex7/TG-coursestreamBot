@@ -179,7 +179,9 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 	// Telegram ला लगेच answer करतो — कारण जर पुढे काही error/panic आलं आणि
 	// answer कधीच गेलं नाही, तर client वर button "stuck" (काहीच रिस्पॉन्स
 	// नाही) असं दिसतं आणि पुढचे taps पण ignore होऊ शकतात. आधी answer, मग काम.
-	if u.CallbackQuery != nil {
+	isBulkCb := u.CallbackQuery != nil && (strings.HasPrefix(string(u.CallbackQuery.Data), "wc:dlfolder:") ||
+		strings.HasPrefix(string(u.CallbackQuery.Data), "wc:dlcourse:"))
+	if u.CallbackQuery != nil && !isBulkCb {
 		_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{QueryID: u.CallbackQuery.QueryID})
 	}
 
@@ -199,6 +201,27 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		return dispatcher.EndGroups
 	}
 	chatID := u.EffectiveUser().GetID()
+
+	if isBulkCb {
+		// Bulk download बटण: user ला लगेच खात्री (toast) — आणि आधीच सुरू असेल तर दुसरा tap रोखतो.
+		running := false
+		if len(parts) >= 2 {
+			if cid, e := primitive.ObjectIDFromHex(parts[1]); e == nil && bulkRunning(chatID, cid) {
+				running = true
+			}
+		}
+		if running {
+			_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{
+				QueryID: u.CallbackQuery.QueryID, Alert: true,
+				Message: "⏳ Download आधीच सुरू आहे!\nपुन्हा दाबू नका — सगळे lectures एकामागून एक येतील.",
+			})
+			return dispatcher.EndGroups
+		}
+		_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{
+			QueryID: u.CallbackQuery.QueryID,
+			Message: "✅ Download सुरू केला — lectures एकामागून एक येतील",
+		})
+	}
 
 	switch parts[0] {
 	case "noop":
@@ -1180,6 +1203,36 @@ func lockPlay(key string) bool {
 	return true
 }
 
+// ── Bulk (folder/course) download — एका user + course साठी एकावेळी एकच ──────────
+var (
+	bulkMu   sync.Mutex
+	bulkBusy = map[string]bool{}
+)
+
+func bulkKey(chatID int64, courseID primitive.ObjectID) string {
+	return fmt.Sprintf("%d:%s", chatID, courseID.Hex())
+}
+func bulkRunning(chatID int64, courseID primitive.ObjectID) bool {
+	bulkMu.Lock()
+	defer bulkMu.Unlock()
+	return bulkBusy[bulkKey(chatID, courseID)]
+}
+func lockBulk(chatID int64, courseID primitive.ObjectID) bool {
+	bulkMu.Lock()
+	defer bulkMu.Unlock()
+	k := bulkKey(chatID, courseID)
+	if bulkBusy[k] {
+		return false
+	}
+	bulkBusy[k] = true
+	return true
+}
+func unlockBulk(chatID int64, courseID primitive.ObjectID) {
+	bulkMu.Lock()
+	defer bulkMu.Unlock()
+	delete(bulkBusy, bulkKey(chatID, courseID))
+}
+
 func unlockPlay(key string) {
 	playMu.Lock()
 	defer playMu.Unlock()
@@ -1765,6 +1818,15 @@ func deliverLectureCoreOpt(
 // User ने delete केलं तरी परत request केल्यावर fast येतं (हेच handlePlayLecture
 // च्या cache-hit मार्गामुळे) — त्यामुळे इथेही तेच आपोआप लागू होतं.
 func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, folderID primitive.ObjectID) {
+	if !lockBulk(chatID, courseID) {
+		return // आधीच सुरू — दुसरा tap ignore
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			unlockBulk(chatID, courseID)
+		}
+	}()
 	dbUser, err := db.GetUserByTelegramID(chatID)
 	if err != nil || dbUser == nil {
 		editCatalogMessage(ctx, u, "❌ तुमचा Telegram account link केलेला नाही.\n\n`/register <mobile_or_email>` वापरा.",
@@ -1835,7 +1897,9 @@ func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, f
 	editCatalogMessage(ctx, u, fmt.Sprintf("📥 Folder मधले %d (एकूण %d पैकी तयार) lectures पाठवायला सुरुवात करत आहोत...\n(एकावेळी एक — थोडा वेळ लागू शकतो)", len(cachedIDs), total),
 		&tg.ReplyInlineMarkup{Rows: backRow})
 
+	handedOff = true
 	go func() {
+		defer unlockBulk(chatID, courseID)
 		sent, failed := 0, 0
 		for i, msgID := range msgIDs {
 			retry := true
@@ -1862,6 +1926,10 @@ func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, f
 						sent++
 					}
 				}()
+			}
+			if (i+1)%5 == 0 && i < len(msgIDs)-1 {
+				editCatalogMessage(ctx, u, fmt.Sprintf("📥 पाठवत आहोत... %d / %d पूर्ण\n(पुन्हा दाबू नका)", i+1, len(msgIDs)),
+					&tg.ReplyInlineMarkup{Rows: backRow})
 			}
 			// Rate-limit टाळायला lectures मध्ये छोटा delay.
 			if i < len(msgIDs)-1 {
@@ -1894,6 +1962,15 @@ func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, f
 // मिळतात). शेवटी Ungrouped files (कुठल्याही folder मध्ये नसलेले) असतील तर
 // तेही "📄 Ungrouped" नावाखाली त्याच पद्धतीने पाठवतो.
 func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID primitive.ObjectID) {
+	if !lockBulk(chatID, courseID) {
+		return // आधीच सुरू — दुसरा tap ignore
+	}
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			unlockBulk(chatID, courseID)
+		}
+	}()
 	dbUser, err := db.GetUserByTelegramID(chatID)
 	if err != nil || dbUser == nil {
 		editCatalogMessage(ctx, u, "❌ तुमचा Telegram account link केलेला नाही.\n\n`/register <mobile_or_email>` वापरा.",
@@ -1998,9 +2075,12 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 	editCatalogMessage(ctx, u, fmt.Sprintf("📥 संपूर्ण course पाठवायला सुरुवात करत आहोत...\n📦 एकूण: %d फाईल्स (तयार: %d), %d folders\n(एकावेळी एक — वेळ लागू शकतो)", total, len(cachedList), len(groups)),
 		&tg.ReplyInlineMarkup{Rows: backRow})
 
+	handedOff = true
 	go func() {
+		defer unlockBulk(chatID, courseID)
 		toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
 		sent, failed := 0, 0
+		doneCount, totalToSend := 0, len(cachedList)
 		first := true
 
 		type failedCourseItem struct {
@@ -2110,6 +2190,11 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 							sent++
 						}
 					}()
+				}
+				doneCount++
+				if doneCount%5 == 0 && doneCount < totalToSend {
+					editCatalogMessage(ctx, u, fmt.Sprintf("📥 पाठवत आहोत... %d / %d पूर्ण\n(पुन्हा दाबू नका)", doneCount, totalToSend),
+						&tg.ReplyInlineMarkup{Rows: backRow})
 				}
 				if i < len(g.msgIDs)-1 {
 					time.Sleep(3 * time.Second)
