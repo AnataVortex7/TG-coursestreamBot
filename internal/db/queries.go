@@ -1286,7 +1286,7 @@ func GetUserByTelegramID(telegramID int64) (*User, error) {
 	defer cancel()
 
 	var u User
-	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&u)
+	err := ColUsers.FindOne(ctx, bson.M{"tg_uid": telegramID}).Decode(&u)
 	if err != nil {
 		if errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, nil
@@ -1335,7 +1335,7 @@ func SetUserTelegramID(userID primitive.ObjectID, telegramID int64) error {
 	}
 
 	var existing User
-	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&existing)
+	err := ColUsers.FindOne(ctx, bson.M{"tg_uid": telegramID}).Decode(&existing)
 	if err == nil && existing.ID != userID {
 		return ErrTelegramIDInUse
 	}
@@ -1345,7 +1345,7 @@ func SetUserTelegramID(userID primitive.ObjectID, telegramID int64) error {
 
 	_, err = ColUsers.UpdateOne(ctx,
 		bson.M{"_id": userID},
-		bson.M{"$set": bson.M{"telegram_id": telegramID}},
+		bson.M{"$set": bson.M{"tg_uid": telegramID, "telegram_id": FakeTGIDFor(userID)}}, // old bot ला user दिसू नये
 	)
 	return err
 }
@@ -1357,8 +1357,8 @@ func UnlinkUserTelegramID(userID primitive.ObjectID) error {
 	defer cancel()
 
 	res, err := ColUsers.UpdateOne(ctx,
-		bson.M{"_id": userID, "telegram_id": bson.M{"$ne": 0}},
-		bson.M{"$set": bson.M{"telegram_id": 0}},
+		bson.M{"_id": userID, "tg_uid": bson.M{"$ne": 0}},
+		bson.M{"$set": bson.M{"tg_uid": 0, "telegram_id": 0}},
 	)
 	if err != nil {
 		return err
@@ -1449,7 +1449,7 @@ func GetAllLinkedUsers() ([]User, error) {
 	defer cancel()
 
 	cursor, err := ColUsers.Find(ctx, bson.M{
-		"telegram_id": bson.M{"$gt": 0},
+		"tg_uid": bson.M{"$gt": 0},
 		"is_active":   true,
 	})
 	if err != nil {
@@ -1725,7 +1725,7 @@ func MarkAllUserMessagesRead(userID primitive.ObjectID) error {
 func SetUserWatermark(telegramID int64, watermark string) error {
 	ctx, cancel := Ctx()
 	defer cancel()
-	_, err := ColUsers.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, bson.M{"$set": bson.M{"watermark": watermark}})
+	_, err := ColUsers.UpdateOne(ctx, bson.M{"tg_uid": telegramID}, bson.M{"$set": bson.M{"watermark": watermark}})
 	return err
 }
 
@@ -1735,7 +1735,7 @@ func GetUserWatermark(telegramID int64) (string, error) {
 	var doc struct {
 		Watermark string `bson:"watermark"`
 	}
-	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&doc)
+	err := ColUsers.FindOne(ctx, bson.M{"tg_uid": telegramID}).Decode(&doc)
 	if err != nil {
 		return "", err
 	}
@@ -1745,7 +1745,7 @@ func GetUserWatermark(telegramID int64) (string, error) {
 func SetUserSendChannel(telegramID int64, channelID int64) error {
 	ctx, cancel := Ctx()
 	defer cancel()
-	_, err := ColUsers.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, bson.M{"$set": bson.M{"send_channel_id": channelID}})
+	_, err := ColUsers.UpdateOne(ctx, bson.M{"tg_uid": telegramID}, bson.M{"$set": bson.M{"send_channel_id": channelID}})
 	return err
 }
 
@@ -1755,7 +1755,7 @@ func GetUserSendChannel(telegramID int64) (int64, error) {
 	var doc struct {
 		SendChannelID int64 `bson:"send_channel_id"`
 	}
-	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&doc)
+	err := ColUsers.FindOne(ctx, bson.M{"tg_uid": telegramID}).Decode(&doc)
 	if err != nil {
 		return 0, err
 	}
@@ -1769,14 +1769,15 @@ func SetUserbotAccess(telegramID int64, allowed bool) error {
 	update := bson.M{
 		"$set": bson.M{
 			"userbot_access": allowed,
-			"telegram_id":    telegramID,
+			"tg_uid":      telegramID,
+			"telegram_id":  telegramID, // userbot/admin docs: old var pan real
 		},
 		"$setOnInsert": bson.M{
 			"is_active":  true,
 			"created_at": time.Now(),
 		},
 	}
-	_, err := ColUsers.UpdateOne(ctx, bson.M{"telegram_id": telegramID}, update, opts)
+	_, err := ColUsers.UpdateOne(ctx, bson.M{"tg_uid": telegramID}, update, opts)
 	return err
 }
 
@@ -1789,7 +1790,7 @@ func HasUserbotAccess(telegramID int64) bool {
 	var doc struct {
 		UserbotAccess bool `bson:"userbot_access"`
 	}
-	err := ColUsers.FindOne(ctx, bson.M{"telegram_id": telegramID}).Decode(&doc)
+	err := ColUsers.FindOne(ctx, bson.M{"tg_uid": telegramID}).Decode(&doc)
 	if err != nil {
 		return false
 	}

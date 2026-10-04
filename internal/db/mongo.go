@@ -50,7 +50,7 @@ type User struct {
 	Mobile        string             `bson:"mobile,omitempty"      json:"mobile"` // e.g. "9876543210" (digits only, optional)
 	Email         string             `bson:"email,omitempty"       json:"email"`  // optional
 	PasswordHash  string             `bson:"password_hash"       json:"-"`
-	TelegramID    int64              `bson:"telegram_id"         json:"telegram_id"` // linked Telegram user ID (0 = not linked)
+	TelegramID    int64              `bson:"tg_uid"          json:"telegram_id"` // linked Telegram user ID (0 = not linked)
 	CreatedAt     time.Time          `bson:"created_at"          json:"created_at"`
 	IsActive      bool               `bson:"is_active"           json:"is_active"`
 	IsSpecialUser bool               `bson:"is_special_user"     json:"is_special_user"` // admin ne ON kelyavar - not-buyed courses cha content list disto (play nahi, fakt baghane)
@@ -372,10 +372,9 @@ func createIndexes() {
 	// tyamule multiple telegram_id:0 wale docs var duplicate-key error yeईल).
 	// म्हणून PARTIAL unique index — फक्त telegram_id > 0 असलेल्या docs वरच unique लागू होतो.
 	// जुना (non-unique) index असेल तर आधी drop करतो.
-	_, _ = ColUsers.Indexes().DropOne(ctx, "telegram_id_1")
 	ensurePartialUniqueIndex(ctx, ColUsers,
-		bson.D{{Key: "telegram_id", Value: 1}},
-		bson.M{"telegram_id": bson.M{"$gt": 0}},
+		bson.D{{Key: "tg_uid", Value: 1}},
+		bson.M{"tg_uid": bson.M{"$gt": 0}},
 	)
 
 	// tg_login_tokens: unique token + TTL (10 min expiry) — Telegram deep-link OTP login
