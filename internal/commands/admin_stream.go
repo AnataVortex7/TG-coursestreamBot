@@ -3941,9 +3941,11 @@ func downloadWatermarkAndReupload(
 				}
 			}()
 
-			var dlWriter io.WriterAt = &beatWriterAt{w: tmpFile, beat: &beat}
+			bw := &beatWriterAt{w: tmpFile, beat: &beat}
+			var dlWriter io.WriterAt = bw
 			if onDownloadProgress != nil {
-				dlWriter = &progressWriter{w: dlWriter, total: file.FileSize, onProgress: onDownloadProgress}
+				// progressWriter.w चा type io.Writer आहे → bw (Write + WriteAt दोन्ही आहेत) द्या
+				dlWriter = &progressWriter{w: bw, total: file.FileSize, onProgress: onDownloadProgress}
 			}
 			d := downloader.NewDownloader()
 			_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(attemptCtx, dlWriter)
@@ -4433,8 +4435,16 @@ func (p *progressWriter) Read(b []byte) (int, error) {
 
 // beatWriterAt — प्रत्येक WriteAt ला "heartbeat" नोंदवतो (download stall detection साठी).
 type beatWriterAt struct {
-	w    io.WriterAt
+	w    *os.File
 	beat *atomic.Int64
+}
+
+func (b *beatWriterAt) Write(p []byte) (int, error) {
+	n, err := b.w.Write(p)
+	if n > 0 {
+		b.beat.Store(time.Now().UnixNano())
+	}
+	return n, err
 }
 
 func (b *beatWriterAt) WriteAt(p []byte, off int64) (int, error) {
