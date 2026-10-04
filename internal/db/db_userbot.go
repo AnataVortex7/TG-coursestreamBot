@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"time"
 
@@ -17,7 +18,15 @@ import (
 
 
 
-const userbotSessionKey = "main"
+// userbotSessionKey — main userbot session cha DB key. Old + New ekach DB vaparat
+// astil tar New var USERBOT_SESSION_KEY=new thev: mag New cha swatacha vegla login
+// (vegla auth key) vapartó, Old cha "main" session touch hot nahi => AUTH_KEY_DUPLICATED nahi.
+var userbotSessionKey = func() string {
+	if v := os.Getenv("USERBOT_SESSION_KEY"); v != "" {
+		return v
+	}
+	return "main"
+}()
 
 // UserBotSessionDoc — MongoDB document
 type UserBotSessionDoc struct {

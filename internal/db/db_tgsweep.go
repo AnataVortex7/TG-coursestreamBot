@@ -18,6 +18,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/zap"
 )
 
@@ -97,19 +98,51 @@ func SweepTelegramIDs(keepReal []int64) (int, error) {
 			n++
 		}
 	}
-	return n, cur.Err()
+	if err := cur.Err(); err != nil {
+		return n, err
+	}
+
+	// 3) telegram_id 0 / missing (Telegram adhi link nahi kelele navin website users):
+	//    tyannahi fake ID — jenekarun old /predownload "link nahi" mhanat nahi.
+	zero := bson.A{
+		bson.M{"telegram_id": bson.M{"$exists": false}},
+		bson.M{"telegram_id": 0},
+	}
+	cur2, err := ColUsers.Find(ctx, bson.M{"$or": zero}, options.Find().SetProjection(bson.M{"_id": 1}))
+	if err != nil {
+		return n, err
+	}
+	defer cur2.Close(ctx)
+	for cur2.Next(ctx) {
+		var u struct {
+			ID primitive.ObjectID `bson:"_id"`
+		}
+		if cur2.Decode(&u) != nil {
+			continue
+		}
+		if _, err := ColUsers.UpdateOne(ctx,
+			bson.M{"_id": u.ID, "$or": zero},
+			bson.M{"$set": bson.M{"telegram_id": FakeTGIDFor(u.ID)}}); err == nil {
+			n++
+		}
+	}
+	return n, cur2.Err()
 }
 
 // StartTGIDSweeper — startup la ani nantar dar 2 minutes. Konihi (old bot var
 // chukun) link zala tari lagech spoof hoto => expiry kunacha skip hot nahi.
 func StartTGIDSweeper(ctx context.Context, keepReal []int64, log *zap.Logger) {
 	log = log.Named("tgid_sweeper")
+	first := true
 	run := func() {
-		if n, err := SweepTelegramIDs(keepReal); err != nil {
+		n, err := SweepTelegramIDs(keepReal)
+		switch {
+		case err != nil:
 			log.Warn("sweep failed", zap.Error(err))
-		} else if n > 0 {
-			log.Sugar().Infof("spoofed telegram_id for %d user(s)", n)
+		case n > 0 || first:
+			log.Sugar().Infof("sweep done: %d user(s) spoofed (admin/userbot docs real thevle)", n)
 		}
+		first = false
 	}
 	run()
 	t := time.NewTicker(2 * time.Minute)

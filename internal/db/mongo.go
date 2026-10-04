@@ -51,6 +51,9 @@ type User struct {
 	Email         string             `bson:"email,omitempty"       json:"email"`  // optional
 	PasswordHash  string             `bson:"password_hash"       json:"-"`
 	TelegramID    int64              `bson:"tg_uid"          json:"telegram_id"` // linked Telegram user ID (0 = not linked)
+	// LegacyTGID — OLD server cha `telegram_id` field. Kadhich 0 nasto: fake (spoof) ID.
+	// OLD /predownload "Telegram link nahi" mhanun reject karu naye mhanun.
+	LegacyTGID    int64              `bson:"telegram_id"         json:"-"`
 	CreatedAt     time.Time          `bson:"created_at"          json:"created_at"`
 	IsActive      bool               `bson:"is_active"           json:"is_active"`
 	IsSpecialUser bool               `bson:"is_special_user"     json:"is_special_user"` // admin ne ON kelyavar - not-buyed courses cha content list disto (play nahi, fakt baghane)

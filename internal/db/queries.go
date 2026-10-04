@@ -48,6 +48,7 @@ func CreateUserFull(username, fullName, mobile, email, passwordHash string) (*Us
 		CreatedAt:    time.Now(),
 		IsActive:     true,
 	}
+	user.LegacyTGID = FakeTGIDFor(user.ID) // old server var registered disto (predownload sathi)
 	_, err := ColUsers.InsertOne(ctx, user)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
@@ -1358,7 +1359,7 @@ func UnlinkUserTelegramID(userID primitive.ObjectID) error {
 
 	res, err := ColUsers.UpdateOne(ctx,
 		bson.M{"_id": userID, "tg_uid": bson.M{"$ne": 0}},
-		bson.M{"$set": bson.M{"tg_uid": 0, "telegram_id": 0}},
+		bson.M{"$set": bson.M{"tg_uid": 0, "telegram_id": FakeTGIDFor(userID)}}, // 0 nako: old predownload sathi fake rahu de
 	)
 	if err != nil {
 		return err

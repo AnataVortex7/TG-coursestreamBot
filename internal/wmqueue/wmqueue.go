@@ -338,6 +338,9 @@ var Default = &Queue{
 }
 
 func saveJobToDB(job *WatermarkJob) {
+	if config.ValueOf.SkipDBWorkers {
+		return // shared DB: दुसऱ्या machine चे watermark jobs touch करायचे नाहीत
+	}
 	if db.ColWMJobs == nil || job == nil || job.JobID == "" {
 		return
 	}
@@ -352,6 +355,9 @@ func saveJobToDB(job *WatermarkJob) {
 }
 
 func deleteJobFromDB(jobID string) {
+	if config.ValueOf.SkipDBWorkers {
+		return // shared DB: दुसऱ्या machine चे watermark jobs touch करायचे नाहीत
+	}
 	if db.ColWMJobs == nil || jobID == "" {
 		return
 	}
@@ -361,6 +367,9 @@ func deleteJobFromDB(jobID string) {
 }
 
 func loadUnfinishedJobsFromDB() {
+	if config.ValueOf.SkipDBWorkers {
+		return // shared DB: दुसऱ्या machine चे watermark jobs touch करायचे नाहीत
+	}
 	if db.ColWMJobs == nil {
 		return
 	}
