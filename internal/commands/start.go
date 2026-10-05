@@ -61,6 +61,12 @@ func start(ctx *ext.Context, u *ext.Update) error {
 		return handleContactDeepLink(ctx, u, chatId, strings.TrimPrefix(a[0], "ct_"))
 	}
 
+	// auto-delivery: registered user + ajun lectures nahit -> popup (confirm zalyavarch delivery)
+	go func() {
+		time.Sleep(1500 * time.Millisecond) // Welcome message nantar
+		MaybePromptAutoDelivery(ctx, chatId)
+	}()
+
 	if len(config.ValueOf.AllowedUsers) != 0 && !utils.Contains(config.ValueOf.AllowedUsers, chatId) {
 		ctx.Reply(u, ext.ReplyTextString(
 			"👋 Namaskar!\n\nखाली तुमचा message किंवा file पाठवा — ते admin ला जाईल आणि लवकरच reply मिळेल.",
@@ -495,6 +501,10 @@ func processTelegramLoginToken(ctx *ext.Context, u *ext.Update, chatID int64, to
 		if tgUser := u.EffectiveUser(); tgUser != nil {
 			ctx.PeerStorage.AddPeer(tgUser.ID, tgUser.AccessHash, storage.TypeUser, tgUser.Username)
 		}
+		go func() {
+			time.Sleep(3 * time.Second)
+			MaybePromptAutoDelivery(ctx, chatID)
+		}()
 	}
 
 	_ = db.MarkTGLoginTokenUsed(rec.ID)

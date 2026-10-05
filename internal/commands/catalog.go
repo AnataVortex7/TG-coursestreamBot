@@ -492,6 +492,12 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		}
 		handlePlayFolder(ctx, u, chatID, courseID, folderID)
 
+	case "adyes":
+		handleAutoDeliveryChoice(ctx, u, chatID, true)
+
+	case "adno":
+		handleAutoDeliveryChoice(ctx, u, chatID, false)
+
 	case "dlcourse":
 		if len(parts) < 2 {
 			return dispatcher.EndGroups

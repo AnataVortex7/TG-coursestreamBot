@@ -78,6 +78,9 @@ type config struct {
 	// Old machine madhe hya varची गरज नाही (default false → DB workers load होतात).
 	SkipDBWorkers bool `envconfig:"SKIP_DB_WORKERS" default:"false"`
 
+	// AutoDelivery — user ne bot /start kela ki kharedi kelele courses folder-wise aapoaap yetat.
+	AutoDelivery bool `envconfig:"AUTO_DELIVERY" default:"true"`
+
 	// BulkMinCachedPercent — "संपूर्ण Folder/Course Download" फक्त तेव्हाच चालतो जेव्हा
 	// त्या user साठी किमान इतके % lectures आधीच LOG_CHANNEL मध्ये cache झालेले असतील.
 	// Cache असलेलेच forward होतात; नसलेले skip (watermark/process होत नाहीत) — main server वर load नको.

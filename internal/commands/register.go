@@ -436,6 +436,12 @@ func finishSelfRegister(ctx *ext.Context, u *ext.Update, chatID int64, st *selfR
 	}
 
 	linked := db.SetUserTelegramID(newUser.ID, chatID) == nil
+	if linked {
+		go func() {
+			time.Sleep(4 * time.Second)
+			MaybePromptAutoDelivery(ctx, chatID)
+		}()
+	}
 
 	if auth.NotifyAdmins != nil {
 		go auth.NotifyAdmins(fmt.Sprintf(

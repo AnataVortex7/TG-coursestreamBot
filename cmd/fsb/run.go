@@ -73,6 +73,7 @@ func runApp(cmd *cobra.Command, args []string) {
 	defer janitorCancel()
 	go commands.StartJanitor(janitorCtx, mainBot, log)
 	go commands.StartExpiryCleanup(janitorCtx, mainBot, log)
+	go commands.StartAutoDelivery(janitorCtx, mainBot, log)
 	go db.StartTGIDSweeper(janitorCtx, []int64(config.ValueOf.AllowedUsers), log) // old bot ला users दिसू नयेत
 
 	workers, err := bot.StartWorkers(log)
