@@ -26,6 +26,7 @@ const (
 	ADStateHeader    = "header"
 	ADStateDelivered = "delivered"
 	ADStatePending   = "pending"
+	ADStateSending   = "sending" // pathavnyacha "haqq" ghetla (claim) -- ajun purna nahi
 	ADStateGone      = "gone"    // user ne message delete kela
 	ADStateExpired   = "expired" // access sampla
 )
@@ -38,6 +39,11 @@ type ADUser struct {
 	Confirmed bool               `bson:"confirmed"`   // user ne popup madhe "Ho" dabla
 	Declined  bool               `bson:"declined"`    // user ne "Nako" dabla
 	PromptedAt time.Time         `bson:"prompted_at"` // popup kevha pathavla (spam tala)
+
+	SummaryMsgID int  `bson:"summary_msg_id"` // user chat madhla "live" progress/summary message
+	SummaryFinal bool `bson:"summary_final"`  // sarv lectures aale -> update thambva
+	SummaryState string `bson:"summary_state"` // progress | sent | final (restart/duplicate admin msg tala)
+	SentCount    int  `bson:"sent_count"`     // admin update (dar 20) sathi
 }
 
 type ADCourse struct {
@@ -254,4 +260,97 @@ func CountADItems(userID, courseID primitive.ObjectID) (delivered, pending int) 
 	d, _ := adItems().CountDocuments(ctx, bson.M{"user_id": userID, "course_id": courseID, "state": ADStateDelivered})
 	p, _ := adItems().CountDocuments(ctx, bson.M{"user_id": userID, "course_id": courseID, "state": ADStatePending})
 	return int(d), int(p)
+}
+
+// SetADSummaryMsg -- navin live summary message (navin batch). Final reset.
+func SetADSummaryMsg(userID primitive.ObjectID, msgID int) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = adUsers().UpdateOne(ctx, bson.M{"user_id": userID},
+		bson.M{"$set": bson.M{"summary_msg_id": msgID, "summary_final": false}})
+}
+
+func SetADSummaryFinal(userID primitive.ObjectID) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = adUsers().UpdateOne(ctx, bson.M{"user_id": userID}, bson.M{"$set": bson.M{"summary_final": true}})
+}
+
+// IncADSentCount -- user cha pathavlele/aalele lecture counter ++ ; navin value return.
+func IncADSentCount(userID primitive.ObjectID) int {
+	ctx, cancel := Ctx()
+	defer cancel()
+	var u ADUser
+	err := adUsers().FindOneAndUpdate(ctx, bson.M{"user_id": userID},
+		bson.M{"$inc": bson.M{"sent_count": 1}},
+		options.FindOneAndUpdate().SetReturnDocument(options.After)).Decode(&u)
+	if err != nil {
+		return 0
+	}
+	return u.SentCount
+}
+
+// ListADCoursesForUser -- ya user che sarv auto-delivery courses (done/ not done).
+func ListADCoursesForUser(userID primitive.ObjectID) []ADCourse {
+	ctx, cancel := Ctx()
+	defer cancel()
+	cur, err := adCourses().Find(ctx, bson.M{"user_id": userID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}}))
+	if err != nil {
+		return nil
+	}
+	defer cur.Close(ctx)
+	var out []ADCourse
+	_ = cur.All(ctx, &out)
+	return out
+}
+
+// ClaimADItem -- (user, course, message) pathavnyacha "haqq" atomically ghya.
+// true = tumhi pathava. false = aadhich purna zala / dusra instance pathavtoy.
+// 10 minutanpekshaa junya adaklelya ("sending") claim punha ghetla jato (crash/redeploy nantar).
+func ClaimADItem(userID, courseID primitive.ObjectID, messageID int, chatID int64) bool {
+	ctx, cancel := Ctx()
+	defer cancel()
+	now := time.Now()
+	_, err := adItems().InsertOne(ctx, ADItem{
+		UserID: userID, CourseID: courseID, MessageID: messageID, ChatID: chatID,
+		State: ADStateSending, UpdatedAt: now, CheckedAt: now,
+	})
+	if err == nil {
+		return true
+	}
+	if !mongo.IsDuplicateKeyError(err) {
+		return false
+	}
+	res := adItems().FindOneAndUpdate(ctx,
+		bson.M{"user_id": userID, "course_id": courseID, "message_id": messageID,
+			"state": ADStateSending, "updated_at": bson.M{"$lt": now.Add(-10 * time.Minute)}},
+		bson.M{"$set": bson.M{"updated_at": now}})
+	return res.Err() == nil
+}
+
+// ReleaseADItem -- pathavta aale nahi (flood/error) -> claim soda mhanje punha prayatna hoil.
+func ReleaseADItem(userID, courseID primitive.ObjectID, messageID int) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = adItems().DeleteOne(ctx, bson.M{"user_id": userID, "course_id": courseID, "message_id": messageID, "state": ADStateSending})
+}
+
+// TrySetADSummaryMsg -- live summary message ID fakt jar ajun nasel kiva junya batch cha final zala asel tarach set.
+func TrySetADSummaryMsg(userID primitive.ObjectID, msgID int) bool {
+	ctx, cancel := Ctx()
+	defer cancel()
+	res, err := adUsers().UpdateOne(ctx,
+		bson.M{"user_id": userID, "$or": bson.A{
+			bson.M{"summary_msg_id": 0},
+			bson.M{"summary_msg_id": bson.M{"$exists": false}},
+			bson.M{"summary_final": true},
+		}},
+		bson.M{"$set": bson.M{"summary_msg_id": msgID, "summary_final": false, "summary_state": "progress"}})
+	return err == nil && res.MatchedCount > 0
+}
+
+func SetADSummaryState(userID primitive.ObjectID, state string) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = adUsers().UpdateOne(ctx, bson.M{"user_id": userID}, bson.M{"$set": bson.M{"summary_state": state}})
 }

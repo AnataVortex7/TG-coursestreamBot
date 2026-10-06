@@ -49,6 +49,18 @@ type adPHEntry struct {
 	at    time.Time
 }
 
+const (
+	adSummaryEvery = 3 * time.Minute // user chya live summary madhe update (badal zalyas)
+	adAdminEvery   = 20              // dar 20 lectures nantar admin la update
+)
+
+var (
+	adSumMu       sync.Mutex
+	adSumLastAt   = map[primitive.ObjectID]time.Time{}
+	adSumLastText = map[primitive.ObjectID]string{}
+	adSumState    = map[primitive.ObjectID]string{} // "progress" | "sent" | "final"
+)
+
 var (
 	adPHMu    sync.Mutex
 	adPHCache = map[string]adPHEntry{}
@@ -109,6 +121,7 @@ func adTick(ctx context.Context, client *gotgproto.Client, log *zap.Logger) {
 
 	adResolvePending(ctx, gctx, client, log)
 	adDeliverNew(ctx, gctx, client, log)
+	adRefreshSummaries(gctx)
 }
 
 // ---------------------------------------------------------------- new delivery
@@ -132,6 +145,17 @@ func adDeliverNew(ctx context.Context, gctx *ext.Context, client *gotgproto.Clie
 		if gctx.PeerStorage.GetInputPeerById(au.ChatID).Zero() {
 			continue // user ne ajun bot chalu kela nahi / peer nahi
 		}
+		// kahi course ajun baki asel tar user chya chat madhe ek "live" progress message (3 min update)
+		needWork := false
+		for _, ac := range accesses {
+			if !db.ADCourseDone(au.UserID, ac.CourseID) {
+				needWork = true
+				break
+			}
+		}
+		if needWork {
+			adEnsureSummaryMessage(gctx, &au)
+		}
 		for _, ac := range accesses {
 			if ctx.Err() != nil {
 				return
@@ -146,42 +170,7 @@ func adDeliverNew(ctx context.Context, gctx *ext.Context, client *gotgproto.Clie
 				return // flood / error -- pudhchya tick madhe resume (items DB madhe aahet)
 			}
 		}
-		adSendSummary(gctx, au)
-	}
-}
-
-// adSendSummary -- user chya sarv active courses purna zalyavar ekda summary (nantar navin course -> navin summary).
-func adSendSummary(gctx *ext.Context, au db.ADUser) {
-	list := db.ListUnsummarizedADCourses(au.UserID)
-	if len(list) == 0 {
-		return
-	}
-	var lines []string
-	var ids []primitive.ObjectID
-	totalDel, totalPen := 0, 0
-	for _, ac := range list {
-		title := "Course"
-		if c, _ := db.GetCourseByID(ac.CourseID); c != nil {
-			title = c.Title
-		}
-		d, p := db.CountADItems(au.UserID, ac.CourseID)
-		totalDel += d
-		totalPen += p
-		line := fmt.Sprintf("• %s — ✅ %d पाठवले", title, d)
-		if p > 0 {
-			line += fmt.Sprintf(", ⏳ %d येत आहेत", p)
-		}
-		lines = append(lines, line)
-		ids = append(ids, ac.CourseID)
-	}
-	text := "📦 Auto-delivery पूर्ण!\n\n" + strings.Join(lines, "\n") +
-		fmt.Sprintf("\n\nएकूण: ✅ %d | ⏳ %d", totalDel, totalPen)
-	if totalPen > 0 {
-		text += "\n\n⏳ pending lectures तयार झाल्यावर त्याच जागी आपोआप बदलतील — काही करायची गरज नाही."
-	}
-	text += "\n\nChat clear केली तरी Course → Download बटणाने परत मिळवू शकता."
-	if _, err := gctx.SendMessage(au.ChatID, &tg.MessagesSendMessageRequest{Message: text}); err == nil {
-		db.MarkADSummarized(au.UserID, ids)
+		adUpdateSummary(gctx, au, true)
 	}
 }
 
@@ -241,7 +230,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 		}
 		// folder header (pinned) -- ekdach
 		headerKey := -(gi + 1)
-		if !db.ADItemExists(au.UserID, courseID, headerKey) {
+		if db.ClaimADItem(au.UserID, courseID, headerKey, au.ChatID) {
 			text := fmt.Sprintf("📁 %s\n%s", g.name, course.Title)
 			var hid int
 			if err := adWithFlood(ctx, func() error {
@@ -251,6 +240,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 				hid = adSentID(upd)
 				return e
 			}); err != nil {
+				db.ReleaseADItem(au.UserID, courseID, headerKey)
 				log.Warn("header send failed", zap.Error(err))
 				return false
 			}
@@ -263,6 +253,9 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 				_, _ = api.MessagesUpdatePinnedMessage(gctx, &tg.MessagesUpdatePinnedMessageRequest{
 					Peer: peer, ID: hid, Silent: true,
 				})
+			} else {
+				_ = db.SaveADItem(db.ADItem{UserID: au.UserID, CourseID: courseID, MessageID: headerKey,
+					ChatID: au.ChatID, State: db.ADStateHeader, Title: g.name})
 			}
 			time.Sleep(adSendGap)
 		}
@@ -271,8 +264,8 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 			if ctx.Err() != nil {
 				return false
 			}
-			if db.ADItemExists(au.UserID, courseID, f.MessageID) {
-				continue
+			if !db.ClaimADItem(au.UserID, courseID, f.MessageID, au.ChatID) {
+				continue // aadhich zala kiva dusra instance pathavtoy
 			}
 			title := f.Title
 			if title == "" {
@@ -290,9 +283,10 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 					}
 					return e
 				})
-				if fErr == nil && sentID != 0 {
+				if fErr == nil {
 					state = db.ADStateDelivered
-				} else if fErr != nil && strings.Contains(strings.ToUpper(fErr.Error()), "FLOOD") {
+				} else if strings.Contains(strings.ToUpper(fErr.Error()), "FLOOD") {
+					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
 					return false
 				}
 			}
@@ -300,6 +294,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 				// pending placeholder (PDF)
 				media, mErr := adPendingMedia(gctx, client, adKindFor(f))
 				if mErr != nil {
+					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
 					log.Warn("pending placeholder media nahi", zap.Error(mErr))
 					return false
 				}
@@ -311,6 +306,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 					sentID = adSentID(upd)
 					return e
 				}); err != nil {
+					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
 					log.Warn("pending send failed", zap.Error(err))
 					return false
 				}
@@ -318,9 +314,12 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 			if sentID != 0 {
 				_ = db.RecordSentLectureMsg(au.UserID, courseID, au.ChatID, sentID, botID)
 				_ = db.AddPendingDeletion(au.UserID, courseID, au.ChatID, sentID, botID)
-				_ = db.SaveADItem(db.ADItem{UserID: au.UserID, CourseID: courseID, MessageID: f.MessageID,
-					ChatID: au.ChatID, SentMsgID: sentID, State: state, Title: title})
+			} else if state == db.ADStatePending {
+				state = db.ADStateGone // message ID milala nahi -> pudhe edit shakya nahi
 			}
+			_ = db.SaveADItem(db.ADItem{UserID: au.UserID, CourseID: courseID, MessageID: f.MessageID,
+				ChatID: au.ChatID, SentMsgID: sentID, State: state, Title: title})
+			adNoteProgress(gctx, au.UserID, course.Title, state)
 			time.Sleep(adSendGap)
 		}
 	}
@@ -387,6 +386,7 @@ func adResolvePending(ctx context.Context, gctx *ext.Context, client *gotgproto.
 		switch {
 		case editErr == nil || strings.Contains(strings.ToUpper(fmtErr(editErr)), "MESSAGE_NOT_MODIFIED"):
 			db.SetADItemState(it.ID, db.ADStateDelivered, 0)
+			adNoteProgress(gctx, it.UserID, "", db.ADStateDelivered)
 		case isMsgGone(editErr):
 			db.SetADItemState(it.ID, db.ADStateGone, 0) // user ne placeholder delete kela
 		case strings.Contains(strings.ToUpper(fmtErr(editErr)), "FLOOD"):
@@ -406,6 +406,7 @@ func adResolvePending(ctx context.Context, gctx *ext.Context, client *gotgproto.
 				_ = db.RecordSentLectureMsg(it.UserID, it.CourseID, it.ChatID, newID, botID)
 				_ = db.AddPendingDeletion(it.UserID, it.CourseID, it.ChatID, newID, botID)
 				db.SetADItemState(it.ID, db.ADStateDelivered, newID)
+				adNoteProgress(gctx, it.UserID, "", db.ADStateDelivered)
 			} else {
 				db.TouchADItem(it.ID)
 			}
@@ -573,4 +574,191 @@ func adPendingMedia(gctx *ext.Context, client *gotgproto.Client, kind string) (t
 	}
 	adPHCache[kind] = adPHEntry{media: media, at: time.Now()}
 	return media, nil
+}
+
+// ---------------------------------------------------------------- live summary + admin updates
+
+func adUserLabel(userID primitive.ObjectID) string {
+	u, err := db.GetUserByID(userID)
+	if err != nil || u == nil {
+		return userID.Hex()
+	}
+	name := u.FullName
+	if name == "" {
+		name = u.Username
+	}
+	if u.Mobile != "" {
+		return fmt.Sprintf("%s (%s)", name, u.Mobile)
+	}
+	return name
+}
+
+func adNotifyAdmins(gctx *ext.Context, text string) {
+	for _, id := range config.ValueOf.AllowedUsers {
+		if _, err := gctx.SendMessage(id, &tg.MessagesSendMessageRequest{Message: text}); err != nil {
+			continue
+		}
+	}
+}
+
+// adNoteProgress -- pratyek lecture (pathavlela kiva pending-> aalela) nantar counter ++ ;
+// dar 20 vyaa lecture la admin la "kontya user che kiti aale" update.
+func adNoteProgress(gctx *ext.Context, userID primitive.ObjectID, courseTitle, state string) {
+	n := db.IncADSentCount(userID)
+	if n == 0 || n%adAdminEvery != 0 {
+		return
+	}
+	d, p := 0, 0
+	for _, ac := range db.ListADCoursesForUser(userID) {
+		dd, pp := db.CountADItems(userID, ac.CourseID)
+		d += dd
+		p += pp
+	}
+	adNotifyAdmins(gctx, fmt.Sprintf("📊 Auto-delivery update\n👤 %s\n✅ %d lectures पोहोचले | ⏳ %d pending\n(एकूण हालचाल: %d)",
+		adUserLabel(userID), d, p, n))
+}
+
+// adSummaryText -- user cha sadhyacha chitra + state ("progress" / "sent" / "final").
+func adSummaryText(userID primitive.ObjectID) (string, string) {
+	courses := db.ListADCoursesForUser(userID)
+	if len(courses) == 0 {
+		return "", ""
+	}
+	var lines []string
+	totalD, totalP := 0, 0
+	allDone := true
+	for _, ac := range courses {
+		title := "Course"
+		if c, _ := db.GetCourseByID(ac.CourseID); c != nil {
+			title = c.Title
+		}
+		d, p := db.CountADItems(userID, ac.CourseID)
+		totalD += d
+		totalP += p
+		switch {
+		case !ac.Done:
+			allDone = false
+			lines = append(lines, fmt.Sprintf("• %s — 🔄 चालू आहे (✅ %d, ⏳ %d)", title, d, p))
+		case p > 0:
+			lines = append(lines, fmt.Sprintf("• %s — ✅ %d पाठवले, ⏳ %d येत आहेत", title, d, p))
+		default:
+			lines = append(lines, fmt.Sprintf("• %s — ✅ %d पाठवले (पूर्ण)", title, d))
+		}
+	}
+	state := "progress"
+	head := "📦 Auto-delivery सुरू आहे... कृपया थांबा"
+	switch {
+	case allDone && totalP == 0:
+		state, head = "final", "✅ सगळे lectures आले! Auto-delivery पूर्ण"
+	case allDone:
+		state, head = "sent", "📦 सगळे courses पाठवले — काही lectures अजून तयार होत आहेत"
+	}
+	text := head + "\n\n" + strings.Join(lines, "\n") + fmt.Sprintf("\n\nएकूण: ✅ %d | ⏳ %d", totalD, totalP)
+	if totalP > 0 {
+		text += "\n\n⏳ pending lectures तयार झाल्यावर त्याच जागी आपोआप बदलतील आणि हा message दर काही मिनिटांनी अपडेट होईल."
+	}
+	if state == "final" {
+		text += "\n\nChat clear केली तरी Course → Download बटणाने परत मिळवू शकता."
+	}
+	return text, state
+}
+
+// adEnsureSummaryMessage -- batch chya suruvatila ek live message pathavto (jar nasel / junya batch cha final zala asel).
+func adEnsureSummaryMessage(gctx *ext.Context, au *db.ADUser) {
+	cur := db.GetADUser(au.UserID)
+	if cur != nil && cur.SummaryMsgID != 0 && !cur.SummaryFinal {
+		au.SummaryMsgID, au.SummaryFinal = cur.SummaryMsgID, cur.SummaryFinal
+		return
+	}
+	msg, err := gctx.SendMessage(au.ChatID, &tg.MessagesSendMessageRequest{
+		Message: "📦 Auto-delivery सुरू आहे... कृपया थांबा\n\nहा message दर काही मिनिटांनी अपडेट होईल.",
+	})
+	if err != nil || msg == nil {
+		return
+	}
+	if !db.TrySetADSummaryMsg(au.UserID, msg.ID) {
+		// dusrya instance ne aadhich banavla -- aaplа message delete
+		_, _ = gctx.Raw.MessagesDeleteMessages(gctx, &tg.MessagesDeleteMessagesRequest{Revoke: true, ID: []int{msg.ID}})
+		return
+	}
+	au.SummaryMsgID, au.SummaryFinal = msg.ID, false
+	adSumMu.Lock()
+	delete(adSumLastText, au.UserID)
+	adSumState[au.UserID] = "progress"
+	adSumLastAt[au.UserID] = time.Time{}
+	adSumMu.Unlock()
+	adNotifyAdmins(gctx, fmt.Sprintf("▶️ Auto-delivery सुरू\n👤 %s", adUserLabel(au.UserID)))
+}
+
+// adUpdateSummary -- live message edit (fakt text badalla asel tarach; 3 min throttle; force=true sodun).
+func adUpdateSummary(gctx *ext.Context, au db.ADUser, force bool) {
+	cur := db.GetADUser(au.UserID)
+	if cur == nil || cur.SummaryMsgID == 0 || cur.SummaryFinal {
+		return
+	}
+	adSumMu.Lock()
+	last := adSumLastAt[au.UserID]
+	prevText := adSumLastText[au.UserID]
+	prevState := cur.SummaryState // DB madhla -- restart nantar duplicate admin msg nahi
+	adSumMu.Unlock()
+	if !force && time.Since(last) < adSummaryEvery {
+		return
+	}
+	text, state := adSummaryText(au.UserID)
+	if text == "" {
+		return
+	}
+	if text == prevText && state == prevState {
+		adSumMu.Lock()
+		adSumLastAt[au.UserID] = time.Now()
+		adSumMu.Unlock()
+		return
+	}
+	peer := gctx.PeerStorage.GetInputPeerById(au.ChatID)
+	if peer.Zero() {
+		return
+	}
+	_, err := gctx.Raw.MessagesEditMessage(gctx, &tg.MessagesEditMessageRequest{
+		Peer: peer, ID: cur.SummaryMsgID, Message: text,
+	})
+	if err != nil && !strings.Contains(strings.ToUpper(fmtErr(err)), "MESSAGE_NOT_MODIFIED") {
+		if isMsgGone(err) {
+			db.SetADSummaryFinal(au.UserID) // user ne message delete kela -- update thambva
+		}
+		return
+	}
+	adSumMu.Lock()
+	adSumLastAt[au.UserID] = time.Now()
+	adSumLastText[au.UserID] = text
+	adSumState[au.UserID] = state
+	adSumMu.Unlock()
+	if state != prevState {
+		db.SetADSummaryState(au.UserID, state)
+	}
+
+	if state != prevState {
+		switch state {
+		case "sent":
+			adNotifyAdmins(gctx, fmt.Sprintf("📤 सगळे courses पाठवले (काही pending)\n👤 %s\n%s", adUserLabel(au.UserID), text))
+		case "final":
+			adNotifyAdmins(gctx, fmt.Sprintf("✅ Auto-delivery पूर्ण\n👤 %s\n%s", adUserLabel(au.UserID), text))
+		}
+	}
+	if state == "final" {
+		db.SetADSummaryFinal(au.UserID)
+	}
+}
+
+// adRefreshSummaries -- delivery nasli tari (pending -> aale) dar 3 min la live message update.
+func adRefreshSummaries(gctx *ext.Context) {
+	users, err := db.ListAutoDeliveryUsers()
+	if err != nil {
+		return
+	}
+	for _, au := range users {
+		if au.SummaryMsgID == 0 || au.SummaryFinal {
+			continue
+		}
+		adUpdateSummary(gctx, au, false)
+	}
 }
