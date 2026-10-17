@@ -26,6 +26,7 @@ const (
 	ADStateHeader    = "header"
 	ADStateDelivered = "delivered"
 	ADStatePending   = "pending"
+	ADStateRaw       = "raw" // watermark nasleli original copy pathavli; watermarked copy aalyavar replace hoil
 	ADStateSending   = "sending" // pathavnyacha "haqq" ghetla (claim) -- ajun purna nahi
 	ADStateGone      = "gone"    // user ne message delete kela
 	ADStateExpired   = "expired" // access sampla
@@ -203,7 +204,7 @@ func SaveADItem(it ADItem) error {
 func ListPendingADItems(limit int64) ([]ADItem, error) {
 	ctx, cancel := Ctx()
 	defer cancel()
-	cur, err := adItems().Find(ctx, bson.M{"state": ADStatePending},
+	cur, err := adItems().Find(ctx, bson.M{"state": bson.M{"$in": []string{ADStatePending, ADStateRaw}}},
 		options.Find().SetSort(bson.D{{Key: "checked_at", Value: 1}}).SetLimit(limit))
 	if err != nil {
 		return nil, err
@@ -258,7 +259,7 @@ func CountADItems(userID, courseID primitive.ObjectID) (delivered, pending int) 
 	ctx, cancel := Ctx()
 	defer cancel()
 	d, _ := adItems().CountDocuments(ctx, bson.M{"user_id": userID, "course_id": courseID, "state": ADStateDelivered})
-	p, _ := adItems().CountDocuments(ctx, bson.M{"user_id": userID, "course_id": courseID, "state": ADStatePending})
+	p, _ := adItems().CountDocuments(ctx, bson.M{"user_id": userID, "course_id": courseID, "state": bson.M{"$in": []string{ADStatePending, ADStateRaw}}})
 	return int(d), int(p)
 }
 

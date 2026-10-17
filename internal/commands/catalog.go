@@ -1289,6 +1289,34 @@ func bulkCachedSplit(userID, courseID primitive.ObjectID, msgIDs []int) (cached 
 	return
 }
 
+// sendRawOriginalTracked — watermarked copy तयार नसलेल्या lecture ची original (unwatermarked) copy
+// user ला पाठवतो आणि auto_delivery_items मध्ये state=raw म्हणून save करतो, जेणेकरून नंतर
+// watermarked copy आली की ती त्याच message वर edit होऊन replace होईल.
+func sendRawOriginalTracked(ctx *ext.Context, botClient *gotgproto.Client, dbUser *db.User, course *db.Course,
+	courseID primitive.ObjectID, messageID int, chatID int64) (bool, error) {
+
+	peer := ctx.PeerStorage.GetInputPeerById(chatID)
+	if peer.Zero() {
+		return false, fmt.Errorf("user चा chat peer सापडला नाही")
+	}
+	sentID, caption, err := adSendOriginal(context.Background(), ctx, botClient, peer, course.ChannelID, 0, messageID, "")
+	if err != nil {
+		return false, err
+	}
+	if sentID == 0 {
+		return false, fmt.Errorf("message ID मिळाला नाही")
+	}
+	_ = db.RecordSentLectureMsg(dbUser.ID, courseID, chatID, sentID, botClient.Self.ID)
+	_ = db.AddPendingDeletion(dbUser.ID, courseID, chatID, sentID, botClient.Self.ID)
+	title := caption
+	if r := []rune(title); len(r) > 80 {
+		title = string(r[:80])
+	}
+	_ = db.SaveADItem(db.ADItem{UserID: dbUser.ID, CourseID: courseID, MessageID: messageID,
+		ChatID: chatID, SentMsgID: sentID, State: db.ADStateRaw, Title: title})
+	return true, nil
+}
+
 func handlePlayLecture(ctx *ext.Context, u *ext.Update, chatID int64, courseID primitive.ObjectID, messageID int, isBulk bool) error {
 	return handlePlayLectureOpt(ctx, u, chatID, courseID, messageID, isBulk, false)
 }
@@ -1491,8 +1519,10 @@ func deliverLectureCoreOpt(
 	}
 
 	if cachedOnly {
-		// Bulk download: cache नसेल तर process करत नाही (main server load टाळायला).
-		return false, fmt.Errorf("cache उपलब्ध नाही — bulk मध्ये skip")
+		// Bulk download: watermarked copy अजून तयार नसेल तर skip करत नाही — original
+		// (watermark नसलेली) copy लगेच पाठवतो आणि "raw" म्हणून track करतो; watermarked
+		// copy cache मध्ये आली की auto-delivery (adResolvePending) तीच message replace करतो.
+		return sendRawOriginalTracked(ctx, botClient, dbUser, course, courseID, messageID, targetChatID)
 	}
 
 	channelPeer, err := utils.GetChannelPeer(ctx, botClient.API(), botClient.PeerStorage, course.ChannelID)
@@ -1891,16 +1921,11 @@ func handlePlayFolder(ctx *ext.Context, u *ext.Update, chatID int64, courseID, f
 	}
 
 	total := len(msgIDs)
-	cachedIDs, cachedPct, gateOK := bulkCachedSplit(dbUser.ID, courseID, msgIDs)
-	if !gateOK || len(cachedIDs) == 0 {
-		editCatalogMessage(ctx, u, fmt.Sprintf("⏳ हा folder अजून तयार नाही.\n\nतयार (cached): %d / %d (%d%%) — किमान %d%% हवे.\nथोड्या वेळाने पुन्हा प्रयत्न करा, किंवा lectures एकेक करून उघडा.",
-			len(cachedIDs), total, cachedPct, config.ValueOf.BulkMinCachedPercent),
-			&tg.ReplyInlineMarkup{Rows: backRow})
-		return
-	}
-	skippedFolder := total - len(cachedIDs)
-	msgIDs = cachedIDs
-	editCatalogMessage(ctx, u, fmt.Sprintf("📥 Folder मधले %d (एकूण %d पैकी तयार) lectures पाठवायला सुरुवात करत आहोत...\n(एकावेळी एक — थोडा वेळ लागू शकतो)", len(cachedIDs), total),
+	// [CHANGED] cache % gate काढला — सगळे lectures पाठवले जातात. watermarked copy तयार असेल
+	// तर ती, नसेल तर original copy (नंतर watermarked ने आपोआप replace होते).
+	cachedIDs, _, _ := bulkCachedSplit(dbUser.ID, courseID, msgIDs)
+	skippedFolder := 0
+	editCatalogMessage(ctx, u, fmt.Sprintf("📥 Folder मधले %d lectures पाठवायला सुरुवात करत आहोत (watermark तयार: %d)...\n(एकावेळी एक — थोडा वेळ लागू शकतो)", total, len(cachedIDs)),
 		&tg.ReplyInlineMarkup{Rows: backRow})
 
 	handedOff = true
@@ -2050,27 +2075,9 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 	for _, f := range files {
 		allIDs = append(allIDs, f.MessageID)
 	}
-	cachedList, cachedPctC, gateOKC := bulkCachedSplit(dbUser.ID, courseID, allIDs)
-	if !gateOKC || len(cachedList) == 0 {
-		editCatalogMessage(ctx, u, fmt.Sprintf("⏳ हा course अजून पूर्ण तयार नाही.\n\nतयार (cached): %d / %d (%d%%) — किमान %d%% हवे.\nथोड्या वेळाने पुन्हा प्रयत्न करा, किंवा lectures एकेक करून उघडा.",
-			len(cachedList), total, cachedPctC, config.ValueOf.BulkMinCachedPercent),
-			&tg.ReplyInlineMarkup{Rows: backRow})
-		return
-	}
-	cachedSet := make(map[int]bool, len(cachedList))
-	for _, id := range cachedList {
-		cachedSet[id] = true
-	}
-	for _, g := range groups {
-		kept := g.msgIDs[:0:0]
-		for _, id := range g.msgIDs {
-			if cachedSet[id] {
-				kept = append(kept, id)
-			}
-		}
-		g.msgIDs = kept
-	}
-	skippedCourse := total - len(cachedList)
+	// [CHANGED] cache % gate काढला — सगळे lectures पाठवले जातात (watermark तयार नसेल तर original, नंतर replace).
+	cachedList, _, _ := bulkCachedSplit(dbUser.ID, courseID, allIDs)
+	skippedCourse := 0
 
 	// File lookup map बनवतो — MessageID वरून Title/FileName मिळवण्यासाठी
 	fileMap := make(map[int]db.CachedFile, len(files))
@@ -2078,7 +2085,7 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 		fileMap[f.MessageID] = f
 	}
 
-	editCatalogMessage(ctx, u, fmt.Sprintf("📥 संपूर्ण course पाठवायला सुरुवात करत आहोत...\n📦 एकूण: %d फाईल्स (तयार: %d), %d folders\n(एकावेळी एक — वेळ लागू शकतो)", total, len(cachedList), len(groups)),
+	editCatalogMessage(ctx, u, fmt.Sprintf("📥 संपूर्ण course पाठवायला सुरुवात करत आहोत...\n📦 एकूण: %d फाईल्स (watermark तयार: %d), %d folders\n(एकावेळी एक — वेळ लागू शकतो)", total, len(cachedList), len(groups)),
 		&tg.ReplyInlineMarkup{Rows: backRow})
 
 	handedOff = true
@@ -2086,7 +2093,7 @@ func handlePlayCourse(ctx *ext.Context, u *ext.Update, chatID int64, courseID pr
 		defer unlockBulk(chatID, courseID)
 		toPeer := ctx.PeerStorage.GetInputPeerById(chatID)
 		sent, failed := 0, 0
-		doneCount, totalToSend := 0, len(cachedList)
+		doneCount, totalToSend := 0, total
 		first := true
 
 		type failedCourseItem struct {

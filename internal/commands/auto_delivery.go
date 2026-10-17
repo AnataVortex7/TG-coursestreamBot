@@ -291,7 +291,23 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 				}
 			}
 			if state != db.ADStateDelivered {
-				// pending placeholder (PDF)
+				// [NEW] watermarked copy ajun nahi -- rikama placeholder aivaji original
+				// (watermark nasleli) copy lagech pathavto; watermarked copy cache madhe aali
+				// ki adResolvePending ti tyach message var replace karto.
+				rID, _, rErr := adSendOriginal(ctx, gctx, client, peer, course.ChannelID, f.ChannelID, f.MessageID, title)
+				switch {
+				case rErr == nil && rID != 0:
+					sentID = rID
+					state = db.ADStateRaw
+				case rErr != nil && strings.Contains(strings.ToUpper(fmtErr(rErr)), "FLOOD"):
+					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
+					return false
+				case rErr != nil:
+					log.Warn("original copy send failed -- placeholder fallback", zap.Error(rErr))
+				}
+			}
+			if state != db.ADStateDelivered && state != db.ADStateRaw {
+				// pending placeholder (PDF) -- fakt original sapadli nahi tarach
 				media, mErr := adPendingMedia(gctx, client, adKindFor(f))
 				if mErr != nil {
 					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
@@ -324,6 +340,48 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 		}
 	}
 	return true
+}
+
+// adSendOriginal -- source channel madhla original (watermark nasleli) lecture user chya chat madhe
+// pathavto (file re-upload nahi, fakt file reference). Noforwards=true (forward/save band).
+// title khali asel tar source message cha caption vaprto. Return: navin message ID + vaprlela caption.
+func adSendOriginal(ctx context.Context, gctx *ext.Context, client *gotgproto.Client, peer tg.InputPeerClass,
+	courseChannelID, fileChannelID int64, messageID int, title string) (int, string, error) {
+
+	chID := fileChannelID
+	if chID == 0 {
+		chID = courseChannelID
+	}
+	if chID == 0 {
+		return 0, "", errors.New("source channel mahit nahi")
+	}
+	api := client.API()
+	ch, err := utils.GetChannelPeer(gctx, api, client.PeerStorage, chID)
+	if err != nil || ch == nil {
+		return 0, "", fmt.Errorf("source channel peer nahi: %v", err)
+	}
+	media, srcCaption, ents, err := adFetchLogMedia(gctx, api, ch, messageID)
+	if err != nil {
+		return 0, "", err
+	}
+	caption := title
+	var entities []tg.MessageEntityClass
+	if caption == "" {
+		caption, entities = srcCaption, ents
+	}
+	var sentID int
+	err = adWithFlood(ctx, func() error {
+		upd, e := api.MessagesSendMedia(gctx, &tg.MessagesSendMediaRequest{
+			Peer: peer, Media: media, Message: caption, Entities: entities,
+			Noforwards: true, RandomID: rand.Int63(),
+		})
+		sentID = adSentID(upd)
+		return e
+	})
+	if err != nil {
+		return 0, "", err
+	}
+	return sentID, caption, nil
 }
 
 // ---------------------------------------------------------------- pending -> lecture

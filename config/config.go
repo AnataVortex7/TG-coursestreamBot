@@ -85,7 +85,7 @@ type config struct {
 	// त्या user साठी किमान इतके % lectures आधीच LOG_CHANNEL मध्ये cache झालेले असतील.
 	// Cache असलेलेच forward होतात; नसलेले skip (watermark/process होत नाहीत) — main server वर load नको.
 	// 0 = गेट बंद (जुनं वर्तन, पण uncached सुद्धा process होतील). Single lecture वर परिणाम नाही.
-	BulkMinCachedPercent int `envconfig:"BULK_MIN_CACHED_PERCENT" default:"40"`
+	BulkMinCachedPercent int `envconfig:"BULK_MIN_CACHED_PERCENT" default:"0"`
 
 	// SkipUserbot — true असेल तर या server वर userbot (DB चा TG session) start होणार नाही
 	// आणि /userbotdl jobs auto-resume होणार नाहीत.
