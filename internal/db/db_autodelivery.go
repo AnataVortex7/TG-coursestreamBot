@@ -186,6 +186,17 @@ func ADItemExists(userID, courseID primitive.ObjectID, messageID int) bool {
 	return err == nil && n > 0
 }
 
+// GetADItem -- (user, course, lecture) cha item (nasel tar nil).
+func GetADItem(userID, courseID primitive.ObjectID, messageID int) *ADItem {
+	ctx, cancel := Ctx()
+	defer cancel()
+	var it ADItem
+	if err := adItems().FindOne(ctx, bson.M{"user_id": userID, "course_id": courseID, "message_id": messageID}).Decode(&it); err != nil {
+		return nil
+	}
+	return &it
+}
+
 func SaveADItem(it ADItem) error {
 	ctx, cancel := Ctx()
 	defer cancel()

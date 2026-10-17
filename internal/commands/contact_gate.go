@@ -200,12 +200,15 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 		if i := strings.Index(cmd, "@"); i > 0 {
 			cmd = cmd[:i]
 		}
-		if cmd == "/register" || cmd == "/myid" {
+		// [CHANGED] /register (जुना manual form) आणि dl_ deep-link आता गेटमधून जात नाहीत —
+		// account तयार/linked होईपर्यंत प्रत्येक message ला तोच Verification popup येतो.
+		// फक्त /myid आणि website चे totp_ (login link) / ct_ (admin contact) deep-links चालतात.
+		if cmd == "/myid" {
 			return dispatcher.ContinueGroups
 		}
 		if cmd == "/start" && len(fields) > 1 {
 			p := fields[1]
-			if strings.HasPrefix(p, "dl_") || strings.HasPrefix(p, "totp_") || strings.HasPrefix(p, "ct_") {
+			if strings.HasPrefix(p, "totp_") || strings.HasPrefix(p, "ct_") {
 				return dispatcher.ContinueGroups
 			}
 		}
@@ -215,10 +218,9 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 		return gateHandlePending(ctx, u, chatID, st, txt)
 	}
 
-	// जुन्या /register flow मध्ये असेल तर त्याला जाऊ देतो
-	if getSelfRegPending(chatID) != nil {
-		return dispatcher.ContinueGroups
-	}
+	// [CHANGED] जुन्या /register manual-form flow ला pass-through बंद — unlinked user ला
+	// तो form भरता येत नाही; आधी Verification (Accept → number share) पूर्ण करावं लागतं.
+	gateAbortOldRegister(chatID)
 
 	// Admin link request आधीच पाठवलेला (verified mobile नंतर) → 24h pass-through
 	gateMu.Lock()
@@ -235,30 +237,89 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 
 // ─── Popup ───────────────────────────────────────────────────────────────────
 
-func gateSendPopup(ctx *ext.Context, u *ext.Update, chatID int64) {
+// gatePopupAllowed — popup flood control (4 सेकंदात एकच). true = आता पाठवायला हरकत नाही.
+func gatePopupAllowed(chatID int64) bool {
 	gateMu.Lock()
+	defer gateMu.Unlock()
 	if last, ok := gateLastPopup[chatID]; ok && time.Since(last) < gatePopupCooldown {
-		gateMu.Unlock()
-		return // flood control — spam केला तरी popup ची रांग लागत नाही
+		return false
 	}
 	if len(gateLastPopup) > 10000 {
 		gateLastPopup = map[int64]time.Time{}
 	}
 	gateLastPopup[chatID] = time.Now()
-	gateMu.Unlock()
+	return true
+}
 
-	rows := []tg.KeyboardButtonRow{{Buttons: []tg.KeyboardButtonClass{
+const gatePopupText = "🔐 Verification आवश्यक\n\n" +
+	"Spam आणि misuse टाळण्यासाठी हा bot वापरायला तुमचा Telegram account तुमच्या mobile number शी जोडावा लागतो.\n\n" +
+	"आम्ही घेऊ:\n" +
+	"• Telegram नाव आणि ID\n" +
+	"• Mobile number (Telegram चा contact share button वापरून)\n" +
+	"• Email (optional)\n\n" +
+	"हे वापरायला तुम्ही Accept करता का?"
+
+func gatePopupMarkup() *tg.ReplyInlineMarkup {
+	return &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{{Buttons: []tg.KeyboardButtonClass{
 		&tg.KeyboardButtonCallback{Text: "✅ Accept", Data: []byte("cg:accept")},
 		&tg.KeyboardButtonCallback{Text: "❌ Reject", Data: []byte("cg:reject")},
-	}}}
-	text := "🔐 Verification आवश्यक\n\n" +
-		"Spam आणि misuse टाळण्यासाठी हा bot वापरायला तुमचा Telegram account तुमच्या mobile number शी जोडावा लागतो.\n\n" +
-		"आम्ही घेऊ:\n" +
-		"• Telegram नाव आणि ID\n" +
-		"• Mobile number (Telegram चा contact share button वापरून)\n" +
-		"• Email (optional)\n\n" +
-		"हे वापरायला तुम्ही Accept करता का?"
-	_, _ = ctx.Reply(u, ext.ReplyTextString(text), &ext.ReplyOpts{Markup: &tg.ReplyInlineMarkup{Rows: rows}})
+	}}}}
+}
+
+func gateSendPopup(ctx *ext.Context, u *ext.Update, chatID int64) {
+	if !gatePopupAllowed(chatID) {
+		return // flood control — spam केला तरी popup ची रांग लागत नाही
+	}
+	_, _ = ctx.Reply(u, ext.ReplyTextString(gatePopupText), &ext.ReplyOpts{Markup: gatePopupMarkup()})
+}
+
+// gateAbortOldRegister — जुन्या /register manual-form ची अर्धवट state असेल तर पुसतो
+// (unlinked user ने तो form पुढे चालवू नये).
+func gateAbortOldRegister(chatID int64) {
+	if getSelfRegPending(chatID) != nil {
+		clearSelfRegPending(chatID)
+	}
+}
+
+// gateBlockCallback — inline बटणांच्या (wc:, menu:, cmd:) callbacks साठी गेट. Unlinked user ने जुन्या
+// message वरचं बटण दाबलं (उदा. course list → manual form) तरी काम न होता Verification popup येतो.
+// true = block केलं, caller ने काहीच करू नये.
+func gateBlockCallback(ctx *ext.Context, u *ext.Update) bool {
+	user := u.EffectiveUser()
+	if user == nil {
+		return false
+	}
+	chatID := user.GetID()
+	if utils.Contains(config.ValueOf.AllowedUsers, chatID) {
+		return false
+	}
+	if MainBotClient != nil && chatID == MainBotClient.Self.ID {
+		return false
+	}
+	if linked, err := gateIsLinked(chatID); err != nil || linked {
+		return false // DB error वर block नाही (fail-open)
+	}
+	if db.HasUserbotAccess(chatID) {
+		return false
+	}
+	gateMu.Lock()
+	until, hasReq := gateLinkReqAt[chatID]
+	gateMu.Unlock()
+	if hasReq && time.Now().Before(until) {
+		return false
+	}
+	if cbq := u.CallbackQuery; cbq != nil {
+		_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{
+			QueryID: cbq.QueryID, Message: "🔐 आधी Verification पूर्ण करा", Alert: true,
+		})
+	}
+	gateAbortOldRegister(chatID)
+	if gatePopupAllowed(chatID) {
+		_, _ = ctx.SendMessage(chatID, &tg.MessagesSendMessageRequest{
+			Message: gatePopupText, ReplyMarkup: gatePopupMarkup(),
+		})
+	}
+	return true
 }
 
 func gateShareKeyboard() tg.ReplyMarkupClass {
@@ -267,6 +328,20 @@ func gateShareKeyboard() tg.ReplyMarkupClass {
 		SingleUse: true,
 		Rows: []tg.KeyboardButtonRow{{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonRequestPhone{Text: "📱 Share my number"},
+		}}},
+	}
+}
+
+// gateSkipKeyboard — email step साठी "⏭ Skip" बटण (reply keyboard, SingleUse). बटण दाबलं की
+// तेच लेबल text म्हणून येतं आणि gateHandlePending त्याला skip मानतो — user email step मध्ये अडकत नाही.
+const gateSkipLabel = "⏭ Skip"
+
+func gateSkipKeyboard() tg.ReplyMarkupClass {
+	return &tg.ReplyKeyboardMarkup{
+		Resize:    true,
+		SingleUse: true,
+		Rows: []tg.KeyboardButtonRow{{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButton{Text: gateSkipLabel},
 		}}},
 	}
 }
@@ -353,8 +428,8 @@ func gateHandleContact(ctx *ext.Context, u *ext.Update, chatID int64, c *tg.Mess
 	_, _ = ctx.Reply(u,
 		ext.ReplyTextString("✅ Number verify झाला.\n\n"+
 			"📧 तुमचा Email पाठवा (website वर आधी account असेल तर तोच email).\n"+
-			"Email नसेल तर `-` पाठवा."),
-		&ext.ReplyOpts{Markup: &tg.ReplyKeyboardHide{}})
+			"Email नको असेल तर खालचं ⏭ Skip बटण दाबा."),
+		&ext.ReplyOpts{Markup: gateSkipKeyboard()})
 	return dispatcher.EndGroups
 }
 
@@ -397,8 +472,8 @@ func gateLinkExisting(ctx *ext.Context, u *ext.Update, chatID int64, existing *d
 			// Account ला email नाही → optional विचारतो
 			gateSetPending(chatID, &gateState{Phase: gatePhaseAddEmail, UserID: existing.ID})
 			_, _ = ctx.Reply(u,
-				ext.ReplyTextString("✅ Account link झालं!\n\n📧 तुमच्या account ला Email जोडायचा आहे का? Email पाठवा, नको असेल तर `-` पाठवा."),
-				&ext.ReplyOpts{Markup: &tg.ReplyKeyboardHide{}})
+				ext.ReplyTextString("✅ Account link झालं!\n\n📧 तुमच्या account ला Email जोडायचा आहे का? Email पाठवा, नको असेल तर खालचं ⏭ Skip बटण दाबा."),
+				&ext.ReplyOpts{Markup: gateSkipKeyboard()})
 			return dispatcher.EndGroups
 		}
 		gateFinish(ctx, u, chatID, "✅ Account link झालं! 🎉")
@@ -410,13 +485,19 @@ func gateLinkExisting(ctx *ext.Context, u *ext.Update, chatID int64, existing *d
 
 func gateHandlePending(ctx *ext.Context, u *ext.Update, chatID int64, st *gateState, text string) error {
 	text = strings.TrimSpace(text)
-	skip := text == "-" || strings.EqualFold(text, "skip")
+	skip := text == "-" || strings.EqualFold(text, "skip") || text == gateSkipLabel
 
 	emailAddr := ""
 	if !skip {
 		emailAddr = strings.ToLower(text)
 		if !gateLooksLikeEmail(emailAddr) {
-			reply(ctx, u, "❌ Email चुकीचा वाटतो. पुन्हा टाका, किंवा नको असेल तर `-` पाठवा:")
+			// Verification step अजून पूर्ण झालेला नाही — user ने जुना prompt delete केला असला
+			// किंवा काहीतरी वेगळं लिहिलं तरी, पुन्हा स्पष्ट prompt + Skip बटण देतो.
+			gateSetPending(chatID, st) // 15 min चा वेळ पुन्हा सुरू
+			_, _ = ctx.Reply(u,
+				ext.ReplyTextString("🔐 Verification अजून पूर्ण झालेलं नाही.\n\n"+
+					"📧 तुमचा Email पाठवा, किंवा Email नको असेल तर खालचं ⏭ Skip बटण दाबा."),
+				&ext.ReplyOpts{Markup: gateSkipKeyboard()})
 			return dispatcher.EndGroups
 		}
 	}

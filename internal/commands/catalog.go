@@ -176,6 +176,11 @@ func renderCourseListView(chatID int64) (string, tg.ReplyMarkupClass, error) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
+	// [NEW] Verification gate — unlinked user ने जुन्या message वरचं बटण (course list / Buy / manual form)
+	// दाबलं तरी काम न होता Verification popup येतो.
+	if gateBlockCallback(ctx, u) {
+		return dispatcher.EndGroups
+	}
 	// Telegram ला लगेच answer करतो — कारण जर पुढे काही error/panic आलं आणि
 	// answer कधीच गेलं नाही, तर client वर button "stuck" (काहीच रिस्पॉन्स
 	// नाही) असं दिसतं आणि पुढचे taps पण ignore होऊ शकतात. आधी answer, मग काम.
@@ -1298,6 +1303,12 @@ func sendRawOriginalTracked(ctx *ext.Context, botClient *gotgproto.Client, dbUse
 	peer := ctx.PeerStorage.GetInputPeerById(chatID)
 	if peer.Zero() {
 		return false, fmt.Errorf("user चा chat peer सापडला नाही")
+	}
+	// याच lecture ची आधीची raw/pending copy (उदा. auto-delivery ने पाठवलेली) असेल तर ती आधी delete —
+	// नाहीतर item मध्ये नवा ID जुन्याला पुसतो आणि जुनी copy कायम unwatermarked राहते.
+	if old := db.GetADItem(dbUser.ID, courseID, messageID); old != nil && old.SentMsgID != 0 &&
+		(old.State == db.ADStateRaw || old.State == db.ADStatePending) {
+		_, _ = botClient.API().MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{Revoke: true, ID: []int{old.SentMsgID}})
 	}
 	sentID, caption, err := adSendOriginal(context.Background(), ctx, botClient, peer, course.ChannelID, 0, messageID, "")
 	if err != nil {

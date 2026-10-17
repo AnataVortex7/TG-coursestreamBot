@@ -419,7 +419,8 @@ func adResolvePending(ctx context.Context, gctx *ext.Context, client *gotgproto.
 			db.SetADItemState(it.ID, db.ADStateExpired, 0) // expiry yantra already edit karto
 			continue
 		}
-		c, cErr := db.GetDeliveredCache(it.UserID, it.CourseID, it.MessageID)
+		// Fresh (DB) read -- memory cache chi 15 min "not found" nondh bypass
+		c, cErr := db.GetDeliveredCacheFresh(it.UserID, it.CourseID, it.MessageID)
 		if cErr != nil || c == nil || c.LogChannelMsgID == 0 {
 			db.TouchADItem(it.ID) // ajun cache nahi -- nantar
 			continue
@@ -432,6 +433,8 @@ func adResolvePending(ctx context.Context, gctx *ext.Context, client *gotgproto.
 
 		media, caption, ents, fErr := adFetchLogMedia(gctx, api, logPeer, c.LogChannelMsgID)
 		if fErr != nil {
+			log.Warn("replace: LOG_CHANNEL media vachta aala nahi", zap.String("user", it.UserID.Hex()),
+				zap.Int("lecture", it.MessageID), zap.Int("logMsg", c.LogChannelMsgID), zap.Error(fErr))
 			db.TouchADItem(it.ID)
 			continue
 		}
@@ -443,6 +446,8 @@ func adResolvePending(ctx context.Context, gctx *ext.Context, client *gotgproto.
 		})
 		switch {
 		case editErr == nil || strings.Contains(strings.ToUpper(fmtErr(editErr)), "MESSAGE_NOT_MODIFIED"):
+			log.Info("replace: watermarked copy ne edit zala", zap.String("user", it.UserID.Hex()),
+				zap.Int("lecture", it.MessageID), zap.Int("sentMsg", it.SentMsgID), zap.String("from", it.State))
 			db.SetADItemState(it.ID, db.ADStateDelivered, 0)
 			adNoteProgress(gctx, it.UserID, "", db.ADStateDelivered)
 		case isMsgGone(editErr):

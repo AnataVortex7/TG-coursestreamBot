@@ -982,6 +982,9 @@ func renderStepAsMessage(ctx *ext.Context, u *ext.Update, key string, step cmdSt
 // ═══════════════════════════════════════════════════════════════════════════
 
 func handleMenuNav(ctx *ext.Context, u *ext.Update) error {
+	if gateBlockCallback(ctx, u) {
+		return dispatcher.EndGroups
+	}
 	senderID := u.EffectiveUser().GetID()
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
 
@@ -1015,6 +1018,9 @@ func handleMenuNav(ctx *ext.Context, u *ext.Update) error {
 }
 
 func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
+	if gateBlockCallback(ctx, u) {
+		return dispatcher.EndGroups
+	}
 	key := strings.TrimPrefix(string(u.CallbackQuery.Data), "cmd:")
 	mc, ok := menuRegistry[key]
 	if !ok {

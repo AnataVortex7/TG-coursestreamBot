@@ -55,6 +55,31 @@ func GetDeliveredCache(userID, courseID primitive.ObjectID, messageID int) (*Del
 	return &rec, nil
 }
 
+// GetDeliveredCacheFresh — memory cache (userCacheTTL = 15 min, "not found" सुद्धा) बायपास करून
+// थेट DB मधून वाचतो आणि memory cache refresh करतो. Cache दुसऱ्या process/server ने लिहिली
+// असेल तरी watermarked copy लगेच दिसते (raw -> watermarked replace साठी वापरतो).
+func GetDeliveredCacheFresh(userID, courseID primitive.ObjectID, messageID int) (*DeliveredCache, error) {
+	ctx, cancel := Ctx()
+	defer cancel()
+
+	cacheKey := deliveredCacheKey(userID, courseID, messageID)
+	var rec DeliveredCache
+	err := ColDeliveredCache.FindOne(ctx, bson.M{
+		"user_id":    userID,
+		"course_id":  courseID,
+		"message_id": messageID,
+	}).Decode(&rec)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			deliveredCacheBucket.set(cacheKey, (*DeliveredCache)(nil), userCacheTTL)
+			return nil, nil
+		}
+		return nil, err
+	}
+	deliveredCacheBucket.set(cacheKey, &rec, userCacheTTL)
+	return &rec, nil
+}
+
 // UpsertDeliveredCache — नवीन watermarked/plain copy पाठवल्यावर तिचा log-channel
 // reference save करतो (पुढच्या वेळी fast-path साठी). DB लिहितानाच local
 // cache पण लगेच update करतो — त्याच session मध्ये लगेच पुढचा request असेल
