@@ -445,6 +445,12 @@
               <input type="number" id="ga-months" value="0" min="0" />
               <div class="form-hint">0 = lifetime; 1, 3, 6, 12 = tewdhe mahine</div>
             </div>
+            <div class="form-row">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="ga-send" style="width:auto" /> 📤 Course lagech user chya Telegram var send kara
+              </label>
+              <div class="form-hint">User ne ajun bot var msg kela nasel tar queue hoto — msg takun verify zala ki apoaap jail</div>
+            </div>
             <button class="btn btn-success" style="margin-top:6px" onclick="execGrant()">✅ Grant Access</button>
           </div>
         </div>
@@ -688,6 +694,21 @@
 </div><!-- /layout -->
 
 <!-- ── Confirm Modal ── -->
+<div class="modal-overlay" id="sendCourseModal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-title">📤 Course Send Kara</div>
+    <div id="sc-username" style="font-weight:600;margin:6px 0 12px"></div>
+    <div class="form-row">
+      <label>Course Select Kara <span class="req">*</span></label>
+      <select id="sc-course"><option value="">-- Course select kara --</option></select>
+      <div class="form-hint">User kade ya course cha access asava. User ne ajun bot var msg kela nasel tar queue hoil.</div>
+    </div>
+    <div class="modal-actions" style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      <button class="btn" onclick="closeSendCourseModal()">Cancel</button>
+      <button class="btn btn-success" id="sc-send-btn" onclick="execSendCourse()">📤 Send</button>
+    </div>
+  </div>
+</div>
 <div class="modal-overlay" id="delModal">
   <div class="modal">
     <div class="modal-title" id="modal-title">Confirm kara</div>
@@ -1125,7 +1146,8 @@ async function loadUsers() {
         <td style="text-align:center"><span class="badge" style="background:#eef2ff;color:#4f46e5;font-weight:700">${u.videos_watched||0}</span></td>
         <td style="white-space:nowrap">
           <button class="btn btn-sm" style="background:#0ea5e9;color:#fff;margin-bottom:4px" onclick="openUserDetailModal('${u.id}','${esc(u.full_name||u.username)}')">👁️ Details</button>
-          ${u.is_active?`<button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Disable</button>`:'<span style="font-size:12px;color:#bbb">Disabled</span>'}
+          <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Delete</button>
+          <button class="btn btn-sm" style="background:#16a34a;color:#fff;margin-left:4px" onclick="openSendCourseModal('${u.id}','${esc(u.full_name||u.username)}')">📤 Send Course</button>
           ${u.email?`<button class="btn btn-sm" style="background:#4f46e5;color:#fff;margin-left:4px" onclick="openMsgModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email)}')">📩 Msg</button>`:''}
           <button class="btn btn-warning btn-sm" style="margin-left:4px" onclick="openChangePwdModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email||'')}')">🔑 Password</button>
           ${u.is_active?`<button class="btn btn-info btn-sm" style="margin-left:4px" onclick="loginAsUser('${u.id}','${esc(u.full_name||u.username)}')">👤 Login As</button>`:''}
@@ -1158,13 +1180,50 @@ function populateUserDropdowns() {
 }
 
 function deleteUser(id, name) {
-  openModal('User Disable kara?',`"${name}" la disable kelyavar tyacha sarv sessions delete hotil ani login bund hoil.`,async()=>{
+  openModal('User PERMANENT Delete kara?',
+    `"${name}" cha sarva data DB madhun kayamcha delete hoil (account, access, watch history, sessions, Telegram link, sarv records). `+
+    `Bot ne tyachya Telegram chat madhe pathavlele lectures pan kadhle jatil. He parat yet nahi! `+
+    `User punha bot var msg takun navin registration karu shakto.`,
+    async()=>{
     try {
       const res=await api('/users/'+id,{method:'DELETE'});
-      if (res.ok){ toast('✅ '+name+' disable kela'); loadUsers(); loadStats(); }
-      else{ const d=await res.json(); toast('❌ '+(d.error||'Error'),'error'); }
+      const d=await res.json().catch(()=>({}));
+      if (res.ok){
+        let m='🗑 '+name+' permanently delete kela';
+        if (d.telegram_failed>0) m+=' (⚠️ '+d.telegram_failed+' Telegram messages kadhta aale nahit)';
+        toast(m); loadUsers(); loadStats();
+      } else { toast('❌ '+(d.error||'Error'),'error'); }
     } catch{ toast('❌ Network error','error'); }
+  },'🗑 Permanent Delete');
+}
+
+// ─── Send Course (admin panel -> user cha Telegram) ───────────────────────────
+let scTargetID = '';
+function openSendCourseModal(userId, fullName) {
+  scTargetID = userId;
+  document.getElementById('sc-username').textContent = '👤 ' + fullName;
+  const sel = document.getElementById('sc-course');
+  sel.innerHTML = '<option value="">-- Course select kara --</option>';
+  (cachedCourses||[]).forEach(c=>{
+    const o=document.createElement('option'); o.value=c.id; o.textContent=c.title; sel.appendChild(o);
   });
+  document.getElementById('sc-send-btn').disabled = false;
+  document.getElementById('sendCourseModal').classList.add('open');
+}
+function closeSendCourseModal(){ document.getElementById('sendCourseModal').classList.remove('open'); scTargetID=''; }
+async function execSendCourse() {
+  const courseId = document.getElementById('sc-course').value;
+  if (!courseId) { toast('❌ Course select kara','error'); return; }
+  const btn = document.getElementById('sc-send-btn');
+  btn.disabled = true;
+  try {
+    const res = await api('/users/'+scTargetID+'/send-course',{method:'POST',body:JSON.stringify({course_id:courseId})});
+    const d = await res.json().catch(()=>({}));
+    if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); btn.disabled=false; return; }
+    if (d.queued) toast('⏳ User ne ajun bot var msg kela nahi — to msg takun verify zala ki course apoaap jail ('+d.lectures+' lectures)');
+    else toast('📤 Course pathavna survat zala ('+d.lectures+' lectures) — summary admin chat madhe yeil');
+    closeSendCourseModal();
+  } catch{ toast('❌ Network error','error'); btn.disabled=false; }
 }
 
 // ─── Change Password ──────────────────────────────────────────────────────────
@@ -1941,11 +2000,17 @@ async function execGrant() {
   if (!userId)  { toast('❌ User select kara','error'); return; }
   if (!courseId){ toast('❌ Course select kara','error'); return; }
   try {
-    const res=await api('/access/grant',{method:'POST',body:JSON.stringify({user_id:userId,course_id:courseId,months})});
+    const sendTg=!!document.getElementById('ga-send').checked;
+    const res=await api('/access/grant',{method:'POST',body:JSON.stringify({user_id:userId,course_id:courseId,months,send_to_telegram:sendTg})});
     const d=await res.json();
     if (!res.ok){ toast('❌ '+(d.error||'Error'),'error'); return; }
     const label=months>0?months+' mahinyansathi':'Permanent';
     toast('✅ '+(d.full_name||d.username)+' la '+label+' access dila!');
+    if (sendTg) {
+      if (d.send_error) toast('⚠️ Send nahi zala: '+d.send_error,'error');
+      else if (d.send_queued) toast('⏳ User ne ajun bot var msg kela nahi — verify zalyavar course apoaap jail');
+      else toast('📤 Course pathavna survat zala ('+(d.send_lectures||0)+' lectures)');
+    }
     document.getElementById('ga-user').value='';
     document.getElementById('ga-course').value='';
     document.getElementById('ga-months').value='0';

@@ -147,6 +147,23 @@ func gateIsLinked(chatID int64) (bool, error) {
 	return true, nil
 }
 
+// ForgetUserBotState — admin panel varun user permanent DELETE kelyavar call hoto.
+// Gate cha "linked" positive-cache (10 min) ani baki in-memory state pusto, jenekarun
+// to Telegram user pudhchya message la LAGECH nava (unregistered) mhanun treat hoil
+// ani Verification popup -> number share -> registration flow punha suru hoil.
+func ForgetUserBotState(tgID int64) {
+	if tgID <= 0 {
+		return
+	}
+	gateMu.Lock()
+	delete(gateLinked, tgID)
+	delete(gatePending, tgID)
+	delete(gateLastPopup, tgID)
+	delete(gateLinkReqAt, tgID)
+	gateMu.Unlock()
+	clearSelfRegPending(tgID)
+}
+
 // ─── Main message gate (group -6) ────────────────────────────────────────────
 
 func contactGateMessage(ctx *ext.Context, u *ext.Update) error {

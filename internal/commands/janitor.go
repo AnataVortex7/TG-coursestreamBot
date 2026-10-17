@@ -73,3 +73,33 @@ func runDeleteJanitor(client *gotgproto.Client, log *zap.Logger) {
 		time.Sleep(500 * time.Millisecond)
 	}
 }
+
+// ClearScheduledChatMsgs — user permanent delete karnyaadhi: ya chat madhle schedule-delete
+// (pending_deletes) che ajun baki bot messages lagech chat madhun kadhto (best-effort).
+// Returns: kiti messages delete zhale.
+func ClearScheduledChatMsgs(client *gotgproto.Client, chatID int64) int {
+	if client == nil || client.Self == nil || chatID == 0 {
+		return 0
+	}
+	list, err := db.PendingDeletesForChat(chatID)
+	if err != nil || len(list) == 0 {
+		return 0
+	}
+	gctx := client.CreateContext()
+	deleted := 0
+	for i := 0; i < len(list); i += 100 {
+		end := i + 100
+		if end > len(list) {
+			end = len(list)
+		}
+		ids := make([]int, 0, end-i)
+		for _, d := range list[i:end] {
+			ids = append(ids, d.MessageID)
+		}
+		if err := gctx.DeleteMessages(chatID, ids); err == nil {
+			deleted += len(ids)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	return deleted
+}

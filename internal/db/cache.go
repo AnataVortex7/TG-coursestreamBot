@@ -62,6 +62,18 @@ func (c *ttlCache) clear() {
 	c.mu.Unlock()
 }
 
+// deleteByPrefix — key ha prefix ne suru hotat te sarv entries kadhto
+// (user delete zalyavar tyacha access/delivered cache pusnyasathi).
+func (c *ttlCache) deleteByPrefix(prefix string) {
+	c.mu.Lock()
+	for k := range c.data {
+		if len(k) >= len(prefix) && k[:len(prefix)] == prefix {
+			delete(c.data, k)
+		}
+	}
+	c.mu.Unlock()
+}
+
 // ── Cache buckets ─────────────────────────────────────────────────────────────
 // Static/rarely-changing data — courses, folders-per-course, files-per-course, settings.
 var (
@@ -97,4 +109,12 @@ func invalidateSettingsCache() {
 
 func invalidateAccessCache(userID, courseID primitive.ObjectID) {
 	accessCache.delete(userID.Hex() + ":" + courseID.Hex())
+}
+
+// invalidateUserCaches — user permanent delete zalyavar tyacha sarv in-memory
+// access / delivered-cache entries pusto (15 min stale access rahu naye).
+func invalidateUserCaches(userID primitive.ObjectID) {
+	prefix := userID.Hex() + ":"
+	accessCache.deleteByPrefix(prefix)
+	deliveredCacheBucket.deleteByPrefix(prefix)
 }

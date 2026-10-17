@@ -74,6 +74,7 @@ func runApp(cmd *cobra.Command, args []string) {
 	go commands.StartJanitor(janitorCtx, mainBot, log)
 	go commands.StartExpiryCleanup(janitorCtx, mainBot, log)
 	go commands.StartAutoDelivery(janitorCtx, mainBot, log)
+	go commands.StartPendingCourseSend(janitorCtx, mainBot, log) // admin panel varun queue kelele course sends (user link zalyavar)
 	go db.StartTGIDSweeper(janitorCtx, []int64(config.ValueOf.AllowedUsers), log) // old bot ला users दिसू नयेत
 
 	workers, err := bot.StartWorkers(log)

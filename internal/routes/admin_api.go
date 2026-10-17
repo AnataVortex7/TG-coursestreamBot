@@ -323,6 +323,7 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	api.GET("/users", adminListUsers)
 	api.POST("/users", adminAddUser)
 	api.DELETE("/users/:id", adminDeleteUser)
+	api.POST("/users/:id/send-course", adminSendCourseToUser)
 
 	// Courses
 	api.GET("/courses", adminListCourses)
@@ -578,18 +579,106 @@ func adminAddUser(c *gin.Context) {
 	c.JSON(http.StatusOK, user)
 }
 
+// DELETE /api/admin/users/:id
+//
+// PERMANENT delete — "disable" nahi. User cha sarva data DB madhun kayamcha jato:
+// users, access, sessions, watch history, delivered cache, sent-lecture tracking,
+// auto-delivery state, offline tokens, guard, messages, OTP/login-attempt/pending
+// registration records, relay map, pending course sends ... (db.PurgeUserCompletely).
+//
+// Tyaaadhi (best-effort) bot ne tyachya Telegram chat madhe pathavlele lectures
+// delete karto. Nantar bot cha in-memory "linked" cache pusto, mhanje user parat bot
+// var msg takla ki tyala nava (unregistered) user mhanun Verification popup yeto.
 func adminDeleteUser(c *gin.Context) {
 	id, err := primitive.ObjectIDFromHex(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
 		return
 	}
-	if err := db.SetUserActive(id, false); err != nil {
+	user, err := db.GetUserByID(id)
+	if err != nil || user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User sapadla nahi (aadhich delete zala asel)"})
+		return
+	}
+
+	// Admin / userbot-access account chukun delete hou naye
+	if db.IsProtectedUserDoc(id) ||
+		(user.TelegramID != 0 && utils.Contains(config.ValueOf.AllowedUsers, user.TelegramID)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": db.ErrProtectedUser.Error()})
+		return
+	}
+
+	// 1) Telegram chat madhle bot-sent lectures kadhun taka (best-effort, max ~25s).
+	//    User doc aajun DB madhe aahe mhanun ClearTrackedMsgs tyacha chat ID shodhu shakto.
+	tgDeleted, tgFailed := 0, 0
+	if user.TelegramID != 0 && commands.MainBotClient != nil && commands.MainBotClient.Self != nil {
+		type clr struct{ deleted, failed int }
+		ch := make(chan clr, 1)
+		go func() {
+			d, f, _ := commands.ClearTrackedMsgs(commands.MainBotClient, user.ID, primitive.NilObjectID, utils.Logger)
+			d += commands.ClearScheduledChatMsgs(commands.MainBotClient, user.TelegramID) // /dl che 48h schedule messages
+			ch <- clr{d, f}
+		}()
+		select {
+		case r := <-ch:
+			tgDeleted, tgFailed = r.deleted, r.failed
+		case <-time.After(25 * time.Second):
+			golog.Printf("[admin] delete user %s: Telegram message cleanup timeout — DB purge pudhe chalu", id.Hex())
+		}
+	}
+
+	// 2) DB madhun sarva data permanent delete
+	counts, err := db.PurgeUserCompletely(user)
+	if err != nil {
+		golog.Printf("[admin] delete user %s FAILED: %v", id.Hex(), err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	_ = db.DeleteAllSessionsForUser(id)
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+
+	// 3) Bot cha in-memory state pusa (gate "linked" cache etc.)
+	if user.TelegramID != 0 {
+		commands.ForgetUserBotState(user.TelegramID)
+	}
+
+	golog.Printf("[admin] user %s permanently deleted — db: %v, tg msgs deleted=%d failed=%d",
+		id.Hex(), counts, tgDeleted, tgFailed)
+	c.JSON(http.StatusOK, gin.H{
+		"ok":               true,
+		"deleted":          counts,
+		"telegram_deleted": tgDeleted,
+		"telegram_failed":  tgFailed,
+	})
+}
+
+// POST /api/admin/users/:id/send-course   body: {"course_id":"..."}
+//
+// User la tyacha course Telegram var pathavto. User ne ajun bot var msg kela nasel /
+// link nasel tar queue hoto ani user ne bot var msg takun Verification (number share)
+// purna kela ki apoaap jato (commands.StartPendingCourseSend).
+func adminSendCourseToUser(c *gin.Context) {
+	userID, err := primitive.ObjectIDFromHex(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	var req struct {
+		CourseID string `json:"course_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.CourseID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Course select kara"})
+		return
+	}
+	courseID, err := primitive.ObjectIDFromHex(req.CourseID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	res, err := commands.SendCourseToUser(userID, courseID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "queued": res.Queued, "lectures": res.Lectures})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1048,6 +1137,9 @@ func adminGrantAccess(c *gin.Context) {
 		UserID   string `json:"user_id"`
 		CourseID string `json:"course_id"`
 		Months   int    `json:"months"` // 0 = permanent
+		// SendToTelegram — true asel tar grant nantar course lagech user chya Telegram var
+		// pathavto (user ne ajun bot var msg kela nasel tar queue hoto).
+		SendToTelegram bool `json:"send_to_telegram"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
@@ -1103,7 +1195,16 @@ func adminGrantAccess(c *gin.Context) {
 		}
 	}()
 
-	c.JSON(http.StatusOK, gin.H{"ok": true, "username": user.Username, "full_name": user.FullName})
+	resp := gin.H{"ok": true, "username": user.Username, "full_name": user.FullName}
+	if req.SendToTelegram {
+		if res, sErr := commands.SendCourseToUser(userID, courseID); sErr != nil {
+			resp["send_error"] = sErr.Error()
+		} else {
+			resp["send_queued"] = res.Queued
+			resp["send_lectures"] = res.Lectures
+		}
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func adminRevokeAccess(c *gin.Context) {

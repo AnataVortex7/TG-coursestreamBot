@@ -43,6 +43,9 @@ func MaybePromptAutoDelivery(ctx *ext.Context, chatID int64) {
 	if blocked, _, _ := db.IsUserBlocked(user.ID); blocked {
 		return
 	}
+	if db.HasPendingCourseSend(user.ID) {
+		return // admin ne course send queue kela aahe -- worker swatach pathavel, popup nako (duplicate tala)
+	}
 	accesses, err := db.ActiveAccessForUser(user.ID)
 	if err != nil || len(accesses) == 0 {
 		return // pathavayla kahi nahi
