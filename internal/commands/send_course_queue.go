@@ -78,8 +78,14 @@ type SendCourseResult struct {
 	Lectures int  `json:"lectures"` // course madhle ekun lectures
 }
 
-// SendCourseToUser — admin panel varun call hoto (routes/admin_api.go).
+// SendCourseToUser — admin panel varun call hoto (routes/admin_api.go). Sarv lectures.
 func SendCourseToUser(userID, courseID primitive.ObjectID) (*SendCourseResult, error) {
+	return SendCourseRange(userID, courseID, 0, 0)
+}
+
+// SendCourseRange — admin panel + bot cha /sendcourse dogh vaparatat.
+// from/to = lecture kramank (1 pasun, inclusive). 0/0 = sarv lectures.
+func SendCourseRange(userID, courseID primitive.ObjectID, from, to int) (*SendCourseResult, error) {
 	user, err := db.GetUserByID(userID)
 	if err != nil || user == nil {
 		return nil, errors.New("User sapadla nahi")
@@ -98,6 +104,19 @@ func SendCourseToUser(userID, courseID primitive.ObjectID) (*SendCourseResult, e
 	if len(files) == 0 {
 		return nil, errors.New("Ya course madhe kahich lectures nahit")
 	}
+	if from == 0 {
+		from = 1
+	}
+	if to == 0 {
+		to = len(files)
+	}
+	if from < 1 || from > len(files) {
+		return nil, fmt.Errorf("`from` 1 te %d daramyan hava", len(files))
+	}
+	if to < from || to > len(files) {
+		return nil, fmt.Errorf("`to` %d te %d daramyan hava", from, len(files))
+	}
+	count := to - from + 1
 	botClient := MainBotClient
 	if botClient == nil || botClient.Self == nil {
 		return nil, errors.New("Bot client chalu nahi")
@@ -105,10 +124,10 @@ func SendCourseToUser(userID, courseID primitive.ObjectID) (*SendCourseResult, e
 
 	// User ne ajun bot var msg kela nahi / link nahi → queue
 	if !userReachable(botClient, user) {
-		if err := db.QueuePendingCourseSend(userID, courseID); err != nil {
+		if err := db.QueuePendingCourseSend(userID, courseID, from, to); err != nil {
 			return nil, err
 		}
-		return &SendCourseResult{Queued: true, Lectures: len(files)}, nil
+		return &SendCourseResult{Queued: true, Lectures: count}, nil
 	}
 
 	key := pcsKey(userID, courseID)
@@ -117,7 +136,7 @@ func SendCourseToUser(userID, courseID primitive.ObjectID) (*SendCourseResult, e
 	}
 	go func() {
 		defer pcsRelease(key)
-		sent, failed := runCourseSend(botClient, user, course, courseID)
+		sent, failed := runCourseSend(botClient, user, course, courseID, from, to)
 		msg := fmt.Sprintf("✅ Admin panel: %s la '%s' cha %d lectures pathavle.", user.FullName, course.Title, sent)
 		if failed > 0 {
 			msg += fmt.Sprintf("\n⚠️ %d ayashasvi — panel varun parat Send kara (cache mule aadhiche lagech jatil).", failed)
@@ -126,15 +145,25 @@ func SendCourseToUser(userID, courseID primitive.ObjectID) (*SendCourseResult, e
 			NotifyAdmins(msg)
 		}
 	}()
-	return &SendCourseResult{Queued: false, Lectures: len(files)}, nil
+	return &SendCourseResult{Queued: false, Lectures: count}, nil
 }
 
 // runCourseSend — course che sarv lectures user chya Telegram chat madhe pathavto (blocking).
-func runCourseSend(botClient *gotgproto.Client, user *db.User, course *db.Course, courseID primitive.ObjectID) (sent, failed int) {
+func runCourseSend(botClient *gotgproto.Client, user *db.User, course *db.Course, courseID primitive.ObjectID, from, to int) (sent, failed int) {
 	files, err := db.FilesForCourse(courseID)
 	if err != nil || len(files) == 0 {
 		return 0, 0
 	}
+	if from < 1 {
+		from = 1
+	}
+	if to < from || to > len(files) {
+		to = len(files)
+	}
+	if from > len(files) {
+		return 0, 0
+	}
+	files = files[from-1 : to]
 	gctx := botClient.CreateContext()
 	bg := context.Background()
 
@@ -243,7 +272,7 @@ func pcsTick(ctx context.Context, client *gotgproto.Client, log *zap.Logger) {
 		if !pcsAcquire(key) {
 			continue
 		}
-		sent, failed := runCourseSend(client, user, course, p.CourseID)
+		sent, failed := runCourseSend(client, user, course, p.CourseID, p.From, p.To)
 		pcsRelease(key)
 
 		if failed == 0 {

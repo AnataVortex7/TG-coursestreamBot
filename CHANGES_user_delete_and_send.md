@@ -30,3 +30,7 @@
 ## 4. Bot /deluser + menu "Delete User" pan permanent
 `internal/commands/user_delete.go` — shared `DeleteUserPermanently` (admin panel + bot dogh vaparatat).
 `/deluser <mobile|email|username|tgid> DELETE`; menu madhe confirm step (DELETE lihā).
+
+## 5. Bot /sendcourse = admin panel logic
+`/sendcourse <mobile|email|tgid> <courseID> [from] [to]` ata `SendCourseRange` vaparto (queue + raw-then-replace).
+Queue madhe from/to pan save hotat.

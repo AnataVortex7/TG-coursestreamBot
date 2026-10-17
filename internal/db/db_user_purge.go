@@ -229,6 +229,8 @@ type PendingCourseSend struct {
 	ID        primitive.ObjectID `bson:"_id,omitempty"`
 	UserID    primitive.ObjectID `bson:"user_id"`
 	CourseID  primitive.ObjectID `bson:"course_id"`
+	From      int                `bson:"from"` // 1-based inclusive; 0 = suruvat pasun
+	To        int                `bson:"to"`   // 1-based inclusive; 0 = shevtparyant
 	Attempts  int                `bson:"attempts"`
 	CreatedAt time.Time          `bson:"created_at"`
 }
@@ -238,13 +240,13 @@ func colPendingCourseSends() *mongo.Collection {
 }
 
 // QueuePendingCourseSend — (user, course) pair ekach velach; punha call kela tar refresh.
-func QueuePendingCourseSend(userID, courseID primitive.ObjectID) error {
+func QueuePendingCourseSend(userID, courseID primitive.ObjectID, from, to int) error {
 	ctx, cancel := Ctx()
 	defer cancel()
 	_, err := colPendingCourseSends().UpdateOne(ctx,
 		bson.M{"user_id": userID, "course_id": courseID},
 		bson.M{
-			"$set":         bson.M{"attempts": 0},
+			"$set":         bson.M{"attempts": 0, "from": from, "to": to},
 			"$setOnInsert": bson.M{"created_at": time.Now()},
 		},
 		options.Update().SetUpsert(true),
