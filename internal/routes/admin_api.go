@@ -601,52 +601,21 @@ func adminDeleteUser(c *gin.Context) {
 		return
 	}
 
-	// Admin / userbot-access account chukun delete hou naye
-	if db.IsProtectedUserDoc(id) ||
-		(user.TelegramID != 0 && utils.Contains(config.ValueOf.AllowedUsers, user.TelegramID)) {
-		c.JSON(http.StatusForbidden, gin.H{"error": db.ErrProtectedUser.Error()})
-		return
-	}
-
-	// 1) Telegram chat madhle bot-sent lectures kadhun taka (best-effort, max ~25s).
-	//    User doc aajun DB madhe aahe mhanun ClearTrackedMsgs tyacha chat ID shodhu shakto.
-	tgDeleted, tgFailed := 0, 0
-	if user.TelegramID != 0 && commands.MainBotClient != nil && commands.MainBotClient.Self != nil {
-		type clr struct{ deleted, failed int }
-		ch := make(chan clr, 1)
-		go func() {
-			d, f, _ := commands.ClearTrackedMsgs(commands.MainBotClient, user.ID, primitive.NilObjectID, utils.Logger)
-			d += commands.ClearScheduledChatMsgs(commands.MainBotClient, user.TelegramID) // /dl che 48h schedule messages
-			ch <- clr{d, f}
-		}()
-		select {
-		case r := <-ch:
-			tgDeleted, tgFailed = r.deleted, r.failed
-		case <-time.After(25 * time.Second):
-			golog.Printf("[admin] delete user %s: Telegram message cleanup timeout — DB purge pudhe chalu", id.Hex())
-		}
-	}
-
-	// 2) DB madhun sarva data permanent delete
-	counts, err := db.PurgeUserCompletely(user)
+	res, err := commands.DeleteUserPermanently(user)
 	if err != nil {
+		status := http.StatusInternalServerError
+		if err == db.ErrProtectedUser {
+			status = http.StatusForbidden
+		}
 		golog.Printf("[admin] delete user %s FAILED: %v", id.Hex(), err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
-
-	// 3) Bot cha in-memory state pusa (gate "linked" cache etc.)
-	if user.TelegramID != 0 {
-		commands.ForgetUserBotState(user.TelegramID)
-	}
-
-	golog.Printf("[admin] user %s permanently deleted — db: %v, tg msgs deleted=%d failed=%d",
-		id.Hex(), counts, tgDeleted, tgFailed)
 	c.JSON(http.StatusOK, gin.H{
 		"ok":               true,
-		"deleted":          counts,
-		"telegram_deleted": tgDeleted,
-		"telegram_failed":  tgFailed,
+		"deleted":          res.DB,
+		"telegram_deleted": res.TelegramDeleted,
+		"telegram_failed":  res.TelegramFailed,
 	})
 }
 

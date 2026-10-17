@@ -199,23 +199,44 @@ func cmdAddUser(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
+// /deluser <mobile|email|username> DELETE   — user PERMANENT delete (DB madhun sarva data).
+// Confirm shabd "DELETE" lagto (chukun delete hou naye mhanun).
 func cmdDelUser(ctx *ext.Context, u *ext.Update) error {
 	a := args(u)
 	if len(a) < 1 {
-		reply(ctx, u, "Usage: /deluser <username>")
+		reply(ctx, u, "Usage: /deluser <mobile|email|username> DELETE\n\n⚠️ He user cha sarva data DB madhun KAYAMCHA delete karto.")
+		return dispatcher.EndGroups
+	}
+	if len(a) < 2 || !strings.EqualFold(a[len(a)-1], "DELETE") {
+		reply(ctx, u, "⚠️ He PERMANENT delete aahe (parat yet nahi).\n\nConfirm karayla shevti DELETE lihā:\n/deluser "+a[0]+" DELETE")
 		return dispatcher.EndGroups
 	}
 
-	user, err := db.GetUserByUsername(strings.ToLower(a[0]))
+	user, err := db.GetUserByMobileOrEmail(a[0])
+	if (err != nil || user == nil) && strings.ToLower(a[0]) != a[0] {
+		user, err = db.GetUserByMobileOrEmail(strings.ToLower(a[0]))
+	}
+	if (err != nil || user == nil) {
+		if tgID, pErr := strconv.ParseInt(a[0], 10, 64); pErr == nil {
+			user, err = db.GetUserByTelegramID(tgID)
+		}
+	}
 	if err != nil || user == nil {
 		reply(ctx, u, "❌ User not found.")
 		return dispatcher.EndGroups
 	}
 
-	_ = db.SetUserActive(user.ID, false)
-	_ = db.DeleteAllSessionsForUser(user.ID)
-
-	reply(ctx, u, fmt.Sprintf("✅ User @%s disabled and sessions killed.", user.Username))
+	name := user.FullName
+	if name == "" {
+		name = user.Username
+	}
+	res, dErr := DeleteUserPermanently(user)
+	if dErr != nil {
+		reply(ctx, u, "❌ Delete zala nahi: "+dErr.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u, fmt.Sprintf("🗑 %s permanently delete kela.\nDB records: %d collections madhun kadhle.\nTelegram messages kadhle: %d (ayashasvi: %d)",
+		name, len(res.DB), res.TelegramDeleted, res.TelegramFailed))
 	return dispatcher.EndGroups
 }
 
@@ -1154,7 +1175,7 @@ func cmdHelp(ctx *ext.Context, u *ext.Update) error {
 
 👤 *Users*
 /adduser \<mobile\> \<email\> \<name\> — नवीन user add करा
-/deluser \<mobile\_or\_email\> — user delete करा
+/deluser \<mobile\_or\_email\> DELETE — user PERMANENT delete करा (DB मधून कायमचा)
 /listusers — सर्व users list
 /userinfo \<mobile\_or\_email\> — user चा पूर्ण info
 /settg \<mobile\_or\_email\> \<telegram\_id\> — Telegram ID link करा

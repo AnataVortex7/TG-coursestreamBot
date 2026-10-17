@@ -26,3 +26,7 @@
 `runCourseSend` ata `deliverLectureCoreOpt(..., cachedOnly=true)` vaprto: cache nasel tar original copy lagech
 (ADStateRaw), nantar predownload ne LOG cache bharla ki `adResolvePending` message edit karto.
 (Requires AUTO_DELIVERY=true.)
+
+## 4. Bot /deluser + menu "Delete User" pan permanent
+`internal/commands/user_delete.go` — shared `DeleteUserPermanently` (admin panel + bot dogh vaparatat).
+`/deluser <mobile|email|username|tgid> DELETE`; menu madhe confirm step (DELETE lihā).

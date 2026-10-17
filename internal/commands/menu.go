@@ -645,6 +645,7 @@ func init() {
 	}})
 	registerCmd(menuCmd{key: "deluser", label: "🗑 Delete User", kind: kindFlow, fn: cmdDelUser, steps: []cmdStep{
 		selectStep("🗑 Delete User — निवडा:", listUsersItems),
+		inputStep("⚠️ PERMANENT delete — user cha sarva data DB madhun kayamcha jail, parat yet nahi!\n\nConfirm karayla DELETE lihā:"),
 	}})
 
 	// ── Course ──
