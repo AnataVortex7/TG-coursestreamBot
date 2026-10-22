@@ -3619,7 +3619,12 @@ func prepareMessage(
 	// वरच download+reupload कर (watermark शिवाय — main server कडे FFmpeg
 	// drawtext capability नाहीये, फक्त Colab worker कडे आहे).
 	colabConfigured := koyebURLCheck != "" && isVideoFile(file)
-	colabOnlineNow := colabConfigured && wmqueue.IsColabOnline()
+	// [TOGGLES] Admin panel मधले दोन switches — Colab online असला तरी
+	// userbotdl साठी (किंवा फक्त non-watermark jobs साठी) बंद करता येतो; मग
+	// download+upload main server वरच होतो (जास्त threads → जास्त speed).
+	colabDisabledUserbotDL := db.GetSettingBool(db.SettingColabDisableUserbotDL, false)
+	colabDisabledNonWM := !wmOk && db.GetSettingBool(db.SettingColabDisableNonWM, false)
+	colabOnlineNow := colabConfigured && !colabDisabledUserbotDL && !colabDisabledNonWM && wmqueue.IsColabOnline()
 
 	if colabOnlineNow {
 		// Sarv videos Colab kade jातात — watermark असो वा नसो.
@@ -3712,7 +3717,7 @@ func prepareMessage(
 			// reupload) आता main server वरच (CPU) चालवतो. Feature मध्ये काहीच
 			// फरक नाही, फक्त encoding location Colab ऐवजी main server.
 			editProgress(fmt.Sprintf(
-				"⚠️ Watermark server offline — applying watermark on main server\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
+				"⚠️ Colab off/offline — applying watermark on main server\n📄 `%s`\n💾 %s\n📌 Msg: `%d`",
 				file.FileName, formatSize(file.FileSize), msgID,
 			))
 			var tmpPath string

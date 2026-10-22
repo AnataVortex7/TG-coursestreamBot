@@ -1490,6 +1490,17 @@ const SettingRegistrationOpen = "registration_open"
 // download/FFmpeg/re-upload kahich hot nahi, jalad पण unprotected.
 const SettingOfflineWatermarkEnabled = "offline_watermark_enabled"
 
+// Colab worker selective-disable toggles (admin panel → Workers).
+//   - SettingColabDisableUserbotDL: true = /userbotdl (admin userbot flow) चे
+//     सगळे jobs Colab ऐवजी main server वरच process + upload होतील.
+//   - SettingColabDisableNonWM: true = watermark नसलेले (non-watermark) jobs
+//     Colab ला न जाता main server वरच process होतील. Watermark jobs Colab वरच.
+// Student watermark delivery (deliverVideoToUser) वर याचा परिणाम होत नाही.
+const (
+	SettingColabDisableUserbotDL = "colab_disable_userbotdl"
+	SettingColabDisableNonWM     = "colab_disable_non_wm"
+)
+
 // GetSettingBool — key साठी bool value मिळवतो. Key नसेल तर defaultVal return करतो.
 func GetSettingBool(key string, defaultVal bool) bool {
 	if v, ok := settingsCache.get(key); ok {

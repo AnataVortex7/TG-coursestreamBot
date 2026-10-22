@@ -379,6 +379,45 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// ── Settings ─────────────────────────────────────────────────────────
 	api.GET("/settings/telegram-contact", adminGetTelegramContact)
 	api.POST("/settings/telegram-contact", adminSetTelegramContact)
+
+	// ── Colab selective disable toggles ─────────────────────────────────
+	api.GET("/settings/colab", adminGetColabToggles)
+	api.POST("/settings/colab", adminSetColabToggles)
+}
+
+// GET /api/admin/settings/colab
+func adminGetColabToggles(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"ok":              true,
+		"disable_userbot": db.GetSettingBool(db.SettingColabDisableUserbotDL, false),
+		"disable_non_wm":  db.GetSettingBool(db.SettingColabDisableNonWM, false),
+	})
+}
+
+// POST /api/admin/settings/colab  { "disable_userbot": bool?, "disable_non_wm": bool? }
+// फक्त पाठवलेली fields बदलतात.
+func adminSetColabToggles(c *gin.Context) {
+	var req struct {
+		DisableUserbot *bool `json:"disable_userbot"`
+		DisableNonWM   *bool `json:"disable_non_wm"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+	if req.DisableUserbot != nil {
+		if err := db.SetSettingBool(db.SettingColabDisableUserbotDL, *req.DisableUserbot); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	if req.DisableNonWM != nil {
+		if err := db.SetSettingBool(db.SettingColabDisableNonWM, *req.DisableNonWM); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	adminGetColabToggles(c)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -639,6 +639,27 @@
         <div class="page-title">Workers</div>
         <div class="page-sub">Streaming workers — sleep/wake management</div>
       </div>
+      <!-- COLAB TOGGLES -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head">
+          <div class="card-title">☁️ Colab Worker Control</div>
+          <button class="btn btn-primary btn-sm" onclick="loadColabToggles()">🔄 Refresh</button>
+        </div>
+        <div class="card-body">
+          <label style="display:flex;align-items:flex-start;gap:12px;padding:10px 0;cursor:pointer;border-bottom:1px solid #eee">
+            <input type="checkbox" id="colab-dis-userbot" onchange="setColabToggle('disable_userbot',this)" style="width:18px;height:18px;margin-top:2px"/>
+            <span><b>Disable Colab for Userbot DL</b><br>
+              <span style="font-size:12px;color:#888">ON = /userbotdl चे सगळे files main server वरच process + upload होतील (Colab वापरला जाणार नाही).</span></span>
+          </label>
+          <label style="display:flex;align-items:flex-start;gap:12px;padding:10px 0;cursor:pointer">
+            <input type="checkbox" id="colab-dis-nonwm" onchange="setColabToggle('disable_non_wm',this)" style="width:18px;height:18px;margin-top:2px"/>
+            <span><b>Disable Colab for all Non-Watermark jobs</b><br>
+              <span style="font-size:12px;color:#888">ON = watermark नसलेले jobs main server वर; watermark jobs Colab वरच राहतील.</span></span>
+          </label>
+          <div style="font-size:12px;color:#888;margin-top:6px">ℹ️ Student watermark delivery वर याचा परिणाम होत नाही. बदल सर्व replicas वर ~2 मिनिटांत लागू होतो.</div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-head">
           <div class="card-title">➕ Add Worker</div>
@@ -985,7 +1006,7 @@ function goto(name, el) {
   if (name==='access')      { loadUsers(); loadCourses(); }
   if (name==='tglogin')     loadTGStatus();
   if (name==='broadcast')   { loadAnnouncements(); loadCoursesForBroadcast(); }
-  if (name==='workers')     { loadWorkers(); loadLiveStreams(); startLiveStreamRefresh(); }
+  if (name==='workers')     { loadColabToggles(); loadWorkers(); loadLiveStreams(); startLiveStreamRefresh(); }
   else stopLiveStreamRefresh();
   if (name==='urlmonitor')  { loadURLMonitor(); startUMAutoRefresh(); }
   else stopUMAutoRefresh();
@@ -2412,6 +2433,30 @@ function tgResetLogin() {
 // WORKERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
+
+async function loadColabToggles() {
+  try {
+    const d = await (await api('/settings/colab')).json();
+    if (!d.ok) return;
+    document.getElementById('colab-dis-userbot').checked = !!d.disable_userbot;
+    document.getElementById('colab-dis-nonwm').checked = !!d.disable_non_wm;
+  } catch (e) { toast('Colab settings load failed', 'error'); }
+}
+
+async function setColabToggle(key, el) {
+  const val = el.checked;
+  el.disabled = true;
+  try {
+    const res = await api('/settings/colab', { method: 'POST', body: JSON.stringify({ [key]: val }) });
+    const d = await res.json();
+    if (!res.ok || !d.ok) throw new Error(d.error || 'failed');
+    toast(val ? '⛔ Colab disabled' : '✅ Colab enabled');
+  } catch (e) {
+    el.checked = !val;
+    toast('Save failed: ' + e.message, 'error');
+  }
+  el.disabled = false;
+}
 
 async function loadWorkers() {
   const box = document.getElementById('workers-list');
