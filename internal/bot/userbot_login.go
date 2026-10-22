@@ -115,7 +115,7 @@ func (u *UserBotStruct) SendCode(phone string, apiID int, apiHash string) (strin
 	}
 	loginMu.Unlock()
 
-	const maxAttempts = 2
+	const maxAttempts = 3
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		hash, err := u.sendCodeAttempt(phone, apiID, apiHash)
@@ -125,7 +125,9 @@ func (u *UserBotStruct) SendCode(phone string, apiID int, apiHash string) (strin
 		lastErr = err
 		// फक्त connection timeout वर retry. Telegram ने दिलेले error (PHONE_NUMBER_INVALID,
 		// API_ID_INVALID, FLOOD_WAIT...) retry केल्याने बदलत नाहीत, उलट flood वाढतो.
-		if !strings.Contains(err.Error(), "connection timeout") {
+		es := err.Error()
+		if !strings.Contains(es, "connection timeout") && !strings.Contains(es, "migrate to dc") &&
+			!strings.Contains(es, "context deadline exceeded") && !strings.Contains(es, "i/o timeout") {
 			return "", err
 		}
 		if attempt < maxAttempts {
@@ -141,6 +143,11 @@ func (u *UserBotStruct) sendCodeAttempt(phone string, apiID int, apiHash string)
 
 	tgClient := telegram.NewClient(apiID, apiHash, telegram.Options{
 		SessionStorage: storage,
+		// Phone cha home DC vegla asel tar gotd "migrate to dc" karto; default
+		// timeout (~15s) slow hosting var (HF/Koyeb) madhe sampato => "context deadline exceeded".
+		MigrationTimeout: 90 * time.Second,
+		DialTimeout:      30 * time.Second,
+		ExchangeTimeout:  60 * time.Second,
 		Device: telegram.DeviceConfig{
 			DeviceModel:   "Pyrogram",
 			SystemVersion: runtime.GOOS,
@@ -306,7 +313,7 @@ func (u *UserBotStruct) sendCodeAttempt(phone string, apiID int, apiHash string)
 	case err := <-errCh:
 		cancel()
 		return "", err
-	case <-time.After(60 * time.Second):
+	case <-time.After(120 * time.Second):
 		cancel()
 		return "", errors.New("Telegram connection timeout — API_ID/API_HASH check kara")
 	}
