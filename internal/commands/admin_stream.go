@@ -1442,22 +1442,31 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 	// access hash वापरतो, (3) तरीही न झाल्यास error देतो (resumeUserbotDLJob ३० सेकंदांनी
 	// परत प्रयत्न करतो) — bot chat मध्ये fallback करत नाही.
 	var sendChannelPeer *tg.InputPeerChannel
+	sendChannelFromBot := false // hash फक्त bot ने resolve केला असेल तरच save करतो (hash account-specific असतो)
 	scID, hasSC := getSendChannelIDForUser(senderID)
 	if resumeJob != nil && resumeJob.SendChannelID != 0 {
 		scID, hasSC = resumeJob.SendChannelID, true
 	}
 	if hasSC && scID != 0 {
-		sendChannelPeer = resolveChannelInputPeer(ctx, botClient, scID)
-		if sendChannelPeer == nil && resumeJob != nil && resumeJob.SendChannelHash != 0 {
+		// (1) Resume: DB मध्ये save केलेला hash आधी — network call शिवाय पहिल्याच प्रयत्नात यशस्वी.
+		if resumeJob != nil && resumeJob.SendChannelHash != 0 {
 			rawID := scID
 			if rawID < 0 {
 				rawID = -rawID - 1000000000000
 			}
 			sendChannelPeer = &tg.InputPeerChannel{ChannelID: rawID, AccessHash: resumeJob.SendChannelHash}
+			sendChannelFromBot = true
 		}
+		// (2) Hash नसेल/जुना job असेल तर bot वरून resolve
+		if sendChannelPeer == nil {
+			sendChannelPeer = resolveChannelInputPeer(ctx, botClient, scID)
+			sendChannelFromBot = sendChannelPeer != nil
+		}
+		// (3) शेवटी userbot वरून (हा hash bot साठी valid नसतो, म्हणून save करत नाही)
 		if sendChannelPeer == nil && userbotClient != nil {
 			sendChannelPeer = resolveChannelInputPeer(ctx, userbotClient, scID)
 		}
+		// (4) Resume मध्ये bot chat मध्ये fallback नाही — error → resumeUserbotDLJob ३० सेकंदांनी retry
 		if sendChannelPeer == nil && resumeJob != nil {
 			return fmt.Errorf("❌ Send channel (%d) resolve होत नाही — bot chat मध्ये पाठवत नाही, परत प्रयत्न करतो", scID)
 		}
@@ -1549,7 +1558,7 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 				return 0
 			}(),
 			SendChannelHash: func() int64 {
-				if sendChannelPeer != nil {
+				if sendChannelPeer != nil && sendChannelFromBot {
 					return sendChannelPeer.AccessHash
 				}
 				return 0
