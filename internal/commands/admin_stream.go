@@ -608,21 +608,21 @@ func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// ── /setreplace [line:] old => new  (per-user, DB मध्ये save) ─────────────────
+// ── /setreplace [line:] old => new  (admin → GLOBAL, सगळ्यांसाठी; DB मध्ये save) ─────
 
 func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 	userID := u.EffectiveUser().GetID()
 	spec := commandRest(u.EffectiveMessage.Text)
 	if spec == "" {
 		reply(ctx, u,
-			"📝 *Usage:* `/setreplace old => new`\n\n"+
+			"📝 *Usage:* `/setreplace old => new`  (किंवा `old=new`)\n\n"+
 				"Examples:\n"+
-				"`/setreplace DOWNLOAD by ROCKSTAR 𓆩𓂍𓆪 => Downloaded by MyChannel`\n"+
-				"`/setreplace hello=नमस्ते`\n"+
+				"`/setreplace DOWNLOAD by ROCKSTAR 𓆩𓂍𓆪=𝐆𝐄𝐓 𝐈𝐓 𝐇𝐄𝐑𝐄 𝐛𝐲 𓆩𓂍𓆪`\n"+
+				"`/setreplace hello=नमस्ते`  (एकच शब्द)\n"+
 				"`/setreplace @oldchannel =>` (रिकामा = काढून टाका)\n"+
 				"`/setreplace line: ROCKSTAR => 📚 My Course` (ROCKSTAR असलेली *पूर्ण ओळ* replace)\n\n"+
 				"✅ Fancy fonts (𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃, ＤＯＷＮＬＯＡＤ, ᴅᴏᴡɴʟᴏᴀᴅ), CAPS/small, जास्त spaces, symbols आणि मराठी — सगळं match होतं.\n"+
-				"हे rules फक्त *तुमच्या* userbot downloads ना लागू होतात.\n"+
+				"🌐 Admin चे rules *सगळ्या users* च्या downloads ना लागू होतात.\n"+
 				"बघायला: /listreplace")
 		return dispatcher.EndGroups
 	}
@@ -631,21 +631,8 @@ func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ Invalid format: "+err.Error()+"\nExample: `/setreplace old => new`")
 		return dispatcher.EndGroups
 	}
-	rules := db.GetReplaceRules(userID)
-	updated := false
-	out := make([]db.ReplaceRule, 0, len(rules)+1)
-	for _, r := range rules {
-		if string(foldPattern(r.Old)) == string(foldPattern(rule.Old)) && r.Line == rule.Line {
-			out = append(out, rule) // same rule → update
-			updated = true
-		} else {
-			out = append(out, r)
-		}
-	}
-	if !updated {
-		out = append(out, rule)
-	}
-	if err := db.SaveReplaceRules(userID, out); err != nil {
+	updated, total, err := addReplaceRuleFor(userID, rule)
+	if err != nil {
 		reply(ctx, u, "❌ Save failed: "+err.Error())
 		return dispatcher.EndGroups
 	}
@@ -653,23 +640,23 @@ func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 	if updated {
 		verb = "updated"
 	}
-	reply(ctx, u, fmt.Sprintf("✅ Replace rule %s (एकूण %d):\n\n%s", verb, len(out), ruleDisplay(rule)))
+	reply(ctx, u, fmt.Sprintf("✅ Replace rule %s — 🌐 सगळ्यांसाठी (एकूण %d):\n\n%s", verb, total, ruleDisplay(rule)))
 	return dispatcher.EndGroups
 }
 
 // ── /listreplace ──────────────────────────────────────────────────────────────
 
 func cmdListReplace(ctx *ext.Context, u *ext.Update) error {
-	rules := db.GetReplaceRules(u.EffectiveUser().GetID())
+	rules := loadRulesFor(u.EffectiveUser().GetID())
 	if len(rules) == 0 {
-		reply(ctx, u, "📋 तुमचे कोणतेही replace rules नाहीत.\nAdd करायला: `/setreplace old => new`")
+		reply(ctx, u, "📋 कोणतेही replace rules नाहीत.\nAdd करायला: `/setreplace old => new`")
 		return dispatcher.EndGroups
 	}
 	var lines []string
 	for i, r := range rules {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, ruleDisplay(r)))
 	}
-	reply(ctx, u, fmt.Sprintf("📋 तुमचे Replace Rules (%d):\n\n%s\n\nकाढायला: `/delreplace <number>`", len(rules), strings.Join(lines, "\n")))
+	reply(ctx, u, fmt.Sprintf("📋 Global Replace Rules — सगळ्यांसाठी (%d):\n\n%s\n\nकाढायला: `/delreplace <number>`", len(rules), strings.Join(lines, "\n")))
 	return dispatcher.EndGroups
 }
 
@@ -682,7 +669,7 @@ func cmdDelReplace(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "Usage: `/delreplace <number>` (नंबर /listreplace मध्ये दिसतो) किंवा `/delreplace <old text>`")
 		return dispatcher.EndGroups
 	}
-	rules := db.GetReplaceRules(userID)
+	rules := loadRulesFor(userID)
 	idx := -1
 	if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= len(rules) {
 		idx = n - 1
@@ -699,9 +686,8 @@ func cmdDelReplace(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ Rule सापडला नाही.\nसध्याचे rules: /listreplace")
 		return dispatcher.EndGroups
 	}
-	removed := rules[idx]
-	out := append(append([]db.ReplaceRule{}, rules[:idx]...), rules[idx+1:]...)
-	if err := db.SaveReplaceRules(userID, out); err != nil {
+	removed, err := deleteReplaceRuleAt(userID, idx)
+	if err != nil {
 		reply(ctx, u, "❌ Save failed: "+err.Error())
 		return dispatcher.EndGroups
 	}
@@ -713,12 +699,12 @@ func cmdDelReplace(ctx *ext.Context, u *ext.Update) error {
 
 func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
 	userID := u.EffectiveUser().GetID()
-	count := len(db.GetReplaceRules(userID))
-	if err := db.SaveReplaceRules(userID, []db.ReplaceRule{}); err != nil {
+	count := len(loadRulesFor(userID))
+	if err := saveRulesFor(userID, []db.ReplaceRule{}); err != nil {
 		reply(ctx, u, "❌ Save failed: "+err.Error())
 		return dispatcher.EndGroups
 	}
-	reply(ctx, u, fmt.Sprintf("✅ तुमचे सगळे replace rules clear केले (%d rules काढले).", count))
+	reply(ctx, u, fmt.Sprintf("✅ सगळे global replace rules clear केले (%d rules काढले).", count))
 	return dispatcher.EndGroups
 }
 
@@ -3361,6 +3347,46 @@ func extractMessageID(result tg.UpdatesClass) int {
 // ── inputMediaDocFromUpdates ──────────────────────────────────────────────────
 // [FIX] UpdatesCombined पण handle करतो
 
+// warnIfNoThumb — send नंतर Telegram ने document वर thumbnail ठेवला का ते तपासतो.
+// ठेवला नसेल तर log मध्ये स्पष्ट warning (thumb server ने drop केला = client ला blank दिसेल).
+func warnIfNoThumb(fileName string, result tg.UpdatesClass) {
+	var updates []tg.UpdateClass
+	switch u := result.(type) {
+	case *tg.Updates:
+		updates = u.Updates
+	case *tg.UpdatesCombined:
+		updates = u.Updates
+	default:
+		return
+	}
+	for _, upd := range updates {
+		var m *tg.Message
+		switch u := upd.(type) {
+		case *tg.UpdateNewMessage:
+			m, _ = u.Message.(*tg.Message)
+		case *tg.UpdateNewChannelMessage:
+			m, _ = u.Message.(*tg.Message)
+		}
+		if m == nil {
+			continue
+		}
+		mmd, ok := m.Media.(*tg.MessageMediaDocument)
+		if !ok {
+			continue
+		}
+		d, ok := mmd.Document.(*tg.Document)
+		if !ok {
+			continue
+		}
+		if len(d.Thumbs) == 0 && len(d.VideoThumbs) == 0 {
+			utils.Logger.Warn("⚠️ Telegram ने thumbnail ठेवला नाही (document वर thumbs नाहीत)", zap.String("file", fileName))
+		} else {
+			utils.Logger.Info("✅ Thumbnail Telegram वर जोडला गेला", zap.String("file", fileName), zap.Int("thumbs", len(d.Thumbs)))
+		}
+		return
+	}
+}
+
 func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 	if result == nil {
 		return nil
@@ -3989,8 +4015,12 @@ func sendPreparedMessage(
 		}
 		thumbUpCtx, thumbUpCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer thumbUpCancel()
-		freshThumb, thumbErr := uploader.NewUploader(botClient.API()).FromReader(
-			thumbUpCtx, "thumb.jpg", bytes.NewReader(thumbSrc),
+		// [FIX] FromReader (size अज्ञात) ऐवजी FromBytes — size माहीत असल्यामुळे thumb
+		// छोटी (normal) file म्हणून upload होते. Size अज्ञात असेल तर "big file" म्हणून
+		// जाते आणि Telegram अशा thumb ला शांतपणे ignore करतो → thumbnail दिसत नाही,
+		// video उघडल्यावरच client स्वतः preview बनवतो.
+		freshThumb, thumbErr := uploader.NewUploader(botClient.API()).FromBytes(
+			thumbUpCtx, "thumb.jpg", thumbSrc,
 		)
 		if thumbErr == nil {
 			inputMedia.SetThumb(freshThumb)
@@ -4019,6 +4049,9 @@ func sendPreparedMessage(
 			scReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
 		}
 		scResult, _ := botClient.API().MessagesSendMedia(scCtx, scReq)
+		if isVideo {
+			warnIfNoThumb(file.FileName, scResult)
+		}
 
 		// [FIX] Log channel: doc reference extract — fallback safe
 		if markCopied(chatID, msgID) {
@@ -4104,6 +4137,9 @@ func sendPreparedMessage(
 			return fmt.Errorf("send to admin failed: %w", err)
 		}
 
+		if isVideo {
+			warnIfNoThumb(file.FileName, adminResult)
+		}
 		if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
 			logMedia = dm
 		}
