@@ -44,9 +44,23 @@ var captionReplaceStore sync.Map // map[string]string
 var sendChannelStore sync.Map // key: "id", value: int64
 
 
+// [FIX] Send channel restart नंतर टिकावा म्हणून तीन ठिकाणी save होतो:
+//   1) users collection (जुनं — पण user doc नसेल तर UpdateOne काहीच करत नाही, error पण येत नाही)
+//   2) settings collection "send_channel_user_<id>" (नेहमी चालतं — user doc लागत नाही)
+//   3) settings "send_channel_id" (/setsendchannel चा global channel)
+func sendChannelUserKey(userID int64) string { return fmt.Sprintf("send_channel_user_%d", userID) }
+func sendChannelHashKey(chID int64) string   { return fmt.Sprintf("send_channel_hash_%d", chID) }
+
 func setSendChannelIDForUser(userID int64, channelID int64) {
 	sendChannelStore.Store(userID, channelID)
 	_ = db.SetUserSendChannel(userID, channelID)
+	_ = db.SetSettingInt64(sendChannelUserKey(userID), channelID)
+}
+
+func clearSendChannelForUser(userID int64) {
+	sendChannelStore.Delete(userID)
+	_ = db.SetUserSendChannel(userID, 0)
+	_ = db.SetSettingInt64(sendChannelUserKey(userID), 0)
 }
 
 func getSendChannelIDForUser(userID int64) (int64, bool) {
@@ -57,16 +71,44 @@ func getSendChannelIDForUser(userID int64) (int64, bool) {
 		sendChannelStore.Store(userID, chID)
 		return chID, true
 	}
-	v, ok := sendChannelStore.Load("id")
-	if !ok {
-		return 0, false
+	if chID := db.GetSettingInt64(sendChannelUserKey(userID), 0); chID != 0 {
+		sendChannelStore.Store(userID, chID)
+		return chID, true
 	}
-	return v.(int64), true
+	return getSendChannelID()
 }
+
+func watermarkUserKey(userID int64) string { return fmt.Sprintf("watermark_user_%d", userID) }
 
 func setWatermarkTextForUser(userID int64, text string) {
 	watermarkStore.Store(userID, text)
 	_ = db.SetUserWatermark(userID, text)
+	_ = db.SetSettingString(watermarkUserKey(userID), text) // [FIX] user doc नसला तरी restart नंतर टिकतो
+}
+
+// clearWatermarkForUser — memory + users doc + settings, सगळीकडून पुसतो. Admin असेल तर global
+// watermark पण (नाहीतर global fallback मुळे watermark परत लागतो). true = काहीतरी clear झालं.
+func clearWatermarkForUser(userID int64, alsoGlobal bool) bool {
+	cleared := false
+	if _, ok := watermarkStore.Load(userID); ok {
+		watermarkStore.Delete(userID)
+		cleared = true
+	}
+	if wm, err := db.GetUserWatermark(userID); err == nil && wm != "" {
+		cleared = true
+	}
+	if db.GetSettingString(watermarkUserKey(userID), "") != "" {
+		cleared = true
+	}
+	_ = db.SetUserWatermark(userID, "")
+	_ = db.SetSettingString(watermarkUserKey(userID), "")
+	if alsoGlobal {
+		if _, ok := watermarkStore.Load("text"); ok {
+			watermarkStore.Delete("text")
+			cleared = true
+		}
+	}
+	return cleared
 }
 
 func getWatermarkTextForUser(userID int64) (string, bool) {
@@ -74,6 +116,10 @@ func getWatermarkTextForUser(userID int64) (string, bool) {
 		return v.(string), true
 	}
 	if wm, err := db.GetUserWatermark(userID); err == nil && wm != "" {
+		watermarkStore.Store(userID, wm)
+		return wm, true
+	}
+	if wm := db.GetSettingString(watermarkUserKey(userID), ""); wm != "" {
 		watermarkStore.Store(userID, wm)
 		return wm, true
 	}
@@ -85,11 +131,15 @@ func getWatermarkTextForUser(userID int64) (string, bool) {
 }
 
 func getSendChannelID() (int64, bool) {
-	v, ok := sendChannelStore.Load("id")
-	if !ok {
-		return 0, false
+	if v, ok := sendChannelStore.Load("id"); ok {
+		return v.(int64), true
 	}
-	return v.(int64), true
+	// restart नंतर memory रिकामी — DB मधून परत load
+	if chID := db.GetSettingInt64("send_channel_id", 0); chID != 0 {
+		sendChannelStore.Store("id", chID)
+		return chID, true
+	}
+	return 0, false
 }
 
 // ── Thumbnail Store ───────────────────────────────────────────────────────────
@@ -531,21 +581,7 @@ func cmdSetWatermark(ctx *ext.Context, u *ext.Update) error {
 
 func cmdClearWatermark(ctx *ext.Context, u *ext.Update) error {
 	senderID := u.EffectiveUser().GetID()
-	cleared := false
-
-	if hasWatermark() {
-		watermarkStore.Delete("text")
-		cleared = true
-	}
-
-	if _, ok := watermarkStore.Load(senderID); ok {
-		watermarkStore.Delete(senderID)
-		cleared = true
-	}
-	if wm, err := db.GetUserWatermark(senderID); err == nil && wm != "" {
-		_ = db.SetUserWatermark(senderID, "")
-		cleared = true
-	}
+	cleared := clearWatermarkForUser(senderID, true)
 
 	if !cleared {
 		reply(ctx, u, "💧 कोणताही watermark set नाही.")
@@ -851,9 +887,11 @@ func cmdSetSendChannel(ctx *ext.Context, u *ext.Update) error {
 		))
 		return dispatcher.EndGroups
 	}
-	_ = peer
-
 	sendChannelStore.Store("id", internalID)
+	_ = db.SetSettingInt64("send_channel_id", internalID) // [FIX] restart नंतरही टिकण्यासाठी DB मध्ये
+	if peer != nil && peer.AccessHash != 0 {
+		_ = db.SetSettingInt64(sendChannelHashKey(internalID), peer.AccessHash)
+	}
 
 	reply(ctx, u, fmt.Sprintf(
 		"✅ Send channel set!\n\n📢 Channel ID: `%d`\n\n"+
@@ -889,6 +927,10 @@ func cmdClearSendChannel(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.EndGroups
 	}
 	sendChannelStore.Delete("id")
+	_ = db.SetSettingInt64("send_channel_id", 0)
+	if eu := u.EffectiveUser(); eu != nil {
+		clearSendChannelForUser(eu.GetID())
+	}
 	reply(ctx, u, "✅ Send channel clear केला. आता फक्त admin chat मध्ये send होईल.")
 	return dispatcher.EndGroups
 }
@@ -1449,18 +1491,28 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 	}
 	if hasSC && scID != 0 {
 		// (1) Resume: DB मध्ये save केलेला hash आधी — network call शिवाय पहिल्याच प्रयत्नात यशस्वी.
-		if resumeJob != nil && resumeJob.SendChannelHash != 0 {
+		savedHash := int64(0)
+		if resumeJob != nil {
+			savedHash = resumeJob.SendChannelHash
+		}
+		if savedHash == 0 {
+			savedHash = db.GetSettingInt64(sendChannelHashKey(scID), 0) // /setsendchannel / मागच्या run ने save केलेला
+		}
+		if savedHash != 0 {
 			rawID := scID
 			if rawID < 0 {
 				rawID = -rawID - 1000000000000
 			}
-			sendChannelPeer = &tg.InputPeerChannel{ChannelID: rawID, AccessHash: resumeJob.SendChannelHash}
+			sendChannelPeer = &tg.InputPeerChannel{ChannelID: rawID, AccessHash: savedHash}
 			sendChannelFromBot = true
 		}
-		// (2) Hash नसेल/जुना job असेल तर bot वरून resolve
+		// (2) Hash नसेल तर bot वरून resolve (आणि hash पुढच्यासाठी DB मध्ये save)
 		if sendChannelPeer == nil {
 			sendChannelPeer = resolveChannelInputPeer(ctx, botClient, scID)
 			sendChannelFromBot = sendChannelPeer != nil
+			if sendChannelPeer != nil {
+				_ = db.SetSettingInt64(sendChannelHashKey(scID), sendChannelPeer.AccessHash)
+			}
 		}
 		// (3) शेवटी userbot वरून (हा hash bot साठी valid नसतो, म्हणून save करत नाही)
 		if sendChannelPeer == nil && userbotClient != nil {
