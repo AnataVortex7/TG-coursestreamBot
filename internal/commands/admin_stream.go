@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"math/rand"
 	"os"
@@ -3891,34 +3892,47 @@ func sendPreparedMessage(
 	if b, ok := getStoredThumbnailBytes(); ok && len(b) > 0 {
 		thumbSrc = b
 	} else if isVideo {
-		if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
-			if d, ok := doc.Document.(*tg.Document); ok {
-				var bestType string
-				var bestW int
-				for _, sz := range d.Thumbs {
-					if ps, ok := sz.(*tg.PhotoSize); ok && ps.W > bestW {
-						bestW = ps.W
-						bestType = ps.Type
+		// [FIX] प्राधान्य: 1) video मधून काढलेला non-black frame
+		//       2) Telegram चा source thumb (काळा नसेल तर)
+		//       3) कुठलाही frame (गडद असला तरी)
+		// पूर्वी Telegram चा thumb आधी वापरत होतो — तो video च्या पहिल्या (बऱ्याचदा काळ्या)
+		// frame चा असल्यामुळे thumbnail काळा दिसायचा.
+		if len(pm.frameThumb) > 0 && !isBlackFrame(pm.frameThumb) {
+			thumbSrc = pm.frameThumb
+		}
+		if len(thumbSrc) == 0 {
+			if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
+				if d, ok := doc.Document.(*tg.Document); ok {
+					var bestType string
+					var bestW int
+					for _, sz := range d.Thumbs {
+						if ps, ok := sz.(*tg.PhotoSize); ok && ps.W > bestW {
+							bestW = ps.W
+							bestType = ps.Type
+						}
 					}
-				}
-				if bestType != "" {
-					loc := &tg.InputDocumentFileLocation{
-						ID:            d.ID,
-						AccessHash:    d.AccessHash,
-						FileReference: d.FileReference,
-						ThumbSize:     bestType,
-					}
-					dlCtx, dlCancel := context.WithTimeout(bgCtx, 30*time.Second)
-					defer dlCancel()
-					var buf bytes.Buffer
-					if _, dlErr := downloader.NewDownloader().Download(userbotClient.API(), loc).Stream(dlCtx, &buf); dlErr == nil {
-						thumbSrc = buf.Bytes()
+					if bestType != "" {
+						loc := &tg.InputDocumentFileLocation{
+							ID:            d.ID,
+							AccessHash:    d.AccessHash,
+							FileReference: d.FileReference,
+							ThumbSize:     bestType,
+						}
+						dlCtx, dlCancel := context.WithTimeout(bgCtx, 30*time.Second)
+						defer dlCancel()
+						var buf bytes.Buffer
+						if _, dlErr := downloader.NewDownloader().Download(userbotClient.API(), loc).Stream(dlCtx, &buf); dlErr == nil {
+							if !isBlackFrame(buf.Bytes()) {
+								thumbSrc = buf.Bytes()
+							}
+						}
 					}
 				}
 			}
+
 		}
 
-		// Fallback 2: video मधूनच काढलेला frame (prepareMessage ने आधीच काढलाय)
+		// Fallback: सगळे non-black स्रोत संपले → गडद का होईना, video चा frame वापर
 		if len(thumbSrc) == 0 && len(pm.frameThumb) > 0 {
 			thumbSrc = pm.frameThumb
 		}
@@ -4453,25 +4467,81 @@ func probeVideoMeta(path string) (dur, w, h int) {
 	return
 }
 
-func extractFrameThumb(path string, dur int) []byte {
-	seek := 1
-	if dur > 0 {
-		seek = int(float64(dur) * 0.2)
-		if seek < 1 {
-			seek = 1
+// frameBrightness: JPEG चा सरासरी brightness (0-255). Decode fail झाला तर -1.
+// Black/काळा frame ओळखायला वापरतो (video चा पहिला frame बऱ्याचदा काळा असतो).
+func frameBrightness(b []byte) float64 {
+	img, err := jpeg.Decode(bytes.NewReader(b))
+	if err != nil {
+		return -1
+	}
+	bd := img.Bounds()
+	stepX := bd.Dx()/40 + 1
+	stepY := bd.Dy()/40 + 1
+	var sum float64
+	var n int
+	for y := bd.Min.Y; y < bd.Max.Y; y += stepY {
+		for x := bd.Min.X; x < bd.Max.X; x += stepX {
+			r, g, bl, _ := img.At(x, y).RGBA()
+			sum += (0.299*float64(r) + 0.587*float64(g) + 0.114*float64(bl)) / 257.0
+			n++
 		}
 	}
-	for _, ss := range []int{seek, 0} {
+	if n == 0 {
+		return -1
+	}
+	return sum / float64(n)
+}
+
+// isBlackFrame: खूप गडद (जवळजवळ काळा) thumb असेल तर true.
+func isBlackFrame(b []byte) bool {
+	br := frameBrightness(b)
+	return br >= 0 && br < 25
+}
+
+// extractFrameThumb: video मध्ये वेगवेगळ्या ठिकाणांचे frames काढून जो सर्वात
+// उजळ (काळा नसलेला) असेल तो परत करतो. पूर्वी फक्त 20% वर एकच frame घेत होतो
+// आणि तो काळा निघाला तरी वापरत होतो.
+func extractFrameThumb(path string, dur int) []byte {
+	var seeks []int
+	if dur > 0 {
+		for _, f := range []float64{0.2, 0.35, 0.5, 0.1, 0.65, 0.8} {
+			ss := int(float64(dur) * f)
+			if ss < 1 {
+				ss = 1
+			}
+			seeks = append(seeks, ss)
+		}
+	} else {
+		seeks = []int{1, 3, 5, 10, 20}
+	}
+	seeks = append(seeks, 0)
+
+	var best []byte
+	bestBr := -2.0
+	seen := map[int]bool{}
+	for _, ss := range seeks {
+		if seen[ss] {
+			continue
+		}
+		seen[ss] = true
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		out, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-ss", strconv.Itoa(ss), "-i", path,
 			"-frames:v", "1", "-vf", "scale=320:320:force_original_aspect_ratio=decrease",
 			"-q:v", "5", "-f", "mjpeg", "pipe:1").Output()
 		cancel()
-		if err == nil && len(out) > 0 && len(out) <= 200*1024 {
+		if err != nil || len(out) == 0 || len(out) > 200*1024 {
+			continue
+		}
+		br := frameBrightness(out)
+		if br >= 25 { // काळा नाही → लगेच वापर
 			return out
 		}
+		if br > bestBr {
+			bestBr = br
+			best = out
+		}
 	}
-	return nil
+	return best // सगळेच गडद असतील तर त्यातला सर्वात उजळ
 }
 
 func downloadAndReupload(
