@@ -145,9 +145,9 @@ func (u *UserBotStruct) sendCodeAttempt(phone string, apiID int, apiHash string)
 		SessionStorage: storage,
 		// Phone cha home DC vegla asel tar gotd "migrate to dc" karto; default
 		// timeout (~15s) slow hosting var (HF/Koyeb) madhe sampato => "context deadline exceeded".
-		MigrationTimeout: 90 * time.Second,
-		DialTimeout:      30 * time.Second,
-		ExchangeTimeout:  60 * time.Second,
+		MigrationTimeout: 3 * time.Minute,
+		DialTimeout:      time.Minute,
+		ExchangeTimeout:  3 * time.Minute,
 		Device: telegram.DeviceConfig{
 			DeviceModel:   "Pyrogram",
 			SystemVersion: runtime.GOOS,
@@ -313,7 +313,7 @@ func (u *UserBotStruct) sendCodeAttempt(phone string, apiID int, apiHash string)
 	case err := <-errCh:
 		cancel()
 		return "", err
-	case <-time.After(120 * time.Second):
+	case <-time.After(4 * time.Minute):
 		cancel()
 		return "", errors.New("Telegram connection timeout — API_ID/API_HASH check kara")
 	}
