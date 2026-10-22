@@ -35,6 +35,9 @@ type UserbotDLJob struct {
 	StartMsg       int                `bson:"start_msg"`
 	EndMsg         int                `bson:"end_msg"`
 	SpecificMsgIDs []int              `bson:"specific_msg_ids,omitempty"`
+	// [FIX] Job सुरू झाला तेव्हाचा send channel — restart नंतर resume झाल्यावर तोच destination वापरायला.
+	SendChannelID   int64 `bson:"send_channel_id,omitempty"`
+	SendChannelHash int64 `bson:"send_channel_hash,omitempty"`
 	NextIdx        int                `bson:"next_idx"` // msgIDList[:NextIdx] पूर्ण झालं
 	Success        int                `bson:"success"`
 	Skip           int                `bson:"skip"`
