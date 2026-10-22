@@ -236,7 +236,7 @@ var categories = []category{
 		"showthumbnail", "setthumbnail", "clearthumbnail",
 		"showwatermark", "setwatermark", "clearwatermark",
 	}},
-	{"colab", "☁️ Colab Worker", []string{"colabstatus", "colabstart", "colabstop"}},
+	{"colab", "☁️ Colab Worker", []string{"colabstatus", "colabstart", "colabstop", "colabubdloff", "colabubdlon", "colabnonwmoff", "colabnonwmon"}},
 	{"guard", "🛡️ Guard & Security", []string{"suspicious", "userinfo", "blockuser", "unblockuser"}},
 	{"linking", "🔗 Account Linking", []string{"settg", "unlinktg"}},
 	{"stats", "📊 Bot Analytics & Stats", []string{"stats"}},
@@ -749,6 +749,10 @@ func init() {
 	registerCmd(menuCmd{key: "colabstatus", label: "☁️ Colab Status", kind: kindView, fn: cmdColabStatus})
 	registerCmd(menuCmd{key: "colabstart", label: "▶️ Colab Start", kind: kindToggle, fn: cmdColabStart})
 	registerCmd(menuCmd{key: "colabstop", label: "⏸ Colab Stop", kind: kindToggle, fn: cmdColabStop})
+	registerCmd(menuCmd{key: "colabubdloff", label: "⛔ Disable Colab: Userbot DL", kind: kindToggle, fn: cmdColabUserbotDLOff})
+	registerCmd(menuCmd{key: "colabubdlon", label: "✅ Enable Colab: Userbot DL", kind: kindToggle, fn: cmdColabUserbotDLOn})
+	registerCmd(menuCmd{key: "colabnonwmoff", label: "⛔ Disable Colab: Non-WM Jobs", kind: kindToggle, fn: cmdColabNonWMOff})
+	registerCmd(menuCmd{key: "colabnonwmon", label: "✅ Enable Colab: Non-WM Jobs", kind: kindToggle, fn: cmdColabNonWMOn})
 
 	// ── Guard/Security ──
 	registerCmd(menuCmd{key: "suspicious", label: "🚨 Suspicious Users", kind: kindView, fn: cmdSuspicious})

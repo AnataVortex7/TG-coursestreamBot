@@ -54,6 +54,10 @@ func (m *command) LoadAdmin(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("colabstop", adminOnly(cmdColabStop)))
 	d.AddHandler(handlers.NewCommand("colabstart", adminOnly(cmdColabStart)))
 	d.AddHandler(handlers.NewCommand("colabstatus", adminOnly(cmdColabStatus)))
+	d.AddHandler(handlers.NewCommand("colabubdloff", adminOnly(cmdColabUserbotDLOff)))
+	d.AddHandler(handlers.NewCommand("colabubdlon", adminOnly(cmdColabUserbotDLOn)))
+	d.AddHandler(handlers.NewCommand("colabnonwmoff", adminOnly(cmdColabNonWMOff)))
+	d.AddHandler(handlers.NewCommand("colabnonwmon", adminOnly(cmdColabNonWMOn)))
 
 	d.AddHandler(handlers.NewCommand("regopen", adminOnly(cmdRegOpen)))
 	d.AddHandler(handlers.NewCommand("regclose", adminOnly(cmdRegClose)))
@@ -1089,6 +1093,40 @@ func cmdColabStart(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
+// ─── Colab selective disable (Userbot DL / Non-Watermark) ────────────────────
+// चालू असलेल्या /userbotdl task मध्ये सुद्धा लागू — पुढच्या file पासून.
+
+func setColabToggleCmd(ctx *ext.Context, u *ext.Update, key string, disabled bool, msg string) error {
+	if err := db.SetSettingBool(key, disabled); err != nil {
+		reply(ctx, u, "❌ Save failed: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u, msg)
+	return dispatcher.EndGroups
+}
+
+func cmdColabUserbotDLOff(ctx *ext.Context, u *ext.Update) error {
+	return setColabToggleCmd(ctx, u, db.SettingColabDisableUserbotDL, true,
+		"⛔ Colab Userbot DL साठी DISABLED\n\n/userbotdl चे files आता main server वरच process + upload होतील "+
+			"(चालू task मध्ये पुढच्या file पासून). परत सुरू: /colabubdlon")
+}
+
+func cmdColabUserbotDLOn(ctx *ext.Context, u *ext.Update) error {
+	return setColabToggleCmd(ctx, u, db.SettingColabDisableUserbotDL, false,
+		"✅ Colab Userbot DL साठी ENABLED\n\nपुढच्या files Colab वर जातील (online असेल तर).")
+}
+
+func cmdColabNonWMOff(ctx *ext.Context, u *ext.Update) error {
+	return setColabToggleCmd(ctx, u, db.SettingColabDisableNonWM, true,
+		"⛔ Colab Non-Watermark jobs साठी DISABLED\n\nWatermark नसलेले jobs main server वर होतील; "+
+			"watermark jobs Colab वरच. परत सुरू: /colabnonwmon")
+}
+
+func cmdColabNonWMOn(ctx *ext.Context, u *ext.Update) error {
+	return setColabToggleCmd(ctx, u, db.SettingColabDisableNonWM, false,
+		"✅ Colab Non-Watermark jobs साठी ENABLED")
+}
+
 func cmdColabStatus(ctx *ext.Context, u *ext.Update) error {
 	online := wmqueue.IsColabOnline()
 	lastPoll := wmqueue.LastPollAgo()
@@ -1111,8 +1149,12 @@ func cmdColabStatus(ctx *ext.Context, u *ext.Update) error {
 			"Active workers: %d\n"+
 			"शेवटचा poll: %s पूर्वी\n"+
 			"Stop request: %s\n"+
-			"सध्या processing: %d job(s)",
+			"सध्या processing: %d job(s)\n"+
+			"Userbot DL Colab: %s\n"+
+			"Non-WM jobs Colab: %s",
 		status, len(activeWorkers), lastPoll, stopStatus, len(processing),
+		onOff(!db.GetSettingBool(db.SettingColabDisableUserbotDL, false)),
+		onOff(!db.GetSettingBool(db.SettingColabDisableNonWM, false)),
 	)
 	for _, id := range activeWorkers {
 		idShort := id
@@ -1213,6 +1255,8 @@ func cmdHelp(ctx *ext.Context, u *ext.Update) error {
 /colabstart — Colab worker start करा
 /colabstop — Colab worker stop करा
 /colabstatus — Colab status बघा
+/colabubdloff | /colabubdlon — Userbot DL साठी Colab बंद/चालू
+/colabnonwmoff | /colabnonwmon — Non-watermark jobs साठी Colab बंद/चालू
 
 📊 *Info*
 /stats — bot stats \(users, courses, downloads\)
@@ -1221,4 +1265,11 @@ func cmdHelp(ctx *ext.Context, u *ext.Update) error {
 
 	reply(ctx, u, msg)
 	return dispatcher.EndGroups
+}
+
+func onOff(b bool) string {
+	if b {
+		return "🟢 ON"
+	}
+	return "🔴 OFF (main server)"
 }
