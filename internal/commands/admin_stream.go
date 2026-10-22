@@ -4087,7 +4087,7 @@ func downloadWatermarkAndReupload(
 				dlWriter = &progressWriter{w: bw, total: file.FileSize, onProgress: onDownloadProgress}
 			}
 			d := downloader.NewDownloader()
-			_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(attemptCtx, dlWriter)
+			_, err = d.Download(dlClient.API(), file.Location).WithThreads(dlThreads).Parallel(attemptCtx, dlWriter)
 			close(watchDone)
 			stalled := attemptCtx.Err() != nil && dlCtx.Err() == nil
 			attemptCancel()
@@ -4238,6 +4238,16 @@ func getChannelPeerIfBotAdmin(
 
 // ── downloadAndReupload ───────────────────────────────────────────────────────
 
+// [SPEED] Download/Upload speed tuning.
+// dlThreads/upThreads = parallel chunk requests (आधी 3 होते). Flood/timeouts आले तर 6 पर्यंत कमी करा.
+// upPartSize = 512KB (Telegram max). आधी 256KB होता → दुप्पट requests आणि ~1GB च्या वरच्या
+// files साठी "part limit" error ची शक्यता. 512KB ने मोठ्या files पण चालतात.
+const (
+	dlThreads  = 8
+	upThreads  = 8
+	upPartSize = 512 * 1024
+)
+
 func downloadAndReupload(
 	dlCtx context.Context,
 	upCtx context.Context,
@@ -4266,7 +4276,7 @@ func downloadAndReupload(
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(dlCtx, dlWriter)
+	_, err = d.Download(dlClient.API(), file.Location).WithThreads(dlThreads).Parallel(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
 		os.Remove(tmpPath)
@@ -4292,7 +4302,7 @@ func downloadAndReupload(
 		upProgress = &uploadProgressAdapter{onProgress: onUploadProgress}
 	}
 
-	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024).WithThreads(3)
+	up := uploader.NewUploader(upClient.API()).WithPartSize(upPartSize).WithThreads(upThreads)
 	if upProgress != nil {
 		up = up.WithProgress(upProgress)
 	}
@@ -4339,7 +4349,7 @@ func downloadWatermarkAndReuploadLocal(
 	}
 
 	d := downloader.NewDownloader()
-	_, err = d.Download(dlClient.API(), file.Location).WithThreads(3).Parallel(dlCtx, dlWriter)
+	_, err = d.Download(dlClient.API(), file.Location).WithThreads(dlThreads).Parallel(dlCtx, dlWriter)
 	tmpFile.Close()
 	if err != nil {
 		os.Remove(inputPath)
@@ -4387,7 +4397,7 @@ func downloadWatermarkAndReuploadLocal(
 		upProgress = &uploadProgressAdapter{onProgress: onUploadProgress}
 	}
 
-	up := uploader.NewUploader(upClient.API()).WithPartSize(256 * 1024).WithThreads(3)
+	up := uploader.NewUploader(upClient.API()).WithPartSize(upPartSize).WithThreads(upThreads)
 	if upProgress != nil {
 		up = up.WithProgress(upProgress)
 	}
