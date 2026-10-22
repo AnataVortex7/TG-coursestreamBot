@@ -3412,7 +3412,10 @@ type preparedMessage struct {
 	file          *types.File
 	uploadedFile  tg.InputFileClass
 	msgID         int
-	tempVideoPath string // FFmpeg thumb fallback sathi — sendPreparedMessage use karto, nantar delete
+	tempVideoPath string // (आता नेहमी "" — temp file upload होताच delete होतो; खाली frameThumb/video meta)
+	frameThumb    []byte // video मधून काढलेला लहान JPEG thumb (≤320px, ≤200KB) — fallback
+	vidDur        int    // seconds
+	vidW, vidH    int
 }
 
 // ── prepareMessage ───────────────────────────────────────────────────────────
@@ -3776,6 +3779,20 @@ func prepareMessage(
 		return &preparedMessage{colabSent: true}, nil
 	}
 
+	// [DISK] Upload आधीच पूर्ण झालंय — temp file ची गरज फक्त thumb frame + video
+	// meta काढायला होती. ते आत्ताच काढून file लगेच delete करतो (पूर्वी Phase B
+	// पर्यंत disk वर पडून राहायची → main server ची disk भरायची).
+	var frameThumb []byte
+	var vDur, vW, vH int
+	if pm_tempPath != "" {
+		if isVideoFile(file) {
+			vDur, vW, vH = probeVideoMeta(pm_tempPath)
+			frameThumb = extractFrameThumb(pm_tempPath, vDur)
+		}
+		os.Remove(pm_tempPath)
+		pm_tempPath = ""
+	}
+
 	return &preparedMessage{
 		tgMsg:         tgMsg,
 		finalCaption:  finalCaption,
@@ -3783,6 +3800,10 @@ func prepareMessage(
 		uploadedFile:  uploadedFile,
 		msgID:         msgID,
 		tempVideoPath: pm_tempPath,
+		frameThumb:    frameThumb,
+		vidDur:        vDur,
+		vidW:          vW,
+		vidH:          vH,
 	}, nil
 }
 
@@ -3823,6 +3844,7 @@ func sendPreparedMessage(
 		&tg.DocumentAttributeFilename{FileName: file.FileName},
 	}
 	isVideo := false
+	hasVideoAttr := false
 	if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
 		if d, ok := doc.Document.(*tg.Document); ok {
 			for _, attr := range d.Attributes {
@@ -3832,8 +3854,10 @@ func sendPreparedMessage(
 					*tg.DocumentAttributeAnimated:
 					attributes = append(attributes, attr)
 				}
-				if _, ok := attr.(*tg.DocumentAttributeVideo); ok {
+				if va, ok := attr.(*tg.DocumentAttributeVideo); ok {
 					isVideo = true
+					hasVideoAttr = true
+					va.SupportsStreaming = true
 				}
 			}
 		}
@@ -3848,6 +3872,15 @@ func sendPreparedMessage(
 				isVideo = true
 			}
 		}
+	}
+
+	// Source मध्ये video attribute नसेल (उदा. mkv/document म्हणून आलेला video) तर
+	// Telegram त्याला file म्हणून दाखवतो (thumb/preview नाही) — Colab worker सारखंच
+	// duration/width/height + streaming सह video attribute स्वतः जोडतो.
+	if isVideo && !hasVideoAttr && pm.vidW > 0 && pm.vidH > 0 {
+		va := &tg.DocumentAttributeVideo{SupportsStreaming: true, W: pm.vidW, H: pm.vidH}
+		va.Duration = float64(pm.vidDur)
+		attributes = append(attributes, va)
 	}
 
 	// ── Thumbnail ─────────────────────────────────────────────────────────
@@ -3880,6 +3913,11 @@ func sendPreparedMessage(
 					}
 				}
 			}
+		}
+
+		// Fallback 2: video मधूनच काढलेला frame (prepareMessage ने आधीच काढलाय)
+		if len(thumbSrc) == 0 && len(pm.frameThumb) > 0 {
+			thumbSrc = pm.frameThumb
 		}
 
 		// Fallback 3: setthumbnail nahi, Telegram thumb nahi/fail →
@@ -3926,6 +3964,12 @@ func sendPreparedMessage(
 		Attributes: attributes,
 	}
 	if isVideo && len(thumbSrc) > 0 {
+		// Telegram rules: JPEG, ≤320px, ≤200KB — नाहीतर thumb दिसत नाही.
+		if norm := normalizeThumb(thumbSrc); len(norm) > 0 {
+			thumbSrc = norm
+		} else {
+			utils.Logger.Warn("thumb normalize failed — original thumb वापरतोय", zap.String("file", file.FileName))
+		}
 		thumbUpCtx, thumbUpCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer thumbUpCancel()
 		freshThumb, thumbErr := uploader.NewUploader(botClient.API()).FromReader(
@@ -3934,6 +3978,7 @@ func sendPreparedMessage(
 		if thumbErr == nil {
 			inputMedia.SetThumb(freshThumb)
 		} else {
+			utils.Logger.Warn("thumb upload failed", zap.Error(thumbErr))
 			editProgress(fmt.Sprintf("⚠️ Thumb upload failed: %v", thumbErr))
 		}
 	}
@@ -4340,11 +4385,91 @@ func getChannelPeerIfBotAdmin(
 // dlThreads/upThreads = parallel chunk requests (आधी 3 होते). Flood/timeouts आले तर 6 पर्यंत कमी करा.
 // upPartSize = 512KB (Telegram max). आधी 256KB होता → दुप्पट requests आणि ~1GB च्या वरच्या
 // files साठी "part limit" error ची शक्यता. 512KB ने मोठ्या files पण चालतात.
-const (
-	dlThreads  = 8
-	upThreads  = 8
-	upPartSize = 512 * 1024
+//
+// [SPEED] upload threads 8 → 16: main-server upload (bot session) latency-bound असतो
+// (in-flight parts / RTT), म्हणून threads वाढवले की speed वाढते. Env ने बदलता येतो:
+// UP_THREADS / DL_THREADS. FLOOD/timeouts आले तर UP_THREADS=8 करा.
+var (
+	dlThreads = envIntDefault("DL_THREADS", 8)
+	upThreads = envIntDefault("UP_THREADS", 16)
 )
+
+const upPartSize = 512 * 1024
+
+func envIntDefault(key string, def int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key))); err == nil && v > 0 && v <= 64 {
+		return v
+	}
+	return def
+}
+
+// ── Thumbnail / video-meta helpers ────────────────────────────────────────────
+// Telegram thumbnail: JPEG, ≤320px (w/h), ≤200KB — नाहीतर thumb ignore होतो.
+// Colab worker (Pyrogram) video वरून लहान frame काढतो; main server वर पूर्वी
+// full-res frame / मोठा /setthumbnail photo जात होता → thumbnail दिसत नव्हता.
+
+func normalizeThumb(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	for _, q := range []string{"4", "8", "14"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-i", "pipe:0",
+			"-vf", "scale=320:320:force_original_aspect_ratio=decrease",
+			"-frames:v", "1", "-q:v", q, "-f", "mjpeg", "pipe:1")
+		cmd.Stdin = bytes.NewReader(src)
+		out, err := cmd.Output()
+		cancel()
+		if err == nil && len(out) > 0 && len(out) <= 200*1024 {
+			return out
+		}
+	}
+	return nil
+}
+
+func probeVideoMeta(path string) (dur, w, h int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=width,height:format=duration", "-of", "csv=p=0", path).Output()
+	if err != nil {
+		return 0, 0, 0
+	}
+	// stream line: "w,h"  | format line: "duration"
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Split(strings.TrimSpace(line), ",")
+		if len(parts) == 2 {
+			w, _ = strconv.Atoi(parts[0])
+			h, _ = strconv.Atoi(parts[1])
+		} else if len(parts) == 1 {
+			if f, e := strconv.ParseFloat(parts[0], 64); e == nil && f > 0 {
+				dur = int(f)
+			}
+		}
+	}
+	return
+}
+
+func extractFrameThumb(path string, dur int) []byte {
+	seek := 1
+	if dur > 0 {
+		seek = int(float64(dur) * 0.2)
+		if seek < 1 {
+			seek = 1
+		}
+	}
+	for _, ss := range []int{seek, 0} {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		out, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-ss", strconv.Itoa(ss), "-i", path,
+			"-frames:v", "1", "-vf", "scale=320:320:force_original_aspect_ratio=decrease",
+			"-q:v", "5", "-f", "mjpeg", "pipe:1").Output()
+		cancel()
+		if err == nil && len(out) > 0 && len(out) <= 200*1024 {
+			return out
+		}
+	}
+	return nil
+}
 
 func downloadAndReupload(
 	dlCtx context.Context,
