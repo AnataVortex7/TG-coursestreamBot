@@ -7,6 +7,7 @@ import (
 	"EverythingSuckz/fsb/internal/cache"
 	"EverythingSuckz/fsb/internal/commands"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/instancelock"
 	"EverythingSuckz/fsb/internal/routes"
 	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/urlmonitor"
@@ -17,6 +18,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"regexp"
@@ -51,6 +54,14 @@ func runApp(cmd *cobra.Command, args []string) {
 	db.Connect()
 	defer db.Disconnect()
 	mainLogger.Info("MongoDB connected")
+
+	// ── Single-active-instance lease ──────────────────────────────────────────
+	// Redeploy var jaruna + navin instance ekach vela chalu asle tar doghe ek-ch
+	// userbot session / bot token vaparatat => AUTH_KEY_DUPLICATED, session kharab.
+	// Mhanun Telegram la touch karnyaadhi lease milepryant thamblo (STANDBY).
+	// Standby madhe fakt /ping uttar deto (platform health-check pass hoto).
+	setupGracefulShutdown(mainLogger)
+	waitForPrimary(log, mainLogger)
 
 	// ── Start URL Monitor (standalone — no dependency on bot or stream) ───────
 	urlmonitor.Init(log)
@@ -226,6 +237,54 @@ func runApp(cmd *cobra.Command, args []string) {
 	if err != nil {
 		mainLogger.Sugar().Fatalf("Server failed to start: %v", err)
 	}
+}
+
+// waitForPrimary — standby /ping server chalvun lease cha wait karto, lease
+// milali ki standby server band karto (port real router la mokla hoto).
+func waitForPrimary(log *zap.Logger, mainLogger *zap.Logger) {
+	if !instancelock.Enabled() {
+		return
+	}
+	standby := &http.Server{
+		Addr: fmt.Sprintf(":%d", config.ValueOf.Port),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"message":"standby — waiting for previous instance to stop"}`))
+		}),
+	}
+	standbyErr := make(chan error, 1)
+	go func() { standbyErr <- standby.ListenAndServe() }()
+
+	if err := instancelock.Acquire(context.Background(), log); err != nil {
+		mainLogger.Sugar().Fatalf("instance lease acquire failed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = standby.Shutdown(ctx)
+	select {
+	case <-standbyErr:
+	case <-time.After(time.Second):
+	}
+}
+
+// setupGracefulShutdown — SIGTERM/SIGINT (redeploy) var lease release karto,
+// mhanje navin instance la 30s wait karava lagat nahi. Telegram clients cancel
+// hotat, mhanun auth key doghanchya connection varun ek-ch veli vaparla jat nahi.
+func setupGracefulShutdown(mainLogger *zap.Logger) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		mainLogger.Sugar().Infof("Shutdown signal %v — Telegram clients thambvun lease release karto", sig)
+		bot.ShutdownAll()
+		// Telegram connections properly close hoyla thoda vel
+		time.Sleep(1500 * time.Millisecond)
+		instancelock.Release()
+		db.Disconnect()
+		os.Exit(0)
+	}()
 }
 
 // floodWaitRe — gotd चा rpc error text असा असतो:

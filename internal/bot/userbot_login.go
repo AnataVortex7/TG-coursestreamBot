@@ -20,8 +20,6 @@ import (
 	"EverythingSuckz/fsb/internal/db"
 	"EverythingSuckz/fsb/pkg/qrlogin"
 
-	"github.com/celestix/gotgproto"
-	"github.com/celestix/gotgproto/sessionMaker"
 	"github.com/gotd/td/session"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
@@ -71,7 +69,8 @@ var (
 // ─── Status ──────────────────────────────────────────────────────────────────
 
 func (u *UserBotStruct) Status() UserBotInfo {
-	if u.client == nil {
+	cl := u.GetClient()
+	if cl == nil {
 		doc, _ := db.GetUserBotSessionDoc()
 		if doc != nil && doc.Session != "" {
 			return UserBotInfo{
@@ -85,7 +84,7 @@ func (u *UserBotStruct) Status() UserBotInfo {
 		}
 		return UserBotInfo{Running: false}
 	}
-	s := u.client.Self
+	s := cl.Self
 	return UserBotInfo{
 		Running:   true,
 		FirstName: s.FirstName,
@@ -369,22 +368,18 @@ func (u *UserBotStruct) StartFromSession(sessionStr string) {
 		u.log = zap.NewNop()
 	}
 	log := u.log.Named("restart")
+	// Navin login zalyavar jaruna client aadhi band (same account doni connection nako)
+	u.setClient(nil)
 	go func() {
-		apiID, apiHash := db.SessionAPICreds(sessionStr)
-		client, err := gotgproto.NewClient(
-			apiID,
-			apiHash,
-			gotgproto.ClientTypePhone(""),
-			&gotgproto.ClientOpts{
-				Session:          sessionMaker.PyrogramSession(sessionStr),
-				DisableCopyright: true,
-			},
-		)
+		client, dead, err := connectSessionWithRetry(log, sessionStr)
 		if err != nil {
 			log.Error("Userbot restart failed", zap.Error(err))
+			if dead {
+				_ = db.DeleteUserBotSession()
+			}
 			return
 		}
-		u.client = client
+		u.setClient(client)
 		log.Sugar().Infof("✅ Userbot started: @%s", client.Self.Username)
 		_ = u.AddBotsAsAdmins()
 	}()
@@ -392,8 +387,11 @@ func (u *UserBotStruct) StartFromSession(sessionStr string) {
 
 // ─── Stop ─────────────────────────────────────────────────────────────────────
 
+// Stop — client cancel karto (connection kharokhar band hoto). Aadhi fakt
+// pointer nil hoto hota => Telegram connection chalu rahaycha ani logout nantar
+// pan session "online" disaycha / relogin var AUTH_KEY_DUPLICATED yaycha.
 func (u *UserBotStruct) Stop() {
-	u.client = nil
+	u.setClient(nil)
 }
 
 // ─── StartUserBotFromDB ───────────────────────────────────────────────────────

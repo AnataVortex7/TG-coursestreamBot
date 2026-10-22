@@ -175,12 +175,27 @@ func renderCourseListView(chatID int64) (string, tg.ReplyMarkupClass, error) {
 // Callback router
 // ═══════════════════════════════════════════════════════════════════════════
 
-func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
-	// [NEW] Verification gate — unlinked user ने जुन्या message वरचं बटण (course list / Buy / manual form)
-	// दाबलं तरी काम न होता Verification popup येतो.
+// handleCatalogCallback - "wc:" buttons. gotgproto handlers update pipeline madhe
+// SYNCHRONOUS chalatat: ek handler (DB/Telegram/userbot connect) atakla ki pudhche
+// sagle button taps "response det nahi" hotat. Mhanun gate sync, baki kaam goroutine madhe.
+func handleCatalogCallback(ctx *ext.Context, u *ext.Update) error {
+	// [NEW] Verification gate - unlinked user ne junya message varcha button dabla tari
+	// kaam na hota Verification popup yeto.
 	if gateBlockCallback(ctx, u) {
 		return dispatcher.EndGroups
 	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				utils.Logger.Sugar().Errorw("catalog: async callback panic", "panic", r)
+			}
+		}()
+		_ = handleCatalogCallbackInner(ctx, u)
+	}()
+	return dispatcher.EndGroups
+}
+
+func handleCatalogCallbackInner(ctx *ext.Context, u *ext.Update) (retErr error) {
 	// Telegram ला लगेच answer करतो — कारण जर पुढे काही error/panic आलं आणि
 	// answer कधीच गेलं नाही, तर client वर button "stuck" (काहीच रिस्पॉन्स
 	// नाही) असं दिसतं आणि पुढचे taps पण ignore होऊ शकतात. आधी answer, मग काम.
@@ -373,13 +388,11 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		editCatalogMessage(ctx, u, "✅ Destination Channel काढला!\n\n"+text, markup)
 
 	case "userbot_logout":
-		_ = db.DeleteUserBotSessionForUser(chatID)
-		dropUserbotClient(chatID)
-		if du, _ := db.GetUserByTelegramID(chatID); du != nil {
-			_ = db.SetUserTgApiCreds(du.ID, 0, "")
-		}
+		// [FIX] Aadhi fakt "user_<id>" session delete hota; admin cha system userbot
+		// ("main" session) + running client touch hot navta => button "kahich karat nahi".
+		result := performUserbotLogout(chatID)
 		text, markup := renderPremiumMenuView(chatID)
-		editCatalogMessage(ctx, u, "🚪 Userbot Account Logout केला!\n\n"+text, markup)
+		editCatalogMessage(ctx, u, result+"\n\n"+text, markup)
 
 	case "root":
 		text, markup, err := renderCourseListView(chatID)

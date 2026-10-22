@@ -433,6 +433,7 @@ func cmdGrantUserbotAccess(ctx *ext.Context, u *ext.Update) error {
 var (
 	AdminImpersonateStore sync.Map // adminID (int64) -> targetUserID (int64)
 	userbotClientsMu      sync.Mutex
+	userbotConnLocks      sync.Map // userID (int64) -> *sync.Mutex (per-user connect lock)
 	userbotClients        = make(map[int64]*gotgproto.Client)
 )
 
@@ -455,10 +456,18 @@ func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 		}
 	}
 
-	userbotClientsMu.Lock()
-	defer userbotClientsMu.Unlock()
+	// Per-user connect lock: ek user cha slow connect (network/login) global
+	// mutex dharun thevat nahi - nahitar dusrya sarvanche (ani logout cha) button
+	// "response det nahi" asa distat hota.
+	lk, _ := userbotConnLocks.LoadOrStore(userID, &sync.Mutex{})
+	connMu := lk.(*sync.Mutex)
+	connMu.Lock()
+	defer connMu.Unlock()
 
-	if client, ok := userbotClients[userID]; ok && client != nil {
+	userbotClientsMu.Lock()
+	client, ok := userbotClients[userID]
+	userbotClientsMu.Unlock()
+	if ok && client != nil {
 		return client, nil
 	}
 
@@ -468,29 +477,62 @@ func GetUserbotClientForUser(userID int64) (*gotgproto.Client, error) {
 	}
 
 	apiID, apiHash := db.SessionAPICreds(doc.Session)
-	client, err := gotgproto.NewClient(
+	client, err = gotgproto.NewClient(
 		apiID,
 		apiHash,
 		gotgproto.ClientTypePhone(""),
 		&gotgproto.ClientOpts{
 			Session:          sessionMaker.PyrogramSession(doc.Session),
 			DisableCopyright: true,
+			NoAutoAuth:       true, // session invalid asel tar terminal prompt var atakat nahi
 		},
 	)
 	if err != nil {
+		up := strings.ToUpper(err.Error())
+		switch {
+		case strings.Contains(up, "AUTH_KEY_DUPLICATED"):
+			// Redeploy overlap - session DELETE karat nahi, thodya velane retry.
+			return nil, fmt.Errorf("Userbot session sadhya dusrya instance var vaparla jat aahe (redeploy). 30-60 sec thamba ani punha try kara.")
+		case strings.Contains(up, "AUTH_KEY_UNREGISTERED"), strings.Contains(up, "SESSION_REVOKED"),
+			strings.Contains(up, "SESSION_EXPIRED"), strings.Contains(up, "USER_DEACTIVATED"):
+			_ = db.DeleteUserBotSessionForUser(userID)
+			return nil, fmt.Errorf("Tumcha Userbot session Telegram ne expire/revoke kela aahe. Kripaya parat Login kara.")
+		}
 		return nil, fmt.Errorf("Failed to start your userbot session: %w", err)
 	}
 
+	userbotClientsMu.Lock()
 	userbotClients[userID] = client
+	userbotClientsMu.Unlock()
 	return client, nil
 }
 
-// dropUserbotClient — logout नंतर cached client काढा, नाहीतर नवीन API creds/session ने
-// पुन्हा login केल्यावरही restart पर्यंत जुना client वापरला जाईल.
+// dropUserbotClient - logout nantar cached client KHAROKHAR band (Stop) karto ani
+// map madhun kadhto. Aadhi fakt delete hot hota => connection chalu rahaycha.
 func dropUserbotClient(userID int64) {
 	userbotClientsMu.Lock()
+	c := userbotClients[userID]
 	delete(userbotClients, userID)
 	userbotClientsMu.Unlock()
+	if c != nil {
+		c.Stop()
+	}
+}
+
+// StopAllUserbotClients - shutdown/redeploy var sagle per-user userbot clients thambvto.
+func StopAllUserbotClients() {
+	userbotClientsMu.Lock()
+	clients := make([]*gotgproto.Client, 0, len(userbotClients))
+	for id, c := range userbotClients {
+		if c != nil {
+			clients = append(clients, c)
+		}
+		delete(userbotClients, id)
+	}
+	userbotClientsMu.Unlock()
+	for _, c := range clients {
+		c.Stop()
+	}
 }
 
 func resolveChannelInputPeer(ctx context.Context, client *gotgproto.Client, channelID int64) *tg.InputPeerChannel {

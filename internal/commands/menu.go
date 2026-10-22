@@ -468,22 +468,49 @@ func cmdUserbotStatusView(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
+// performUserbotLogout - Premium menu button ani /cmd menu doghanchi common logout logic.
+//   - user cha swatacha session ("user_<id>") asel tar to delete + client STOP.
+//   - nasel ani to admin asel tar Admin System Userbot ("main") stop + delete.
+//   - dusrya user cha kiva admin cha session kadhihi chukun delete hot nahi.
+func performUserbotLogout(chatID int64) string {
+	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, chatID)
+
+	if doc, _ := db.GetUserBotSessionDocForUser(chatID); doc != nil && doc.Session != "" {
+		_ = db.DeleteUserBotSessionForUser(chatID)
+		dropUserbotClient(chatID)
+		if du, _ := db.GetUserByTelegramID(chatID); du != nil {
+			_ = db.SetUserTgApiCreds(du.ID, 0, "")
+		}
+		return "\U0001F6AA Userbot Account Logout kela - session delete zala."
+	}
+
+	if isAdmin {
+		running := false
+		if UserbotStatus != nil {
+			running, _, _, _, _, _ = UserbotStatus()
+		}
+		sysDoc, _ := db.GetUserBotSessionDoc()
+		if running || (sysDoc != nil && sysDoc.Session != "") {
+			if UserbotStop != nil {
+				UserbotStop() // client kharokhar band (connection close)
+			}
+			_ = db.DeleteUserBotSession()
+			config.ValueOf.UserSession = ""
+			if du, _ := db.GetUserByTelegramID(chatID); du != nil {
+				_ = db.SetUserTgApiCreds(du.ID, 0, "")
+			}
+			return "\U0001F6AA Admin System Userbot Logout kela - session delete zala."
+		}
+	}
+	return "\u26A0\uFE0F Userbot aadhich logged out aahe."
+}
+
 func cmdUserbotLogout(ctx *ext.Context, u *ext.Update) error {
 	if UserbotStatus == nil || UserbotStop == nil {
-		reply(ctx, u, "❌ Userbot bridge अजून ready नाही (bot restart झाला का ते बघा).")
+		reply(ctx, u, "\u274C Userbot bridge ajun ready nahi (bot restart zala ka te bagha).")
 		return dispatcher.EndGroups
 	}
-	running, _, _, _, _, _ := UserbotStatus()
-	if !running {
-		reply(ctx, u, "⚠️ Userbot आधीच logged out आहे.")
-		return dispatcher.EndGroups
-	}
-	UserbotStop()
-	_ = db.DeleteUserBotSession()
-	if du, _ := db.GetUserByTelegramID(u.EffectiveUser().GetID()); du != nil {
-		_ = db.SetUserTgApiCreds(du.ID, 0, "")
-	}
-	reply(ctx, u, "✅ Userbot logout केला — session delete झाला.\n\nपुन्हा login करायला 🔑 Userbot Login वापरा.")
+	reply(ctx, u, performUserbotLogout(u.EffectiveUser().GetID())+"\n\nPunha login karayla \U0001F511 Userbot Login vapra.")
 	return dispatcher.EndGroups
 }
 
@@ -1042,15 +1069,34 @@ func handleMenuNav(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
+// handleMenuCmd - "cmd:" buttons. Sync gate + lagech callback ack (spinner thambto),
+// mag kaam goroutine madhe + panic recover. Aadhi ack fakt kaam sampalyavar jayche,
+// tyamule slow/atakleli command (userbot/DB) pudhche buttons block karaychi.
 func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
 	if gateBlockCallback(ctx, u) {
 		return dispatcher.EndGroups
 	}
+	if u.CallbackQuery != nil {
+		_, _ = ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{QueryID: u.CallbackQuery.QueryID})
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				utils.Logger.Sugar().Errorw("menu: cmd callback panic", "panic", r)
+				editMenu(ctx, u, "\u274C Anapekshit error ali, punha prayatna kara.", buildRootMarkup())
+			}
+		}()
+		handleMenuCmdInner(ctx, u)
+	}()
+	return dispatcher.EndGroups
+}
+
+func handleMenuCmdInner(ctx *ext.Context, u *ext.Update) {
 	key := strings.TrimPrefix(string(u.CallbackQuery.Data), "cmd:")
 	mc, ok := menuRegistry[key]
 	if !ok {
 		editMenu(ctx, u, "❌ Command सापडला नाही.", buildRootMarkup())
-		return dispatcher.EndGroups
+		return
 	}
 	senderID := u.EffectiveUser().GetID()
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
@@ -1058,7 +1104,7 @@ func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
 	if !isAdmin {
 		if !db.HasUserbotAccess(senderID) {
 			editCatalogMessage(ctx, u, "⛔ तुम्हाला या कमांडचा ॲक्सेस नाही.", &tg.ReplyInlineMarkup{Rows: backOnlyRow("wc:root")})
-			return dispatcher.EndGroups
+			return
 		}
 	}
 
@@ -1069,11 +1115,11 @@ func handleMenuCmd(ctx *ext.Context, u *ext.Update) error {
 	case kindFlow:
 		if len(mc.steps) == 0 {
 			editMenu(ctx, u, "❌ Configuration error — steps नाहीत.", backAndRefreshMarkup(key))
-			return dispatcher.EndGroups
+			return
 		}
 		startFlowStep(ctx, u, key, mc.steps[0], mc.steps[1:], senderID, nil)
 	}
-	return dispatcher.EndGroups
+	return
 }
 
 func handleMenuCancel(ctx *ext.Context, u *ext.Update) error {
@@ -1109,7 +1155,19 @@ func handlePendingReply(ctx *ext.Context, u *ext.Update) error {
 
 	// Userbot login flow (phone → OTP → 2FA) — generic pending फ्लो च्याही आधी check.
 	if ls := getUserbotLogin(senderID); ls != nil {
-		return handleUserbotLoginReply(ctx, u, senderID, ls, strings.TrimSpace(msg.Text))
+		// SendCode (60s+) / VerifyCode (30s) blocking aahet - sync chalavle tar
+		// sarvanche updates (buttons sahit) tevdha vel atakatat. Mhanun goroutine.
+		loginText := strings.TrimSpace(msg.Text)
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					utils.Logger.Sugar().Errorw("userbot login reply panic", "panic", r)
+					clearUserbotLogin(senderID)
+				}
+			}()
+			_ = handleUserbotLoginReply(ctx, u, senderID, ls, loginText)
+		}()
+		return dispatcher.EndGroups
 	}
 
 	p := getPending(senderID)

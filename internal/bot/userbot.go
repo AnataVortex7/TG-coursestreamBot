@@ -1,24 +1,101 @@
 package bot
 
 import (
-	"strings"
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/db"
 	"errors"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/celestix/gotgproto"
 	"github.com/celestix/gotgproto/sessionMaker"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 	"go.uber.org/zap"
 )
 
 type UserBotStruct struct {
 	log    *zap.Logger
+	cmu    sync.RWMutex // client pointer cha lock (Start/Stop/GetClient ekach veli yetat)
 	client *gotgproto.Client
 }
 
 var UserBot *UserBotStruct = &UserBotStruct{}
+
+// deadSessionCodes — Telegram ne session kayamcha maarla (user ne logout kela /
+// account ban / key revoke). Faqt yachvelich DB madhla session delete karaycha.
+// AUTH_KEY_DUPLICATED yat NAHI — to redeploy overlap mule yeto, session delete
+// kelyas user cha login ugachach jato. To retry-able aahe.
+var deadSessionCodes = []string{
+	"AUTH_KEY_UNREGISTERED",
+	"SESSION_REVOKED",
+	"SESSION_EXPIRED",
+	"USER_DEACTIVATED",
+	"USER_DEACTIVATED_BAN",
+}
+
+// IsDeadSessionErr — session permanently invalid aahe ka.
+func IsDeadSessionErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	up := strings.ToUpper(err.Error())
+	for _, c := range deadSessionCodes {
+		if tgerr.Is(err, c) || strings.Contains(up, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsDuplicatedErr — same session dusrya instance/connection varun vaparla jato aahe.
+func IsDuplicatedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	return tgerr.Is(err, "AUTH_KEY_DUPLICATED") || strings.Contains(strings.ToUpper(err.Error()), "AUTH_KEY_DUPLICATED")
+}
+
+// connectSessionWithRetry — session string varun client start karto.
+//   - dead session  => (nil, err, dead=true) — caller DB madhun delete karel
+//   - AUTH_KEY_DUPLICATED / network => backoff var retry (jaruna instance band
+//     honyachi vaat baghto), session KADHI delete hot nahi.
+//   - NoAutoAuth=true: session invalid asel tar terminal phone prompt var
+//     goroutine kayamcha atakat nahi.
+func connectSessionWithRetry(log *zap.Logger, sessionStr string) (client *gotgproto.Client, dead bool, err error) {
+	const maxAttempts = 6
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		apiID, apiHash := db.SessionAPICreds(sessionStr)
+		client, err = gotgproto.NewClient(
+			apiID,
+			apiHash,
+			gotgproto.ClientTypePhone(""),
+			&gotgproto.ClientOpts{
+				Session:          sessionMaker.PyrogramSession(sessionStr),
+				DisableCopyright: true,
+				NoAutoAuth:       true,
+			},
+		)
+		if err == nil {
+			return client, false, nil
+		}
+		if IsDeadSessionErr(err) {
+			return nil, true, err
+		}
+		wait := time.Duration(attempt) * 10 * time.Second
+		if IsDuplicatedErr(err) {
+			log.Warn("AUTH_KEY_DUPLICATED — session dusrikade vaparla jat aahe, session jatan karto, retry",
+				zap.Int("attempt", attempt), zap.Duration("wait", wait))
+		} else {
+			log.Warn("Userbot connect error — retry", zap.Int("attempt", attempt), zap.Duration("wait", wait), zap.Error(err))
+		}
+		if attempt < maxAttempts {
+			time.Sleep(wait)
+		}
+	}
+	return nil, false, err
+}
 
 func StartUserBot(l *zap.Logger) {
 	log := l.Named("USERBOT")
@@ -27,29 +104,18 @@ func StartUserBot(l *zap.Logger) {
 		return
 	}
 	log.Sugar().Infoln("Starting userbot")
-	apiID, apiHash := db.SessionAPICreds(config.ValueOf.UserSession)
-	client, err := gotgproto.NewClient(
-		apiID,
-		apiHash,
-		gotgproto.ClientTypePhone(""),
-		&gotgproto.ClientOpts{
-			Session:          sessionMaker.PyrogramSession(config.ValueOf.UserSession),
-			DisableCopyright: true,
-			NoAutoAuth:       true,
-		},
-	)
+	client, dead, err := connectSessionWithRetry(log, config.ValueOf.UserSession)
 	if err != nil {
 		log.Error("Failed to start userbot", zap.Error(err))
-		errStr := strings.ToLower(err.Error())
-		if strings.Contains(errStr, "auth_key_unregistered") || strings.Contains(errStr, "401") || strings.Contains(errStr, "session_revoked") || strings.Contains(errStr, "unauthorized") {
-			log.Warn("Expired or revoked userbot session detected in DB — clearing invalid session string")
+		if dead {
+			log.Warn("Revoked/expired userbot session confirmed by Telegram — clearing session from DB")
 			_ = db.DeleteUserBotSession()
 			config.ValueOf.UserSession = ""
 		}
 		return
 	}
 	UserBot.log = log
-	UserBot.client = client
+	UserBot.setClient(client)
 	log.Info("Userbot started", zap.String("username", client.Self.Username), zap.String("FirstName", client.Self.FirstName), zap.String("LastName", client.Self.LastName))
 	if err := UserBot.AddBotsAsAdmins(); err != nil {
 		log.Error("Failed to add bots as admins", zap.Error(err))
@@ -57,8 +123,22 @@ func StartUserBot(l *zap.Logger) {
 	}
 }
 
+// setClient — navin client set karto; jaruna asel tar to properly STOP karto
+// (nahitar jaruna connection chalu rahun same auth key doghat vaparla jato).
+func (u *UserBotStruct) setClient(c *gotgproto.Client) {
+	u.cmu.Lock()
+	old := u.client
+	u.client = c
+	u.cmu.Unlock()
+	if old != nil && old != c {
+		old.Stop()
+	}
+}
+
 // GetClient returns the underlying gotgproto client, or nil if the userbot is not running.
 func (u *UserBotStruct) GetClient() *gotgproto.Client {
+	u.cmu.RLock()
+	defer u.cmu.RUnlock()
 	return u.client
 }
 
@@ -74,12 +154,13 @@ func (u *UserBotStruct) GetClient() *gotgproto.Client {
 //       karta, channel ID warning level log madhe print karto, ani return.
 func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
 	PromoteWorkerBotsUsingMainBot(channelID, u.log)
-	if u.client == nil {
+	cl := u.GetClient()
+	if cl == nil {
 		u.log.Warn("AddBotsAsAdminsForChannel: userbot client running nahi - skip", zap.Int64("channel_id", channelID))
 		return errors.New("userbot not running")
 	}
 	u.log.Sugar().Infof("Channel %d: userbot admin status check kartoy", channelID)
-	ctx := u.client.CreateContext()
+	ctx := cl.CreateContext()
 
 	// DB/admin-panel madhe course channel ID Bot-API format madhe save hoто
 	// (-100xxxxxxxxxx, @userinfobot deto tasach). MTProto cha ChannelsGetChannels
@@ -91,7 +172,7 @@ func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
 		mtprotoID = (-mtprotoID) - 1000000000000
 	}
 
-	channelInfos, err := u.client.API().ChannelsGetChannels(
+	channelInfos, err := cl.API().ChannelsGetChannels(
 		ctx,
 		[]tg.InputChannelClass{
 			&tg.InputChannel{
@@ -113,7 +194,7 @@ func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
 	inputChannel := channelChat.AsInput()
 
 	// Step 1: Userbot swatah admin/owner aahe ka check karto.
-	selfParticipant, err := u.client.API().ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{
+	selfParticipant, err := cl.API().ChannelsGetParticipant(ctx, &tg.ChannelsGetParticipantRequest{
 		Channel:     inputChannel,
 		Participant: &tg.InputPeerSelf{},
 	})
@@ -141,7 +222,7 @@ func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
 
 	// Step 2: Already admin konte bots aahet te check karto.
 	currentAdmins := []int64{}
-	admins, err := u.client.API().ChannelsGetParticipants(ctx, &tg.ChannelsGetParticipantsRequest{
+	admins, err := cl.API().ChannelsGetParticipants(ctx, &tg.ChannelsGetParticipantsRequest{
 		Channel: inputChannel,
 		Filter:  &tg.ChannelParticipantsAdmins{},
 		Offset:  0,
@@ -181,8 +262,8 @@ func (u *UserBotStruct) AddBotsAsAdminsForChannel(channelID int64) error {
 			u.log.Warn("AddBotsAsAdminsForChannel: username resolve nahi zala", zap.String("bot", bot.Self.Username), zap.Error(err))
 			continue
 		}
-		_, err = u.client.API().ChannelsEditAdmin(
-			u.client.CreateContext().Context,
+		_, err = cl.API().ChannelsEditAdmin(
+			cl.CreateContext().Context,
 			&tg.ChannelsEditAdminRequest{
 				Channel: inputChannel,
 				UserID:  botInfo.GetInputUser(),
