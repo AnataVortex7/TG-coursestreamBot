@@ -174,7 +174,13 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 	}
 	chatID := user.GetID()
 
-	// फक्त private chat
+	// फक्त bot सोबतचा private (1-to-1) chat. Channel / group / supergroup मध्ये (log channel,
+	// send channel, userbot चे /dl commands, pre-download commands इ.) gate कधीच नाही —
+	// तिथे sender (userbot/दुसरा user) चा ID user-type असतो, म्हणून फक्त sender चा type
+	// बघून चालत नाही; chat स्वतः private आहे का हे तपासणं आवश्यक आहे.
+	if !gateIsPrivateChat(ctx, u, chatID) {
+		return dispatcher.ContinueGroups
+	}
 	peerInfo := ctx.PeerStorage.GetPeerById(chatID)
 	if peerInfo.Type != int(storage.TypeUser) {
 		return dispatcher.ContinueGroups
@@ -250,6 +256,23 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 	// 4) Popup
 	gateSendPopup(ctx, u, chatID)
 	return dispatcher.EndGroups
+}
+
+// gateIsPrivateChat — true फक्त जेव्हा message bot च्या private chat मध्ये आला असेल
+// (chat ID == sender user ID आणि chat peer type = user). Channel/group मध्ये false.
+func gateIsPrivateChat(ctx *ext.Context, u *ext.Update, senderID int64) bool {
+	chat := u.EffectiveChat()
+	if chat == nil {
+		return false
+	}
+	cid := chat.GetID()
+	if cid != senderID {
+		return false
+	}
+	if config.ValueOf.LogChannelID != 0 && (cid == config.ValueOf.LogChannelID || -cid == config.ValueOf.LogChannelID) {
+		return false
+	}
+	return ctx.PeerStorage.GetPeerById(cid).Type == int(storage.TypeUser)
 }
 
 // ─── Popup ───────────────────────────────────────────────────────────────────
