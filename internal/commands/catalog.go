@@ -354,10 +354,20 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		editCatalogMessage(ctx, u, "✅ Userbot selection reset! आता तुमचं default/स्वतःचं account वापरलं जाईल.\n\n"+text, markup)
 		
 	case "userbot_rm_watermark":
-		watermarkStore.Delete(chatID)
-		_ = db.SetUserWatermark(chatID, "")
+		isAdminRM := utils.Contains(config.ValueOf.AllowedUsers, chatID)
+		clearWatermarkForUser(chatID, isAdminRM)
 		text, markup := renderPremiumMenuView(chatID)
 		editCatalogMessage(ctx, u, "✅ Watermark clear केला!\n\n"+text, markup)
+
+	case "userbot_rm_sendchannel":
+		// [NEW] Destination (send) channel काढतो — पुढचे downloads परत फक्त bot chat मध्ये जातील.
+		clearSendChannelForUser(chatID)
+		if utils.Contains(config.ValueOf.AllowedUsers, chatID) {
+			sendChannelStore.Delete("id")
+			_ = db.SetSettingInt64("send_channel_id", 0)
+		}
+		text, markup := renderPremiumMenuView(chatID)
+		editCatalogMessage(ctx, u, "✅ Destination Channel काढला!\n\n"+text, markup)
 
 	case "userbot_logout":
 		_ = db.DeleteUserBotSessionForUser(chatID)
@@ -2356,6 +2366,7 @@ func renderPremiumMenuView(userID int64) (string, tg.ReplyMarkupClass) {
 		}},
 		{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "📢 Set Destination Channel", Data: []byte("wc:userbot_sendchannel")},
+			&tg.KeyboardButtonCallback{Text: "🗑️ Remove Channel", Data: []byte("wc:userbot_rm_sendchannel")},
 		}},
 		{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "💧 Set Watermark Text", Data: []byte("wc:userbot_watermark")},
