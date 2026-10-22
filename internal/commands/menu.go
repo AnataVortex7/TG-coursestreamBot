@@ -56,9 +56,15 @@ type cmdStep struct {
 	kind   stepKind
 	prompt string                             // select: list चा header | input: प्रश्न
 	listFn func() ([]listItem, string, error) // select साठी — (items, empty-msg, err)
+	// listFnU — user-wise list (admin ID मिळतो). असेल तर listFn ऐवजी हा वापरला जातो.
+	listFnU func(adminID int64) ([]listItem, string, error)
 }
 
 func inputStep(prompt string) cmdStep { return cmdStep{kind: stepInput, prompt: prompt} }
+
+func selectStepU(label string, listFn func(adminID int64) ([]listItem, string, error)) cmdStep {
+	return cmdStep{kind: stepSelect, prompt: label, listFnU: listFn}
+}
 
 func selectStep(label string, listFn func() ([]listItem, string, error)) cmdStep {
 	return cmdStep{kind: stepSelect, prompt: label, listFn: listFn}
@@ -387,17 +393,24 @@ func listActiveSessionsItems() ([]listItem, string, error) {
 	return items, "", nil
 }
 
-func listReplaceItems() ([]listItem, string, error) {
+func listReplaceItems(adminID int64) ([]listItem, string, error) {
 	var items []listItem
-	captionReplaceStore.Range(func(k, v interface{}) bool {
+	for i, r := range db.GetReplaceRules(adminID) {
+		n := r.New
+		if strings.TrimSpace(n) == "" {
+			n = "(काढून टाका)"
+		}
+		prefix := ""
+		if r.Line {
+			prefix = "[line] "
+		}
 		items = append(items, listItem{
-			display: fmt.Sprintf("%s → %s", k.(string), v.(string)),
-			id:      k.(string),
+			display: fmt.Sprintf("%s%s → %s", prefix, r.Old, n),
+			id:      strconv.Itoa(i + 1),
 		})
-		return true
-	})
+	}
 	if len(items) == 0 {
-		return nil, "कोणतेही replace rules नाहीत.", nil
+		return nil, "तुमचे कोणतेही replace rules नाहीत.", nil
 	}
 	return items, "", nil
 }
@@ -721,10 +734,10 @@ func init() {
 	// ── Stream Settings ──
 	registerCmd(menuCmd{key: "listreplace", label: "📋 List Replace Rules", kind: kindView, fn: cmdListReplace})
 	registerCmd(menuCmd{key: "setreplace", label: "➕ Set Replace Rule", kind: kindFlow, fn: cmdSetReplace, steps: []cmdStep{
-		inputStep("📝 old_text=new_text टाका (line मध्ये space असली तरी चालेल):"),
+		inputStep("📝 `old => new` टाका (पूर्ण ओळ replace करायला सुरुवातीला `line:` लिहा. new रिकामा = काढून टाका):"),
 	}})
 	registerCmd(menuCmd{key: "delreplace", label: "🗑 Delete Replace Rule", kind: kindFlow, fn: cmdDelReplace, steps: []cmdStep{
-		selectStep("🗑 Delete Replace Rule — निवडा:", listReplaceItems),
+		selectStepU("🗑 Delete Replace Rule — निवडा:", listReplaceItems),
 	}})
 	registerCmd(menuCmd{key: "clearreplace", label: "🧹 Clear All Replace Rules", kind: kindToggle, fn: cmdClearReplace})
 	registerCmd(menuCmd{key: "showsendchannel", label: "📢 Show Send Channel", kind: kindView, fn: cmdShowSendChannel})
@@ -917,8 +930,15 @@ func cmdMenuRoot(ctx *ext.Context, u *ext.Update) error {
 // (flow च्या पुढच्या step ला, plain reply नंतर)
 // ═══════════════════════════════════════════════════════════════════════════
 
-func renderSelectListText(step cmdStep, idxMap map[int]string) (string, error, string) {
-	items, emptyMsg, err := step.listFn()
+func renderSelectListText(step cmdStep, adminID int64, idxMap map[int]string) (string, error, string) {
+	var items []listItem
+	var emptyMsg string
+	var err error
+	if step.listFnU != nil {
+		items, emptyMsg, err = step.listFnU(adminID)
+	} else {
+		items, emptyMsg, err = step.listFn()
+	}
 	if err != nil {
 		return "", err, ""
 	}
@@ -940,7 +960,7 @@ func startFlowStep(ctx *ext.Context, u *ext.Update, key string, step cmdStep, re
 	switch step.kind {
 	case stepSelect:
 		idxMap := map[int]string{}
-		text, err, emptyMsg := renderSelectListText(step, idxMap)
+		text, err, emptyMsg := renderSelectListText(step, adminID, idxMap)
 		if err != nil {
 			editMenu(ctx, u, "❌ "+err.Error(), backAndRefreshMarkup(key))
 			return
@@ -963,7 +983,7 @@ func renderStepAsMessage(ctx *ext.Context, u *ext.Update, key string, step cmdSt
 	switch step.kind {
 	case stepSelect:
 		idxMap := map[int]string{}
-		text, err, emptyMsg := renderSelectListText(step, idxMap)
+		text, err, emptyMsg := renderSelectListText(step, adminID, idxMap)
 		if err != nil {
 			reply(ctx, u, "❌ "+err.Error())
 			clearPending(adminID)

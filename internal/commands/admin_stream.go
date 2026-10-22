@@ -38,7 +38,6 @@ import (
 )
 
 // ── Caption Replace Store ─────────────────────────────────────────────────────
-var captionReplaceStore sync.Map // map[string]string
 
 // ── Send Channel Store ────────────────────────────────────────────────────────
 var sendChannelStore sync.Map // key: "id", value: int64
@@ -608,96 +607,117 @@ func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// ── /setreplace <old=new> [old2=new2] ... ─────────────────────────────────────
+// ── /setreplace [line:] old => new  (per-user, DB मध्ये save) ─────────────────
 
 func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
-	text := u.EffectiveMessage.Text
-	
-	// Command आणि args वेगळे करणे
-	partsCmd := strings.SplitN(text, " ", 2)
-	if len(partsCmd) < 2 || strings.TrimSpace(partsCmd[1]) == "" {
+	userID := u.EffectiveUser().GetID()
+	spec := commandRest(u.EffectiveMessage.Text)
+	if spec == "" {
 		reply(ctx, u,
-			"📝 *Usage:* `/setreplace old_text=new_text`\n\n"+
+			"📝 *Usage:* `/setreplace old => new`\n\n"+
 				"Examples:\n"+
+				"`/setreplace DOWNLOAD by ROCKSTAR 𓆩𓂍𓆪 => Downloaded by MyChannel`\n"+
 				"`/setreplace hello=नमस्ते`\n"+
-				"`/setreplace Please subscribe to my channel.= ` (काढून टाकण्यासाठी)\n\n"+
-				"Caption मधील 'old_text' आढळल्यास 'new_text' ने replace होईल.\n"+
-				"सध्याचे rules बघायला: /listreplace")
+				"`/setreplace @oldchannel =>` (रिकामा = काढून टाका)\n"+
+				"`/setreplace line: ROCKSTAR => 📚 My Course` (ROCKSTAR असलेली *पूर्ण ओळ* replace)\n\n"+
+				"✅ Fancy fonts (𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃, ＤＯＷＮＬＯＡＤ, ᴅᴏᴡɴʟᴏᴀᴅ), CAPS/small, जास्त spaces, symbols आणि मराठी — सगळं match होतं.\n"+
+				"हे rules फक्त *तुमच्या* userbot downloads ना लागू होतात.\n"+
+				"बघायला: /listreplace")
 		return dispatcher.EndGroups
 	}
-
-	// पुढे multiple spaces असल्यास फक्त सुरुवातीचे spaces काढायचे, मधले तसेच ठेवायचे.
-	fullText := strings.TrimLeft(partsCmd[1], " \t")
-	parts := strings.SplitN(fullText, "=", 2)
-	if len(parts) != 2 {
-		reply(ctx, u, "❌ Invalid format. '=' असणे आवश्यक आहे.\nExample: `/setreplace old=new`")
+	rule, err := parseReplaceSpec(spec)
+	if err != nil {
+		reply(ctx, u, "❌ Invalid format: "+err.Error()+"\nExample: `/setreplace old => new`")
 		return dispatcher.EndGroups
 	}
-
-	// oldWord मध्ये जेवढे spaces असतील (सुरुवात/शेवट सोडून) ते तसेच राहतील.
-	oldWord := parts[0]
-	newWord := parts[1]
-	
-	// जर user ने quotes दिले असतील, तर आपण trimming करू शकतो.
-	// पण तूर्तास सुरळीतपणासाठी आपण फक्त trailing spaces काढूया.
-	// TrimSpace केल्यास oldWord च्या सुरुवातीचे/शेवटचे spaces जातील. जर त्याला तिथे spaces हवे असतील तर?
-	// सहसा ते कॉपी-पेस्ट मध्ये येतात.
-	oldWord = strings.TrimSpace(oldWord)
-	newWord = strings.TrimSpace(newWord)
-	
-	// If the user deliberately provides quotes for exact matching, we can remove them.
-	// But TrimSpace usually handles normal use cases.
-	
-	captionReplaceStore.Store(oldWord, newWord)
-
-	reply(ctx, u, fmt.Sprintf("✅ Replace rule set:\n\n`%s`\n⬇️\n`%s`", oldWord, newWord))
+	rules := db.GetReplaceRules(userID)
+	updated := false
+	out := make([]db.ReplaceRule, 0, len(rules)+1)
+	for _, r := range rules {
+		if string(foldPattern(r.Old)) == string(foldPattern(rule.Old)) && r.Line == rule.Line {
+			out = append(out, rule) // same rule → update
+			updated = true
+		} else {
+			out = append(out, r)
+		}
+	}
+	if !updated {
+		out = append(out, rule)
+	}
+	if err := db.SaveReplaceRules(userID, out); err != nil {
+		reply(ctx, u, "❌ Save failed: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	verb := "set"
+	if updated {
+		verb = "updated"
+	}
+	reply(ctx, u, fmt.Sprintf("✅ Replace rule %s (एकूण %d):\n\n%s", verb, len(out), ruleDisplay(rule)))
 	return dispatcher.EndGroups
 }
 
 // ── /listreplace ──────────────────────────────────────────────────────────────
 
 func cmdListReplace(ctx *ext.Context, u *ext.Update) error {
-	var pairs []string
-	captionReplaceStore.Range(func(k, v interface{}) bool {
-		pairs = append(pairs, fmt.Sprintf("`%s` → `%s`", k.(string), v.(string)))
-		return true
-	})
-	if len(pairs) == 0 {
-		reply(ctx, u, "📋 कोणतेही replace rules नाहीत.\nAdd करायला: `/setreplace old=new`")
+	rules := db.GetReplaceRules(u.EffectiveUser().GetID())
+	if len(rules) == 0 {
+		reply(ctx, u, "📋 तुमचे कोणतेही replace rules नाहीत.\nAdd करायला: `/setreplace old => new`")
 		return dispatcher.EndGroups
 	}
-	reply(ctx, u, fmt.Sprintf("📋 Caption Replace Rules (%d):\n\n%s", len(pairs), strings.Join(pairs, "\n")))
+	var lines []string
+	for i, r := range rules {
+		lines = append(lines, fmt.Sprintf("%d. %s", i+1, ruleDisplay(r)))
+	}
+	reply(ctx, u, fmt.Sprintf("📋 तुमचे Replace Rules (%d):\n\n%s\n\nकाढायला: `/delreplace <number>`", len(rules), strings.Join(lines, "\n")))
 	return dispatcher.EndGroups
 }
 
-// ── /delreplace <old> ─────────────────────────────────────────────────────────
+// ── /delreplace <number | old text> ───────────────────────────────────────────
 
 func cmdDelReplace(ctx *ext.Context, u *ext.Update) error {
-	a := args(u)
-	if len(a) < 1 {
-		reply(ctx, u, "Usage: `/delreplace <old_word>`\nExample: `/delreplace hello`")
+	userID := u.EffectiveUser().GetID()
+	arg := strings.TrimSpace(commandRest(u.EffectiveMessage.Text))
+	if arg == "" {
+		reply(ctx, u, "Usage: `/delreplace <number>` (नंबर /listreplace मध्ये दिसतो) किंवा `/delreplace <old text>`")
 		return dispatcher.EndGroups
 	}
-	oldWord := strings.TrimSpace(a[0])
-	if _, ok := captionReplaceStore.Load(oldWord); !ok {
-		reply(ctx, u, fmt.Sprintf("❌ Rule नाही: `%s`\nसध्याचे rules: /listreplace", oldWord))
+	rules := db.GetReplaceRules(userID)
+	idx := -1
+	if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= len(rules) {
+		idx = n - 1
+	} else {
+		target := string(foldPattern(strings.TrimPrefix(strings.TrimSpace(arg), "line:")))
+		for i, r := range rules {
+			if string(foldPattern(r.Old)) == target {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		reply(ctx, u, "❌ Rule सापडला नाही.\nसध्याचे rules: /listreplace")
 		return dispatcher.EndGroups
 	}
-	captionReplaceStore.Delete(oldWord)
-	reply(ctx, u, fmt.Sprintf("✅ Deleted: `%s`", oldWord))
+	removed := rules[idx]
+	out := append(append([]db.ReplaceRule{}, rules[:idx]...), rules[idx+1:]...)
+	if err := db.SaveReplaceRules(userID, out); err != nil {
+		reply(ctx, u, "❌ Save failed: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u, "✅ Deleted: "+ruleDisplay(removed))
 	return dispatcher.EndGroups
 }
 
 // ── /clearreplace ─────────────────────────────────────────────────────────────
 
 func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
-	count := 0
-	captionReplaceStore.Range(func(k, v interface{}) bool {
-		captionReplaceStore.Delete(k)
-		count++
-		return true
-	})
-	reply(ctx, u, fmt.Sprintf("✅ सगळे replace rules clear केले (%d rules काढले).", count))
+	userID := u.EffectiveUser().GetID()
+	count := len(db.GetReplaceRules(userID))
+	if err := db.SaveReplaceRules(userID, []db.ReplaceRule{}); err != nil {
+		reply(ctx, u, "❌ Save failed: "+err.Error())
+		return dispatcher.EndGroups
+	}
+	reply(ctx, u, fmt.Sprintf("✅ तुमचे सगळे replace rules clear केले (%d rules काढले).", count))
 	return dispatcher.EndGroups
 }
 
@@ -1149,25 +1169,8 @@ func cmdShowThumbnail(ctx *ext.Context, u *ext.Update) error {
 // ── applyReplaces ─────────────────────────────────────────────────────────────
 
 func applyReplaces(caption string) string {
-	captionReplaceStore.Range(func(k, v interface{}) bool {
-		oldStr := k.(string)
-		newStr := v.(string)
-		
-		// Case-insensitive and whitespace-flexible regex replacement
-		escapedOld := regexp.QuoteMeta(oldStr)
-		// Any sequence of whitespace in the user's search string will match ANY sequence of whitespace in the caption
-		escapedOld = regexp.MustCompile(`\s+`).ReplaceAllString(escapedOld, `\s+`)
-		
-		re, err := regexp.Compile("(?i)" + escapedOld)
-		if err == nil {
-			caption = re.ReplaceAllString(caption, newStr)
-		} else {
-			// Fallback if regex fails
-			caption = strings.ReplaceAll(caption, oldStr, newStr)
-		}
-		return true
-	})
-	return caption
+	// user context नसलेली ठिकाणं — सगळ्या admins चे rules.
+	return applyAdminReplaces(caption)
 }
 
 // ── /adminstream <messageID> ──────────────────────────────────────────────────
@@ -3450,7 +3453,7 @@ func prepareMessage(
 
 	// ── Step 2: Caption prepare ───────────────────────────────────────────
 	originalCaption := strings.TrimSpace(tgMsg.Message)
-	finalCaption := applyReplaces(originalCaption)
+	finalCaption := applyReplacesForUser(adminChatID, originalCaption)
 
 	// ── Step 3: No media → text message copy ─────────────────────────────
 	if tgMsg.Media == nil {
