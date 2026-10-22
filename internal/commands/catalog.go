@@ -353,6 +353,9 @@ func handleCatalogCallback(ctx *ext.Context, u *ext.Update) (retErr error) {
 		text, markup := renderUserbotStatusDetailView(chatID)
 		editCatalogMessage(ctx, u, "✅ Userbot selection reset! आता तुमचं default/स्वतःचं account वापरलं जाईल.\n\n"+text, markup)
 		
+	case "userbot_replace_add", "userbot_replace_list", "userbot_replace_rm", "userbot_replace_clear":
+		_ = handleReplaceCallback(ctx, u, chatID, parts)
+
 	case "userbot_rm_watermark":
 		isAdminRM := utils.Contains(config.ValueOf.AllowedUsers, chatID)
 		clearWatermarkForUser(chatID, isAdminRM)
@@ -2346,14 +2349,22 @@ func renderPremiumMenuView(userID int64) (string, tg.ReplyMarkupClass) {
 		impersonationStr = fmt.Sprintf("User ID: %d", target.(int64))
 	}
 
+	rrStr := fmt.Sprintf("%d", len(loadRulesFor(userID)))
+	if isAdmin {
+		rrStr += " (🌐 सगळ्यांसाठी)"
+	} else if g := len(globalReplaceRules()); g > 0 {
+		rrStr += fmt.Sprintf(" (+%d admin global)", g)
+	}
+
 	text := fmt.Sprintf(
 		"⭐ *Premium Features & Userbot Tools*\n\n"+
 			"👤 Userbot Status: %s\n"+
 			"💧 Custom Watermark: `%s`\n"+
 			"📢 Destination Channel: %s\n"+
+			"🔁 Replace Rules: %s\n"+
 			"👥 Currently Using: %s\n\n"+
 			"खालीलपैकी पर्याय निवडा:",
-		statusStr, wm, scStr, impersonationStr,
+		statusStr, wm, scStr, rrStr, impersonationStr,
 	)
 
 	rows := []tg.KeyboardButtonRow{
@@ -2373,6 +2384,10 @@ func renderPremiumMenuView(userID int64) (string, tg.ReplyMarkupClass) {
 		}},
 		{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "🗑️ Remove Watermark", Data: []byte("wc:userbot_rm_watermark")},
+		}},
+		{Buttons: []tg.KeyboardButtonClass{
+			&tg.KeyboardButtonCallback{Text: "🔁 Set Replace Rule", Data: []byte("wc:userbot_replace_add")},
+			&tg.KeyboardButtonCallback{Text: "🗑️ Remove Replace Word", Data: []byte("wc:userbot_replace_list")},
 		}},
 		{Buttons: []tg.KeyboardButtonClass{
 			&tg.KeyboardButtonCallback{Text: "🚪 Logout Userbot", Data: []byte("wc:userbot_logout")},

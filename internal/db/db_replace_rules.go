@@ -6,6 +6,7 @@
 package db
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -76,4 +77,41 @@ func SaveReplaceRules(userID int64, rules []ReplaceRule) error {
 	replaceRulesCache.m[userID] = replaceCacheEntry{rules: rules, at: time.Now()}
 	replaceRulesCache.Unlock()
 	return err
+}
+
+// ── Global rules (admin ने add केलेले — सगळ्या users साठी लागू) ──────────────
+// Admin चे rules _id = 0 या एका global doc मध्ये ठेवतो. आधी प्रत्येक admin चे
+// स्वतंत्र rules होते — पहिल्यांदा global doc तयार होताना ते सगळे आपोआप merge होतात.
+const GlobalReplaceUserID int64 = 0
+
+var globalReplaceMigrateOnce sync.Once
+
+func migrateLegacyAdminReplaceRules(adminIDs []int64) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	n, err := colReplaceRules().CountDocuments(ctx, bson.M{"_id": GlobalReplaceUserID})
+	if err != nil || n > 0 {
+		return
+	}
+	merged := []ReplaceRule{}
+	seen := map[string]bool{}
+	for _, id := range adminIDs {
+		for _, r := range GetReplaceRules(id) {
+			k := fmt.Sprintf("%v|%s|%s", r.Line, r.Old, r.New)
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			merged = append(merged, r)
+		}
+	}
+	if len(merged) > 0 {
+		_ = SaveReplaceRules(GlobalReplaceUserID, merged)
+	}
+}
+
+// GetGlobalReplaceRules — सगळ्यांसाठी लागू होणारे (admin चे) rules.
+func GetGlobalReplaceRules(legacyAdminIDs []int64) []ReplaceRule {
+	globalReplaceMigrateOnce.Do(func() { migrateLegacyAdminReplaceRules(legacyAdminIDs) })
+	return GetReplaceRules(GlobalReplaceUserID)
 }

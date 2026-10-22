@@ -395,7 +395,7 @@ func listActiveSessionsItems() ([]listItem, string, error) {
 
 func listReplaceItems(adminID int64) ([]listItem, string, error) {
 	var items []listItem
-	for i, r := range db.GetReplaceRules(adminID) {
+	for i, r := range loadRulesFor(adminID) {
 		n := r.New
 		if strings.TrimSpace(n) == "" {
 			n = "(काढून टाका)"
@@ -410,7 +410,7 @@ func listReplaceItems(adminID int64) ([]listItem, string, error) {
 		})
 	}
 	if len(items) == 0 {
-		return nil, "तुमचे कोणतेही replace rules नाहीत.", nil
+		return nil, "कोणतेही replace rules नाहीत.", nil
 	}
 	return items, "", nil
 }
@@ -1127,6 +1127,12 @@ func handlePendingReply(ctx *ext.Context, u *ext.Update) error {
 		clearPending(senderID)
 		setSendChannelIDForUser(senderID, chID)
 		reply(ctx, u, fmt.Sprintf("✅ Destination Send Channel set झाला: `%d`", chID))
+		return dispatcher.EndGroups
+	}
+
+	if p.key == "setreplace_user" {
+		clearPending(senderID)
+		handleSetReplaceReply(ctx, u, senderID, msg.Text)
 		return dispatcher.EndGroups
 	}
 

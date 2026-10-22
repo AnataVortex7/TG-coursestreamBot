@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image/jpeg"
 	"io"
 	"math/rand"
 	"os"
@@ -608,21 +607,21 @@ func cmdShowWatermark(ctx *ext.Context, u *ext.Update) error {
 	return dispatcher.EndGroups
 }
 
-// ── /setreplace [line:] old => new  (admin → GLOBAL, सगळ्यांसाठी; DB मध्ये save) ─────
+// ── /setreplace [line:] old => new  (per-user, DB मध्ये save) ─────────────────
 
 func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 	userID := u.EffectiveUser().GetID()
 	spec := commandRest(u.EffectiveMessage.Text)
 	if spec == "" {
 		reply(ctx, u,
-			"📝 *Usage:* `/setreplace old => new`  (किंवा `old=new`)\n\n"+
+			"📝 *Usage:* `/setreplace old => new`\n\n"+
 				"Examples:\n"+
-				"`/setreplace DOWNLOAD by ROCKSTAR 𓆩𓂍𓆪=𝐆𝐄𝐓 𝐈𝐓 𝐇𝐄𝐑𝐄 𝐛𝐲 𓆩𓂍𓆪`\n"+
-				"`/setreplace hello=नमस्ते`  (एकच शब्द)\n"+
+				"`/setreplace DOWNLOAD by ROCKSTAR 𓆩𓂍𓆪 => Downloaded by MyChannel`\n"+
+				"`/setreplace hello=नमस्ते`\n"+
 				"`/setreplace @oldchannel =>` (रिकामा = काढून टाका)\n"+
 				"`/setreplace line: ROCKSTAR => 📚 My Course` (ROCKSTAR असलेली *पूर्ण ओळ* replace)\n\n"+
 				"✅ Fancy fonts (𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃, ＤＯＷＮＬＯＡＤ, ᴅᴏᴡɴʟᴏᴀᴅ), CAPS/small, जास्त spaces, symbols आणि मराठी — सगळं match होतं.\n"+
-				"🌐 Admin चे rules *सगळ्या users* च्या downloads ना लागू होतात.\n"+
+				"हे rules फक्त *तुमच्या* userbot downloads ना लागू होतात.\n"+
 				"बघायला: /listreplace")
 		return dispatcher.EndGroups
 	}
@@ -631,8 +630,21 @@ func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ Invalid format: "+err.Error()+"\nExample: `/setreplace old => new`")
 		return dispatcher.EndGroups
 	}
-	updated, total, err := addReplaceRuleFor(userID, rule)
-	if err != nil {
+	rules := db.GetReplaceRules(userID)
+	updated := false
+	out := make([]db.ReplaceRule, 0, len(rules)+1)
+	for _, r := range rules {
+		if string(foldPattern(r.Old)) == string(foldPattern(rule.Old)) && r.Line == rule.Line {
+			out = append(out, rule) // same rule → update
+			updated = true
+		} else {
+			out = append(out, r)
+		}
+	}
+	if !updated {
+		out = append(out, rule)
+	}
+	if err := db.SaveReplaceRules(userID, out); err != nil {
 		reply(ctx, u, "❌ Save failed: "+err.Error())
 		return dispatcher.EndGroups
 	}
@@ -640,23 +652,23 @@ func cmdSetReplace(ctx *ext.Context, u *ext.Update) error {
 	if updated {
 		verb = "updated"
 	}
-	reply(ctx, u, fmt.Sprintf("✅ Replace rule %s — 🌐 सगळ्यांसाठी (एकूण %d):\n\n%s", verb, total, ruleDisplay(rule)))
+	reply(ctx, u, fmt.Sprintf("✅ Replace rule %s (एकूण %d):\n\n%s", verb, len(out), ruleDisplay(rule)))
 	return dispatcher.EndGroups
 }
 
 // ── /listreplace ──────────────────────────────────────────────────────────────
 
 func cmdListReplace(ctx *ext.Context, u *ext.Update) error {
-	rules := loadRulesFor(u.EffectiveUser().GetID())
+	rules := db.GetReplaceRules(u.EffectiveUser().GetID())
 	if len(rules) == 0 {
-		reply(ctx, u, "📋 कोणतेही replace rules नाहीत.\nAdd करायला: `/setreplace old => new`")
+		reply(ctx, u, "📋 तुमचे कोणतेही replace rules नाहीत.\nAdd करायला: `/setreplace old => new`")
 		return dispatcher.EndGroups
 	}
 	var lines []string
 	for i, r := range rules {
 		lines = append(lines, fmt.Sprintf("%d. %s", i+1, ruleDisplay(r)))
 	}
-	reply(ctx, u, fmt.Sprintf("📋 Global Replace Rules — सगळ्यांसाठी (%d):\n\n%s\n\nकाढायला: `/delreplace <number>`", len(rules), strings.Join(lines, "\n")))
+	reply(ctx, u, fmt.Sprintf("📋 तुमचे Replace Rules (%d):\n\n%s\n\nकाढायला: `/delreplace <number>`", len(rules), strings.Join(lines, "\n")))
 	return dispatcher.EndGroups
 }
 
@@ -669,7 +681,7 @@ func cmdDelReplace(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "Usage: `/delreplace <number>` (नंबर /listreplace मध्ये दिसतो) किंवा `/delreplace <old text>`")
 		return dispatcher.EndGroups
 	}
-	rules := loadRulesFor(userID)
+	rules := db.GetReplaceRules(userID)
 	idx := -1
 	if n, err := strconv.Atoi(arg); err == nil && n >= 1 && n <= len(rules) {
 		idx = n - 1
@@ -686,8 +698,9 @@ func cmdDelReplace(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "❌ Rule सापडला नाही.\nसध्याचे rules: /listreplace")
 		return dispatcher.EndGroups
 	}
-	removed, err := deleteReplaceRuleAt(userID, idx)
-	if err != nil {
+	removed := rules[idx]
+	out := append(append([]db.ReplaceRule{}, rules[:idx]...), rules[idx+1:]...)
+	if err := db.SaveReplaceRules(userID, out); err != nil {
 		reply(ctx, u, "❌ Save failed: "+err.Error())
 		return dispatcher.EndGroups
 	}
@@ -699,12 +712,12 @@ func cmdDelReplace(ctx *ext.Context, u *ext.Update) error {
 
 func cmdClearReplace(ctx *ext.Context, u *ext.Update) error {
 	userID := u.EffectiveUser().GetID()
-	count := len(loadRulesFor(userID))
-	if err := saveRulesFor(userID, []db.ReplaceRule{}); err != nil {
+	count := len(db.GetReplaceRules(userID))
+	if err := db.SaveReplaceRules(userID, []db.ReplaceRule{}); err != nil {
 		reply(ctx, u, "❌ Save failed: "+err.Error())
 		return dispatcher.EndGroups
 	}
-	reply(ctx, u, fmt.Sprintf("✅ सगळे global replace rules clear केले (%d rules काढले).", count))
+	reply(ctx, u, fmt.Sprintf("✅ तुमचे सगळे replace rules clear केले (%d rules काढले).", count))
 	return dispatcher.EndGroups
 }
 
@@ -3347,46 +3360,6 @@ func extractMessageID(result tg.UpdatesClass) int {
 // ── inputMediaDocFromUpdates ──────────────────────────────────────────────────
 // [FIX] UpdatesCombined पण handle करतो
 
-// warnIfNoThumb — send नंतर Telegram ने document वर thumbnail ठेवला का ते तपासतो.
-// ठेवला नसेल तर log मध्ये स्पष्ट warning (thumb server ने drop केला = client ला blank दिसेल).
-func warnIfNoThumb(fileName string, result tg.UpdatesClass) {
-	var updates []tg.UpdateClass
-	switch u := result.(type) {
-	case *tg.Updates:
-		updates = u.Updates
-	case *tg.UpdatesCombined:
-		updates = u.Updates
-	default:
-		return
-	}
-	for _, upd := range updates {
-		var m *tg.Message
-		switch u := upd.(type) {
-		case *tg.UpdateNewMessage:
-			m, _ = u.Message.(*tg.Message)
-		case *tg.UpdateNewChannelMessage:
-			m, _ = u.Message.(*tg.Message)
-		}
-		if m == nil {
-			continue
-		}
-		mmd, ok := m.Media.(*tg.MessageMediaDocument)
-		if !ok {
-			continue
-		}
-		d, ok := mmd.Document.(*tg.Document)
-		if !ok {
-			continue
-		}
-		if len(d.Thumbs) == 0 && len(d.VideoThumbs) == 0 {
-			utils.Logger.Warn("⚠️ Telegram ने thumbnail ठेवला नाही (document वर thumbs नाहीत)", zap.String("file", fileName))
-		} else {
-			utils.Logger.Info("✅ Thumbnail Telegram वर जोडला गेला", zap.String("file", fileName), zap.Int("thumbs", len(d.Thumbs)))
-		}
-		return
-	}
-}
-
 func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 	if result == nil {
 		return nil
@@ -3918,47 +3891,34 @@ func sendPreparedMessage(
 	if b, ok := getStoredThumbnailBytes(); ok && len(b) > 0 {
 		thumbSrc = b
 	} else if isVideo {
-		// [FIX] प्राधान्य: 1) video मधून काढलेला non-black frame
-		//       2) Telegram चा source thumb (काळा नसेल तर)
-		//       3) कुठलाही frame (गडद असला तरी)
-		// पूर्वी Telegram चा thumb आधी वापरत होतो — तो video च्या पहिल्या (बऱ्याचदा काळ्या)
-		// frame चा असल्यामुळे thumbnail काळा दिसायचा.
-		if len(pm.frameThumb) > 0 && !isBlackFrame(pm.frameThumb) {
-			thumbSrc = pm.frameThumb
-		}
-		if len(thumbSrc) == 0 {
-			if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
-				if d, ok := doc.Document.(*tg.Document); ok {
-					var bestType string
-					var bestW int
-					for _, sz := range d.Thumbs {
-						if ps, ok := sz.(*tg.PhotoSize); ok && ps.W > bestW {
-							bestW = ps.W
-							bestType = ps.Type
-						}
+		if doc, ok := tgMsg.Media.(*tg.MessageMediaDocument); ok {
+			if d, ok := doc.Document.(*tg.Document); ok {
+				var bestType string
+				var bestW int
+				for _, sz := range d.Thumbs {
+					if ps, ok := sz.(*tg.PhotoSize); ok && ps.W > bestW {
+						bestW = ps.W
+						bestType = ps.Type
 					}
-					if bestType != "" {
-						loc := &tg.InputDocumentFileLocation{
-							ID:            d.ID,
-							AccessHash:    d.AccessHash,
-							FileReference: d.FileReference,
-							ThumbSize:     bestType,
-						}
-						dlCtx, dlCancel := context.WithTimeout(bgCtx, 30*time.Second)
-						defer dlCancel()
-						var buf bytes.Buffer
-						if _, dlErr := downloader.NewDownloader().Download(userbotClient.API(), loc).Stream(dlCtx, &buf); dlErr == nil {
-							if !isBlackFrame(buf.Bytes()) {
-								thumbSrc = buf.Bytes()
-							}
-						}
+				}
+				if bestType != "" {
+					loc := &tg.InputDocumentFileLocation{
+						ID:            d.ID,
+						AccessHash:    d.AccessHash,
+						FileReference: d.FileReference,
+						ThumbSize:     bestType,
+					}
+					dlCtx, dlCancel := context.WithTimeout(bgCtx, 30*time.Second)
+					defer dlCancel()
+					var buf bytes.Buffer
+					if _, dlErr := downloader.NewDownloader().Download(userbotClient.API(), loc).Stream(dlCtx, &buf); dlErr == nil {
+						thumbSrc = buf.Bytes()
 					}
 				}
 			}
-
 		}
 
-		// Fallback: सगळे non-black स्रोत संपले → गडद का होईना, video चा frame वापर
+		// Fallback 2: video मधूनच काढलेला frame (prepareMessage ने आधीच काढलाय)
 		if len(thumbSrc) == 0 && len(pm.frameThumb) > 0 {
 			thumbSrc = pm.frameThumb
 		}
@@ -4015,12 +3975,8 @@ func sendPreparedMessage(
 		}
 		thumbUpCtx, thumbUpCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer thumbUpCancel()
-		// [FIX] FromReader (size अज्ञात) ऐवजी FromBytes — size माहीत असल्यामुळे thumb
-		// छोटी (normal) file म्हणून upload होते. Size अज्ञात असेल तर "big file" म्हणून
-		// जाते आणि Telegram अशा thumb ला शांतपणे ignore करतो → thumbnail दिसत नाही,
-		// video उघडल्यावरच client स्वतः preview बनवतो.
-		freshThumb, thumbErr := uploader.NewUploader(botClient.API()).FromBytes(
-			thumbUpCtx, "thumb.jpg", thumbSrc,
+		freshThumb, thumbErr := uploader.NewUploader(botClient.API()).FromReader(
+			thumbUpCtx, "thumb.jpg", bytes.NewReader(thumbSrc),
 		)
 		if thumbErr == nil {
 			inputMedia.SetThumb(freshThumb)
@@ -4049,9 +4005,6 @@ func sendPreparedMessage(
 			scReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
 		}
 		scResult, _ := botClient.API().MessagesSendMedia(scCtx, scReq)
-		if isVideo {
-			warnIfNoThumb(file.FileName, scResult)
-		}
 
 		// [FIX] Log channel: doc reference extract — fallback safe
 		if markCopied(chatID, msgID) {
@@ -4137,9 +4090,6 @@ func sendPreparedMessage(
 			return fmt.Errorf("send to admin failed: %w", err)
 		}
 
-		if isVideo {
-			warnIfNoThumb(file.FileName, adminResult)
-		}
 		if dm := inputMediaDocFromUpdates(adminResult); dm != nil {
 			logMedia = dm
 		}
@@ -4503,81 +4453,25 @@ func probeVideoMeta(path string) (dur, w, h int) {
 	return
 }
 
-// frameBrightness: JPEG चा सरासरी brightness (0-255). Decode fail झाला तर -1.
-// Black/काळा frame ओळखायला वापरतो (video चा पहिला frame बऱ्याचदा काळा असतो).
-func frameBrightness(b []byte) float64 {
-	img, err := jpeg.Decode(bytes.NewReader(b))
-	if err != nil {
-		return -1
-	}
-	bd := img.Bounds()
-	stepX := bd.Dx()/40 + 1
-	stepY := bd.Dy()/40 + 1
-	var sum float64
-	var n int
-	for y := bd.Min.Y; y < bd.Max.Y; y += stepY {
-		for x := bd.Min.X; x < bd.Max.X; x += stepX {
-			r, g, bl, _ := img.At(x, y).RGBA()
-			sum += (0.299*float64(r) + 0.587*float64(g) + 0.114*float64(bl)) / 257.0
-			n++
-		}
-	}
-	if n == 0 {
-		return -1
-	}
-	return sum / float64(n)
-}
-
-// isBlackFrame: खूप गडद (जवळजवळ काळा) thumb असेल तर true.
-func isBlackFrame(b []byte) bool {
-	br := frameBrightness(b)
-	return br >= 0 && br < 25
-}
-
-// extractFrameThumb: video मध्ये वेगवेगळ्या ठिकाणांचे frames काढून जो सर्वात
-// उजळ (काळा नसलेला) असेल तो परत करतो. पूर्वी फक्त 20% वर एकच frame घेत होतो
-// आणि तो काळा निघाला तरी वापरत होतो.
 func extractFrameThumb(path string, dur int) []byte {
-	var seeks []int
+	seek := 1
 	if dur > 0 {
-		for _, f := range []float64{0.2, 0.35, 0.5, 0.1, 0.65, 0.8} {
-			ss := int(float64(dur) * f)
-			if ss < 1 {
-				ss = 1
-			}
-			seeks = append(seeks, ss)
+		seek = int(float64(dur) * 0.2)
+		if seek < 1 {
+			seek = 1
 		}
-	} else {
-		seeks = []int{1, 3, 5, 10, 20}
 	}
-	seeks = append(seeks, 0)
-
-	var best []byte
-	bestBr := -2.0
-	seen := map[int]bool{}
-	for _, ss := range seeks {
-		if seen[ss] {
-			continue
-		}
-		seen[ss] = true
+	for _, ss := range []int{seek, 0} {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		out, err := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-ss", strconv.Itoa(ss), "-i", path,
 			"-frames:v", "1", "-vf", "scale=320:320:force_original_aspect_ratio=decrease",
 			"-q:v", "5", "-f", "mjpeg", "pipe:1").Output()
 		cancel()
-		if err != nil || len(out) == 0 || len(out) > 200*1024 {
-			continue
-		}
-		br := frameBrightness(out)
-		if br >= 25 { // काळा नाही → लगेच वापर
+		if err == nil && len(out) > 0 && len(out) <= 200*1024 {
 			return out
 		}
-		if br > bestBr {
-			bestBr = br
-			best = out
-		}
 	}
-	return best // सगळेच गडद असतील तर त्यातला सर्वात उजळ
+	return nil
 }
 
 func downloadAndReupload(

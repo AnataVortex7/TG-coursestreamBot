@@ -18,6 +18,7 @@ import (
 
 	"EverythingSuckz/fsb/config"
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/utils"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -200,18 +201,82 @@ func applyRules(text string, rules []db.ReplaceRule) string {
 	return text
 }
 
-// applyReplacesForUser — त्या user चे rules.
+// ── Global (admin) + per-user rules ──────────────────────────────────────────
+// Admin ने add केलेले rules = GLOBAL (सगळ्या users च्या downloads/captions ना लागू).
+// Userbot user ने स्वतः add केलेले rules = फक्त त्याच्या स्वतःच्या DB doc मध्ये, फक्त त्याला लागू.
+
+func isReplaceAdmin(userID int64) bool {
+	return utils.Contains(config.ValueOf.AllowedUsers, userID)
+}
+
+// replaceOwnerID — admin असेल तर global key (0), नाहीतर user चा स्वतःचा ID.
+func replaceOwnerID(userID int64) int64 {
+	if isReplaceAdmin(userID) {
+		return db.GlobalReplaceUserID
+	}
+	return userID
+}
+
+func globalReplaceRules() []db.ReplaceRule {
+	return db.GetGlobalReplaceRules(config.ValueOf.AllowedUsers)
+}
+
+// loadRulesFor — त्या user ला "manage" करायचे rules (admin → global, user → स्वतःचे).
+func loadRulesFor(userID int64) []db.ReplaceRule {
+	owner := replaceOwnerID(userID)
+	if owner == db.GlobalReplaceUserID {
+		return globalReplaceRules()
+	}
+	return db.GetReplaceRules(owner)
+}
+
+func saveRulesFor(userID int64, rules []db.ReplaceRule) error {
+	return db.SaveReplaceRules(replaceOwnerID(userID), rules)
+}
+
+// addReplaceRuleFor — same old+mode असेल तर update, नाहीतर append. (updated, total, err)
+func addReplaceRuleFor(userID int64, rule db.ReplaceRule) (bool, int, error) {
+	rules := loadRulesFor(userID)
+	updated := false
+	out := make([]db.ReplaceRule, 0, len(rules)+1)
+	for _, r := range rules {
+		if string(foldPattern(r.Old)) == string(foldPattern(rule.Old)) && r.Line == rule.Line {
+			out = append(out, rule)
+			updated = true
+		} else {
+			out = append(out, r)
+		}
+	}
+	if !updated {
+		out = append(out, rule)
+	}
+	return updated, len(out), saveRulesFor(userID, out)
+}
+
+// deleteReplaceRuleAt — idx = 0-based. काढलेला rule परत करतो.
+func deleteReplaceRuleAt(userID int64, idx int) (db.ReplaceRule, error) {
+	rules := loadRulesFor(userID)
+	if idx < 0 || idx >= len(rules) {
+		return db.ReplaceRule{}, fmt.Errorf("rule सापडला नाही")
+	}
+	removed := rules[idx]
+	out := append(append([]db.ReplaceRule{}, rules[:idx]...), rules[idx+1:]...)
+	return removed, saveRulesFor(userID, out)
+}
+
+// applyReplacesForUser — आधी global (admin) rules, मग त्या user चे स्वतःचे rules.
 func applyReplacesForUser(userID int64, text string) string {
-	return applyRules(text, db.GetReplaceRules(userID))
+	text = applyRules(text, globalReplaceRules())
+	if !isReplaceAdmin(userID) {
+		text = applyRules(text, db.GetReplaceRules(userID))
+	}
+	return text
 }
 
 // applyAdminReplaces — user context नसलेल्या ठिकाणांसाठी (student captions, copychannel…)
-// सगळ्या ALLOWED_USERS (admins) चे rules क्रमाने लागू करतो.
+// फक्त global (admin) rules.
 func applyAdminReplaces(text string) string {
-	for _, id := range config.ValueOf.AllowedUsers {
-		text = applyRules(text, db.GetReplaceRules(id))
-	}
-	return text
+	return applyRules(text, globalReplaceRules())
 }
 
 // ── parsing: "[line:] old => new"  (किंवा  old=new) ─────────────────────────
