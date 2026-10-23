@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -60,6 +61,14 @@ func handleUserContact(c *gin.Context) {
 	}
 	if req.Message == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Message bharave lagel"})
+		return
+	}
+	if len(req.Subject) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Subject khup motha ahe (max 200 characters)"})
+		return
+	}
+	if !allowOnce("contact:"+auth.GetUserID(c).Hex(), 30*time.Second) {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Thoda thamba, 30 second nantar punha message pathva."})
 		return
 	}
 	if len(req.Message) > 2000 {

@@ -485,26 +485,13 @@ func processTelegramLoginToken(ctx *ext.Context, u *ext.Update, chatID int64, to
 	}
 
 	if siteUser.TelegramID == 0 {
-		// दुसऱ्या कुठल्या website account ला हा Telegram ID आधीच link आहे का?
-		if other, _ := db.GetUserByTelegramID(chatID); other != nil && other.ID != siteUser.ID {
-			reply(ctx, u, "❌ तुमचा Telegram account आधीच दुसऱ्या website account शी link आहे.\n\nएक Telegram account फक्त एकाच account शी link होऊ शकतो.")
-			return dispatcher.EndGroups
-		}
-
-		if err := db.SetUserTelegramID(siteUser.ID, chatID); err != nil {
-			reply(ctx, u, "❌ Link करताना error आली. पुन्हा प्रयत्न करा किंवा admin शी संपर्क करा.")
-			return dispatcher.EndGroups
-		}
-
-		// लगेच peer cache warm करतो — पुढच्या OTP साठी redeploy नंतरही पुन्हा
-		// user कडून message लागणार नाही (WarmUserPeerCache startup ला हेच पुढे continue करतो).
-		if tgUser := u.EffectiveUser(); tgUser != nil {
-			ctx.PeerStorage.AddPeer(tgUser.ID, tgUser.AccessHash, storage.TypeUser, tgUser.Username)
-		}
-		go func() {
-			time.Sleep(3 * time.Second)
-			MaybePromptAutoDelivery(ctx, chatID)
-		}()
+		// [SECURITY] Never bind a Telegram ID to a website account from a deep-link
+		// token alone: the token is given to anyone who types the account's
+		// mobile/email on the website, so this was an account-takeover path.
+		// Linking happens ONLY through the contact gate (Telegram-verified phone
+		// number that matches the account's mobile).
+		reply(ctx, u, "🔐 हा website account अजून तुमच्या Telegram शी link नाही.\n\nआधी bot मध्ये /start दाबून Verification पूर्ण करा (Accept → \"📱 Share my number\"). Mobile number match झाला की account आपोआप link होईल; नंतर website वरून पुन्हा OTP मागवा.")
+		return dispatcher.EndGroups
 	}
 
 	_ = db.MarkTGLoginTokenUsed(rec.ID)

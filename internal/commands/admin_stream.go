@@ -1507,6 +1507,17 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 		return errors.New("❌ Userbot Client ready नाही. आधी 🔑 Connect Userbot Account वरून Login करा.")
 	}
 
+	// [FIX] Client marla (engine closed) asel tar survatichach navin ghet — cached marlela client
+	// vaprun job survat karat nahi.
+	if !pingUserbot(context.Background(), userbotClient) {
+		if fresh, rErr := reviveUserbot(context.Background(), senderID); rErr == nil && fresh != nil {
+			userbotClient = fresh
+		} else if rErr != nil {
+			return fmt.Errorf("❌ Userbot connection chalu nahi (engine closed): %v\n\n30-60 sec thamba ani parat try kara.", rErr)
+		}
+	}
+	ubHolder := newUserbotHolder(senderID, userbotClient)
+
 	botClient := MainBotClient
 	if botClient == nil {
 		return errors.New("❌ Bot client चालू नाही.")
@@ -1783,6 +1794,7 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 		summaryMsgID := 0
 		errorLines := make(map[string][]int)
 		errorOrder := []string{}
+		var failedIDs []int // connection-error mule fail zalele msgs — shevti ek retry pass
 
 		var currentProcessingMsgID int // Added to track current MsgID
 
@@ -1893,16 +1905,18 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 
 		// ── runPhaseA — retries आणि FloodWait चातुर्याने हाताळत Phase A (prepareMessage) चालवतो ──
 		runPhaseA := func(msgID int) (*preparedMessage, error) {
-			const maxRetries = 3
+			const maxRetries = 3     // normal errors
+			const maxConnRetries = 8 // connection/engine closed errors (client refresh + backoff)
 			var pm *preparedMessage
 			var err error
-			for attempt := 1; attempt <= maxRetries; attempt++ {
+			attempt, connAttempt := 0, 0
+			for {
 				if bgCtx.Err() != nil {
 					return nil, err
 				}
 				pm, err = prepareMessage(
 					bgCtx,
-					userbotClient,
+					ubHolder.Get(),
 					botClient,
 					chatID,
 					chatIDRaw,
@@ -1924,6 +1938,10 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 					return nil, err
 				}
 				if waitSecs, isFlood := extractFloodWaitSeconds(err); isFlood {
+					attempt++
+					if attempt >= maxRetries {
+						return nil, err
+					}
 					editProgress(fmt.Sprintf("⏳ FloodWait %ds — थांबतोय...\n📌 Msg: `%d`", waitSecs, msgID))
 					select {
 					case <-time.After(time.Duration(waitSecs+2) * time.Second):
@@ -1932,12 +1950,33 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 					}
 				} else if strings.Contains(strings.ToLower(err.Error()), "deleted") {
 					return nil, err
-				} else if attempt < maxRetries {
+				} else if isTransientConnErr(err) {
+					connAttempt++
+					if connAttempt > maxConnRetries {
+						return nil, err
+					}
+					editProgress(fmt.Sprintf("🔌 Userbot connection tutla — reconnect karto (%d/%d)\n📌 Msg: `%d`", connAttempt, maxConnRetries, msgID))
+					if rErr := ubHolder.Refresh(bgCtx); rErr != nil && bgCtx.Err() != nil {
+						return nil, bgCtx.Err()
+					}
+					wait := time.Duration(5*connAttempt) * time.Second
+					if wait > 60*time.Second {
+						wait = 60 * time.Second
+					}
+					select {
+					case <-time.After(wait):
+					case <-bgCtx.Done():
+						return nil, bgCtx.Err()
+					}
+				} else {
+					attempt++
+					if attempt >= maxRetries {
+						return nil, err
+					}
 					editProgress(fmt.Sprintf("🔄 Retry %d/%d\n📌 Msg: `%d`", attempt, maxRetries, msgID))
 					time.Sleep(5 * time.Second)
 				}
 			}
-			return nil, err
 		}
 
 		// ── Pipeline: Phase A(msgID+1) आणि Phase B(msgID) parallel ────────────
@@ -2017,6 +2056,9 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 
 			if phA.err != nil {
 				errorCount++
+				if isTransientConnErr(phA.err) {
+					failedIDs = append(failedIDs, msgID)
+				}
 				errKey := phA.err.Error()
 				if _, exists := errorLines[errKey]; !exists {
 					errorOrder = append(errorOrder, errKey)
@@ -2037,7 +2079,7 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 				defer phaseBWg.Done()
 				phaseBErr = sendPreparedMessage(
 					bgCtx,
-					userbotClient,
+					ubHolder.Get(),
 					botClient,
 					chatID,
 					chatIDRaw,
@@ -2073,6 +2115,9 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 
 			if phaseBErr != nil {
 				errorCount++
+				if isTransientConnErr(phaseBErr) {
+					failedIDs = append(failedIDs, msgID)
+				}
 				errKey := phaseBErr.Error()
 				if _, exists := errorLines[errKey]; !exists {
 					errorOrder = append(errorOrder, errKey)
@@ -2094,6 +2139,68 @@ func runUserbotDL(p *userbotDLParams, resumeJob *db.UserbotDLJob) error {
 					editProgress("⏳ Anti-Spam Delay: Telegram limits टाळण्यासाठी 15 सेकंद थांबतोय...")
 					time.Sleep(15 * time.Second)
 				}
+			}
+		}
+
+		// ── Retry pass: connection errors mule fail zalelya msgs parat ek vela ───────────
+		if len(failedIDs) > 0 && bgCtx.Err() == nil {
+			editProgress(fmt.Sprintf("🔁 %d msgs connection error mule fail zale — 60 sec nantar parat try karto...", len(failedIDs)))
+			select {
+			case <-time.After(60 * time.Second):
+			case <-bgCtx.Done():
+			}
+			if bgCtx.Err() == nil {
+				_ = ubHolder.Refresh(bgCtx)
+			}
+			for _, fid := range failedIDs {
+				if bgCtx.Err() != nil {
+					break
+				}
+				currentProcessingMsgID = fid
+				editProgress(fmt.Sprintf("🔁 Retry pass — Msg: `%d`", fid))
+				pm, pErr := runPhaseA(fid)
+				if pErr == nil {
+					pErr = sendPreparedMessage(
+						bgCtx, ubHolder.Get(), botClient, chatID, chatIDRaw, topicID,
+						botPeer, sourcePeerForSend, sendChannelPeer, editProgress,
+						pm, userbotLogGroupPeer, userbotTopicID,
+					)
+				}
+				if pErr != nil {
+					continue // error aadhich count zaleli aahe
+				}
+				// Yashasvi — error list madhun kadhun taka
+				successCount++
+				errorCount--
+				for key, ids := range errorLines {
+					kept := make([]int, 0, len(ids))
+					for _, id := range ids {
+						if id != fid {
+							kept = append(kept, id)
+						}
+					}
+					if len(kept) == 0 {
+						delete(errorLines, key)
+					} else {
+						errorLines[key] = kept
+					}
+				}
+				newOrder := make([]string, 0, len(errorOrder))
+				for _, k := range errorOrder {
+					if _, still := errorLines[k]; still {
+						newOrder = append(newOrder, k)
+					}
+				}
+				errorOrder = newOrder
+				updateSummary()
+				time.Sleep(3 * time.Second)
+			}
+		}
+
+		// ── Summary msg links: jyanche target tevha copy navhte te ata fix (send channel madhe EDIT) ──
+		if sendChannelPeer != nil && bgCtx.Err() == nil {
+			if n := resyncUnresolvedSummaries(bgCtx, botClient, ubHolder.Get(), chatID, chatIDRaw, sendChannelPeer, topicID, adminChatID); n > 0 {
+				editProgress(fmt.Sprintf("🔗 %d summary msg che links fix kele", n))
 			}
 		}
 
@@ -3450,7 +3557,8 @@ func inputMediaDocFromUpdates(result tg.UpdatesClass) tg.InputMediaClass {
 // parallel चालतात, म्हणून हे struct goroutines मध्ये pass केलं जातं.
 
 type preparedMessage struct {
-	textOnly      bool // true असेल तर Phase B ने काही करायची गरज नाही (Phase A ने सगळं केलं)
+	adminChatID   int64 // textOnly copy sathi (replace rules ani send channel link rewrite)
+	textOnly      bool  // true => media nahi, text msg — Phase B madhe sendTextOnlyCopy ne jato
 	colabSent     bool // true असेल तर Colab ने already Telegram la pathavle — Phase B skip
 	tgMsg         *tg.Message
 	finalCaption  string
@@ -3498,65 +3606,17 @@ func prepareMessage(
 	finalCaption := applyReplacesForUser(adminChatID, originalCaption)
 
 	// ── Step 3: No media → text message copy ─────────────────────────────
+	// [CHANGE] Text msg aata Phase B madhe (sendTextOnlyCopy) pathavto — kaaran Phase A pudhchya
+	// msg cha aadhich parallel chalto, ani summary msg madhle links la aadhiche sagle lectures
+	// chi (source -> send channel) msgID mapping tayar asaychi garaj aahe.
 	if tgMsg.Media == nil {
-		if sendChannelPeer != nil {
-			scCtx, scCancel := context.WithTimeout(context.Background(), 1*time.Minute)
-			defer scCancel()
-			scReq := &tg.MessagesSendMessageRequest{
-				Peer:     sendChannelPeer,
-				Message:  finalCaption,
-				RandomID: rand.Int63(),
-			}
-			if topicID > 0 {
-				scReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
-			}
-			_, _ = botClient.API().MessagesSendMessage(scCtx, scReq)
-
-			go func() {
-				lCtx, lCancel := context.WithTimeout(context.Background(), 1*time.Minute)
-				defer lCancel()
-				logCh, lerr := utils.GetLogChannelPeer(lCtx, botClient.API(), botClient.PeerStorage)
-				if lerr != nil {
-					return
-				}
-				_, _ = botClient.API().MessagesSendMessage(lCtx, &tg.MessagesSendMessageRequest{
-					Peer:     &tg.InputPeerChannel{ChannelID: logCh.ChannelID, AccessHash: logCh.AccessHash},
-					Message:  finalCaption,
-					RandomID: rand.Int63(),
-					Silent:   true,
-				})
-			}()
-		} else {
-			textContent := fmt.Sprintf(
-				"📥 Userbot DL\n📌 Chat: `%d` | Msg: `%d`\n\n%s",
-				chatIDRaw, msgID, finalCaption,
-			)
-			sendCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-			defer cancel()
-			_, err = botClient.API().MessagesSendMessage(sendCtx, &tg.MessagesSendMessageRequest{
-				Peer:     botPeer,
-				Message:  textContent,
-				RandomID: rand.Int63(),
-			})
-			if err != nil {
-				return nil, fmt.Errorf("text send failed: %w", err)
-			}
-
-			if sourcePeer != nil {
-				sendCtx2, cancel2 := context.WithTimeout(context.Background(), 1*time.Minute)
-				defer cancel2()
-				sendReq := &tg.MessagesSendMessageRequest{
-					Peer:     sourcePeer,
-					Message:  finalCaption,
-					RandomID: rand.Int63(),
-				}
-				if topicID > 0 {
-					sendReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
-				}
-				_, _ = botClient.API().MessagesSendMessage(sendCtx2, sendReq)
-			}
-		}
-		return &preparedMessage{textOnly: true}, nil
+		return &preparedMessage{
+			textOnly:     true,
+			tgMsg:        tgMsg,
+			finalCaption: finalCaption,
+			msgID:        msgID,
+			adminChatID:  adminChatID,
+		}, nil
 	}
 
 	// ── Step 4: Media → download + reupload ──────────────────────────────
@@ -3873,8 +3933,11 @@ func sendPreparedMessage(
 	userbotTopicID int,
 ) error {
 
-	if pm.textOnly || pm.colabSent {
+	if pm.colabSent {
 		return nil
+	}
+	if pm.textOnly {
+		return sendTextOnlyCopy(botClient, chatIDRaw, pm.msgID, topicID, botPeer, sourcePeer, sendChannelPeer, pm)
 	}
 
 	tgMsg := pm.tgMsg
@@ -4046,7 +4109,17 @@ func sendPreparedMessage(
 		if topicID > 0 {
 			scReq.ReplyTo = &tg.InputReplyToMessage{ReplyToMsgID: topicID}
 		}
-		scResult, _ := botClient.API().MessagesSendMedia(scCtx, scReq)
+		scResult, scErr := botClient.API().MessagesSendMedia(scCtx, scReq)
+		if scErr != nil {
+			// [FIX] aadhi error ignore hota hota (silent fail) — aata error dakhavto, mhanun retry hoil.
+			return fmt.Errorf("send to channel failed: %w", scErr)
+		}
+		// source msgID -> send channel msgID (summary madhle links rewrite karayla)
+		if newID := extractMessageID(scResult); newID > 0 {
+			if mErr := db.SaveUserbotMsgMap(chatIDRaw, msgID, sendChannelPeer.ChannelID, newID); mErr != nil {
+				utils.Logger.Warn("msgmap save failed", zap.Error(mErr))
+			}
+		}
 
 		// [FIX] Log channel: doc reference extract — fallback safe
 		if markCopied(chatID, msgID) {

@@ -455,7 +455,7 @@ func handleWatchStream(c *gin.Context) {
 			c.HTML(http.StatusInternalServerError, "error.html", gin.H{"code": 500, "message": "Failed to load photo."})
 			return
 		}
-		c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", file.FileName))
+		c.Header("Content-Disposition", contentDisposition("inline", file.FileName))
 		c.Header("Content-Length", strconv.Itoa(len(data)))
 		setAntiDownloadHeaders(c)
 		if r.Method != "HEAD" {
@@ -491,7 +491,7 @@ func handleWatchStream(c *gin.Context) {
 
 	c.Header("Content-Type", mimeType)
 	c.Header("Content-Length", strconv.FormatInt(contentLength, 10))
-	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", file.FileName))
+	c.Header("Content-Disposition", contentDisposition("inline", file.FileName))
 	setAntiDownloadHeaders(c)
 
 	if r.Method == "HEAD" {
@@ -544,6 +544,10 @@ func handleSavePosition(c *gin.Context) {
 		return
 	}
 
+	if body.Position < 0 || body.Position > 1e7 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid position"})
+		return
+	}
 	go func() {
 		_ = db.SaveWatchPosition(currentUserID, verified.MessageID, verified.ChannelID, body.Position)
 	}()
@@ -675,7 +679,7 @@ func handlePDFView(c *gin.Context) {
 
 	c.Header("Content-Type", "application/pdf")
 	c.Header("Content-Length", strconv.FormatInt(file.FileSize, 10))
-	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=\"%s\"", fileName))
+	c.Header("Content-Disposition", contentDisposition("inline", fileName))
 	c.Header("Cache-Control", "no-store")
 
 	pipe, err := stream.NewStreamPipe(c, worker.Client, file.Location, 0, file.FileSize-1, log)
@@ -750,7 +754,7 @@ func handlePDFDownload(c *gin.Context) {
 
 	c.Header("Content-Type", "application/pdf")
 	c.Header("Content-Length", strconv.FormatInt(file.FileSize, 10))
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+	c.Header("Content-Disposition", contentDisposition("attachment", fileName))
 	c.Header("Cache-Control", "no-store")
 
 	pipe, err := stream.NewStreamPipe(c, worker.Client, file.Location, 0, file.FileSize-1, log)

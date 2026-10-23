@@ -1344,6 +1344,7 @@ func sendRawOriginalTracked(ctx *ext.Context, botClient *gotgproto.Client, dbUse
 		return false, fmt.Errorf("message ID मिळाला नाही")
 	}
 	_ = db.RecordSentLectureMsg(dbUser.ID, courseID, chatID, sentID, botClient.Self.ID)
+	_ = db.RecordLectureMsgMap(dbUser.ID, courseID, messageID, chatID, botClient.Self.ID, sentID) // summary deep links sathi
 	_ = db.AddPendingDeletion(dbUser.ID, courseID, chatID, sentID, botClient.Self.ID)
 	title := caption
 	if r := []rune(title); len(r) > 80 {
@@ -1536,6 +1537,7 @@ func deliverLectureCoreOpt(
 		if fwdUpdates, fErr := utils.ForwardFromLogChannel(ctx, cached.LogChannelMsgID, targetChatID); fErr == nil {
 			if newMsgID := extractNewMessageID(fwdUpdates); newMsgID != 0 {
 				_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, newMsgID, botClient.Self.ID)
+				_ = db.RecordLectureMsgMap(dbUser.ID, courseID, messageID, targetChatID, botClient.Self.ID, newMsgID) // summary deep links sathi
 				_ = db.AddPendingDeletion(dbUser.ID, courseID, targetChatID, newMsgID, botClient.Self.ID)
 			}
 			return true, nil
@@ -1878,6 +1880,7 @@ func deliverLectureCoreOpt(
 
 	if sentMessageID != 0 {
 		_ = db.RecordSentLectureMsg(dbUser.ID, courseID, targetChatID, sentMessageID, botClient.Self.ID)
+		_ = db.RecordLectureMsgMap(dbUser.ID, courseID, messageID, targetChatID, botClient.Self.ID, sentMessageID) // summary deep links sathi
 		_ = db.AddPendingDeletion(dbUser.ID, courseID, targetChatID, sentMessageID, botClient.Self.ID)
 	}
 	return true, nil

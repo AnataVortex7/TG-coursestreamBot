@@ -3,8 +3,9 @@ package db
 
 import (
 	"errors"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -81,7 +82,12 @@ func CreateOfflineToken(userID, courseID primitive.ObjectID, messageID int, chan
 	expiry := midnightTomorrowIST()
 
 	for attempt := 0; attempt < 10; attempt++ {
-		tok := fmt.Sprintf("%05d", rand.Intn(100000))
+		// crypto/rand — math/rand output is predictable and must not generate access tokens.
+		n, rerr := rand.Int(rand.Reader, big.NewInt(100000))
+		if rerr != nil {
+			return "", rerr
+		}
+		tok := fmt.Sprintf("%05d", n.Int64())
 
 		doc := OfflineToken{
 			Token:     tok,

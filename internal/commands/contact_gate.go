@@ -231,7 +231,12 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 		}
 		if cmd == "/start" && len(fields) > 1 {
 			p := fields[1]
-			if strings.HasPrefix(p, "totp_") || strings.HasPrefix(p, "ct_") {
+			// [SECURITY] totp_ (website login link) is NO LONGER passed through for
+			// unlinked users: the deep-link token is handed to whoever knows an account's
+			// mobile/email, so letting it link a Telegram ID without phone verification
+			// allowed account takeover. Unlinked users must pass the contact gate
+			// (verified phone-number share) first.
+			if strings.HasPrefix(p, "ct_") {
 				return dispatcher.ContinueGroups
 			}
 		}

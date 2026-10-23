@@ -145,9 +145,11 @@ func (c *config) loadConfigFromArgs(log *zap.Logger, cmd *cobra.Command) {
 	if botToken != "" {
 		os.Setenv("BOT_TOKEN", botToken)
 	}
-	logChannelID, _ := cmd.Flags().GetString("log-channel")
-	if logChannelID != "" {
-		os.Setenv("LOG_CHANNEL", logChannelID)
+	// "log-channel" is registered as Int64 — GetString always failed here, so the
+	// --log-channel flag was silently ignored.
+	logChannelID, _ := cmd.Flags().GetInt64("log-channel")
+	if logChannelID != 0 {
+		os.Setenv("LOG_CHANNEL", strconv.FormatInt(logChannelID, 10))
 	}
 	dev, _ := cmd.Flags().GetBool("dev")
 	if dev {
@@ -223,7 +225,10 @@ func (c *config) setupEnvVars(log *zap.Logger, cmd *cobra.Command) {
 	val := reflect.ValueOf(c).Elem()
 	for _, env := range os.Environ() {
 		if strings.HasPrefix(env, "MULTI_TOKEN") {
-			c.MultiTokens = append(c.MultiTokens, botTokenRegex.FindStringSubmatch(env)[1])
+			// FindStringSubmatch returns nil for e.g. "MULTI_TOKENS=x" → indexing it panicked.
+			if m := botTokenRegex.FindStringSubmatch(env); len(m) == 2 && m[1] != "" {
+				c.MultiTokens = append(c.MultiTokens, m[1])
+			}
 		}
 		// WORKER_URL1=https://... , WORKER_URL2=https://... collect करा
 		if strings.HasPrefix(env, "WORKER_URL") {
@@ -338,7 +343,8 @@ func checkIfIpAccessible(ip string) bool {
 
 func stripInt(log *zap.Logger, a int) int {
 	strA := strconv.Itoa(abs(a))
-	lastDigits := strings.Replace(strA, "100", "", 1)
+	// Only strip the leading "100" of a -100xxxxxxxxxx channel id (was: first "100" anywhere).
+	lastDigits := strings.TrimPrefix(strA, "100")
 	result, err := strconv.Atoi(lastDigits)
 	if err != nil {
 		log.Sugar().Fatalln(err)

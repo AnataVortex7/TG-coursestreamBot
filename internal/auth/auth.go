@@ -6,10 +6,17 @@ import (
 	"EverythingSuckz/fsb/internal/email"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"net/http"
+	"net/mail"
 	"os"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
+
+	// Loads fsb.env before init() below runs (see internal/envinit).
+	_ "EverythingSuckz/fsb/internal/envinit"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -43,6 +50,11 @@ func init() {
 	if len(secret) < 32 {
 		// Weak secret — brute-force attack शक्य आहे
 		panic("FATAL: JWT_SECRET must be at least 32 characters long. " +
+			"Generate one with: openssl rand -hex 32")
+	}
+	if strings.Contains(strings.ToLower(secret), "change-me") {
+		// fsb.sample.env ships a 39-char placeholder that passes the length check.
+		panic("FATAL: JWT_SECRET is still the placeholder from fsb.sample.env. " +
 			"Generate one with: openssl rand -hex 32")
 	}
 	jwtSecret = []byte(secret)
@@ -140,12 +152,45 @@ func CheckPassword(plain, hash string) bool {
 
 // ─── clientIP ─────────────────────────────────────────────────────────────────
 
+// clientIP — c.ClientIP() honours X-Forwarded-For ONLY when the direct peer is in
+// the engine's trusted-proxy list (see TRUSTED_PROXIES in cmd/fsb/run.go).
+// Reading the header directly would let any client spoof its IP.
 func clientIP(c *gin.Context) string {
-	// respect X-Forwarded-For when behind a proxy / Cloudflare
-	if ip := c.GetHeader("X-Forwarded-For"); ip != "" {
-		return strings.Split(ip, ",")[0]
-	}
 	return c.ClientIP()
+}
+
+// ─── Per-identifier lock + helpers ───────────────────────────────────────────
+// Serialises login / OTP attempts for the same identifier so that a burst of
+// parallel requests cannot all pass the "is blocked?" check before the first
+// failure is recorded (race → bypass of the attempt limits).
+
+var identLocks [256]sync.Mutex
+
+func lockIdentifier(id string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.ToLower(strings.TrimSpace(id))))
+	m := &identLocks[h.Sum32()%uint32(len(identLocks))]
+	m.Lock()
+	return m.Unlock
+}
+
+// dummyHash is compared against when the account does not exist, so response
+// time does not reveal whether an identifier is registered.
+var dummyHash = func() string {
+	b, _ := bcrypt.GenerateFromPassword([]byte("fsb-dummy-password"), bcrypt.DefaultCost)
+	return string(b)
+}()
+
+var mobileRe = regexp.MustCompile(`^\+?[0-9][0-9 \-]{5,18}$`)
+
+// cleanLine strips control characters (CR/LF/NUL …) from a single-line value.
+func cleanLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 32 || r == 127 {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // ─── HTTP Handlers ────────────────────────────────────────────────────────────
@@ -180,6 +225,9 @@ func DoLogin(c *gin.Context) {
 		return
 	}
 
+	unlock := lockIdentifier(identifier)
+	defer unlock()
+
 	// ── Block check — 4 wrong attempts = 5 hour lock ──────────────────────────
 	if blocked, until := db.CheckLoginBlock(identifier); blocked {
 		fail(fmt.Sprintf("Account locked until %s. Too many wrong attempts.", until.Format("3:04 PM, 02 Jan")))
@@ -190,17 +238,19 @@ func DoLogin(c *gin.Context) {
 	user, err := db.GetUserByMobileOrEmail(identifier)
 	if err != nil || user == nil {
 		// Record fail on unknown identifier too (prevents enumeration timing)
+		_ = CheckPassword(password, dummyHash)
 		db.RecordFailedLogin(identifier)
 		fail("Invalid credentials. Please try again.")
-		return
-	}
-	if !user.IsActive {
-		fail("Your account has been disabled. Contact admin.")
 		return
 	}
 	if !CheckPassword(password, user.PasswordHash) {
 		_, msg := db.RecordFailedLogin(identifier)
 		fail(msg)
+		return
+	}
+	// Status is revealed only AFTER the password is proven correct.
+	if !user.IsActive {
+		fail("Your account has been disabled. Contact admin.")
 		return
 	}
 	// ✓ Success — reset counter
@@ -279,6 +329,12 @@ func DoRegister(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 	}
 
+	fullName = cleanLine(fullName)
+	mobile = cleanLine(mobile)
+	if len(fullName) > 100 || len(mobile) > 20 || len(emailAddr) > 254 || len(password) > 72 {
+		fail("One or more fields are too long.")
+		return
+	}
 	if fullName == "" {
 		fail("Full name is required.")
 		return
@@ -287,8 +343,17 @@ func DoRegister(c *gin.Context) {
 		fail("Email address is required.")
 		return
 	}
-	if len(password) < 6 {
-		fail("Password must be at least 6 characters.")
+	if _, perr := mail.ParseAddress(emailAddr); perr != nil ||
+		strings.ContainsAny(emailAddr, " <>,;:'\"\\\r\n\t") {
+		fail("Please enter a valid email address.")
+		return
+	}
+	if mobile != "" && !mobileRe.MatchString(mobile) {
+		fail("Please enter a valid mobile number.")
+		return
+	}
+	if len(password) < 8 {
+		fail("Password must be at least 8 characters.")
 		return
 	}
 	if password != confirm {
@@ -317,7 +382,7 @@ func DoRegister(c *gin.Context) {
 
 	user, err := db.CreateUserFull("", fullName, mobile, emailAddr, hash)
 	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		c.JSON(http.StatusConflict, gin.H{"error": "Could not create the account. The email or mobile may already be registered."})
 		return
 	}
 

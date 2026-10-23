@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"EverythingSuckz/fsb/internal/db"
+	"EverythingSuckz/fsb/internal/utils"
 
 	"github.com/celestix/gotgproto"
 	"github.com/gotd/td/tg"
@@ -192,6 +193,11 @@ func runCourseSend(botClient *gotgproto.Client, user *db.User, course *db.Course
 			sent++
 		}
 		time.Sleep(1500 * time.Millisecond)
+	}
+
+	// Shevti summary msg (topic list) — links = bot ne user la pathavlelya msgs che deep links
+	if n := sendCourseSummaries(botClient, user, course, courseID); n > 0 {
+		utils.Logger.Info("course summary sent to user", zap.Int("count", n), zap.String("user", user.FullName))
 	}
 	return sent, failed
 }

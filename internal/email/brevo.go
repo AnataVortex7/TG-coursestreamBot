@@ -20,11 +20,15 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log"
+	"mime"
 	"net"
 	"net/smtp"
 	"os"
 	"strings"
 	"time"
+
+	// Loads fsb.env before the init() below reads BREVO_* (see internal/envinit).
+	_ "EverythingSuckz/fsb/internal/envinit"
 )
 
 // ─── SMTP Config ──────────────────────────────────────────────────────────────
@@ -202,6 +206,8 @@ func sendViaProvider(p smtpConfig, toEmail string, msg []byte) error {
 	if err != nil {
 		return fmt.Errorf("dial failed: %w", err)
 	}
+	// Whole SMTP conversation must finish in 45s — a stalled server used to hang the goroutine forever.
+	_ = rawConn.SetDeadline(time.Now().Add(45 * time.Second))
 	client, err := smtp.NewClient(rawConn, p.host)
 	if err != nil {
 		return fmt.Errorf("smtp client: %w", err)
@@ -234,10 +240,18 @@ func sendViaProvider(p smtpConfig, toEmail string, msg []byte) error {
 
 // ─── Build raw MIME message ───────────────────────────────────────────────────
 
+// headerSafe removes CR/LF so a value can never terminate a header line and
+// inject extra headers (Bcc:, a second Subject:, a forged body …).
+func headerSafe(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
+}
+
 func buildMsg(p smtpConfig, toEmail, subject, htmlBody string) []byte {
+	// MIME Q-encoding also makes non-ASCII subjects (emoji, Devanagari) RFC-compliant.
+	subject = mime.QEncoding.Encode("utf-8", headerSafe(subject))
 	return []byte(
-		"From: " + p.fromName + " <" + p.fromEmail + ">\r\n" +
-			"To: " + toEmail + "\r\n" +
+		"From: " + headerSafe(p.fromName) + " <" + headerSafe(p.fromEmail) + ">\r\n" +
+			"To: " + headerSafe(toEmail) + "\r\n" +
 			"Subject: " + subject + "\r\n" +
 			"MIME-Version: 1.0\r\n" +
 			"Content-Type: text/html; charset=UTF-8\r\n" +
@@ -336,7 +350,7 @@ func buildRegOTPEmail(appName, fullName, otp string) string {
     </div>
   </div>
 </body>
-</html>`, fullName, appName, otp)
+</html>`, escapeHTML(fullName), escapeHTML(appName), escapeHTML(otp))
 }
 
 func buildOTPEmail(appName, otp string) string {
@@ -369,6 +383,16 @@ func buildOTPEmail(appName, otp string) string {
 }
 
 func buildPurchaseEmail(info PurchaseInfo) string {
+	// Everything below is user-controlled → HTML-escape once, up front.
+	info.UserFullName = escapeHTML(info.UserFullName)
+	info.UserMobile = escapeHTML(info.UserMobile)
+	info.UserEmail = escapeHTML(info.UserEmail)
+	info.Username = escapeHTML(info.Username)
+	info.CourseTitle = escapeHTML(info.CourseTitle)
+	info.CoursePrice = escapeHTML(info.CoursePrice)
+	info.CardNumber = escapeHTML(info.CardNumber)
+	info.CardPIN = escapeHTML(info.CardPIN)
+	info.Message = escapeHTML(info.Message)
 	identifier := info.UserMobile
 	if identifier == "" {
 		identifier = info.UserEmail
@@ -466,7 +490,7 @@ func buildPurchaseEmail(info PurchaseInfo) string {
 		info.CardNumber,
 		info.CardPIN,
 		msgRow,
-		grantCmd,
+		grantCmd, // built from already-escaped fields above
 	)
 }
 
@@ -606,12 +630,12 @@ func buildUserContactEmail(appName string, info UserContactInfo) string {
 </html>`,
 		escapeHTML(info.UserFullName),
 		escapeHTML(info.UserFullName),
-		orDash(info.UserMobile),
-		orDash(info.UserEmail),
-		info.Username,
+		escapeHTML(orDash(info.UserMobile)),
+		escapeHTML(orDash(info.UserEmail)),
+		escapeHTML(info.Username),
 		escapeHTML(info.Subject),
 		htmlMessage,
-		appName,
+		escapeHTML(appName),
 	)
 }
 

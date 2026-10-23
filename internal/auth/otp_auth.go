@@ -137,7 +137,7 @@ func SendOTPHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"need_telegram_link": true,
 		"deep_link":          deepLink,
-		"message":            "Open Telegram and press Start — your OTP will arrive there instantly.",
+		"message":            "Open Telegram and press Start. Complete the quick phone-number verification there, then come back here and request the OTP again.",
 	})
 }
 
@@ -160,6 +160,11 @@ func VerifyOTPHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "OTP must be exactly 4 digits."})
 		return
 	}
+
+	// Serialise attempts per identifier — parallel guesses must not all pass the
+	// attempt-counter / lockout checks before the first failure is recorded.
+	unlock := lockIdentifier(emailAddr)
+	defer unlock()
 
 	// ── Cumulative lockout check ──────────────────────────────────────────────
 	// हे check per-OTP attempt limit (3) आधी येतो.
@@ -267,6 +272,9 @@ func DoPasswordLogin(c *gin.Context) {
 		return
 	}
 
+	unlock := lockIdentifier(identifier)
+	defer unlock()
+
 	// ── Block check ─────────────────────────────────────────────────────────────
 	if blocked, until := db.CheckLoginBlock(identifier); blocked {
 		c.JSON(http.StatusTooManyRequests, gin.H{
@@ -280,15 +288,13 @@ func DoPasswordLogin(c *gin.Context) {
 
 	user, err := db.GetUserByMobileOrEmail(identifier)
 	if err != nil || user == nil {
+		_ = CheckPassword(password, dummyHash) // equalise timing with the "user exists" path
 		db.RecordFailedLogin(identifier)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials. Please try again."})
 		return
 	}
-	if !user.IsActive {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Account disabled. Contact admin."})
-		return
-	}
 	if user.PasswordHash == "" {
+		_ = CheckPassword(password, dummyHash)
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "No password set for this account. Use OTP login.",
 		})
@@ -297,6 +303,11 @@ func DoPasswordLogin(c *gin.Context) {
 	if !CheckPassword(password, user.PasswordHash) {
 		_, msg := db.RecordFailedLogin(identifier)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": msg})
+		return
+	}
+	// Status is revealed only AFTER the password is proven correct.
+	if !user.IsActive {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Account disabled. Contact admin."})
 		return
 	}
 	// ✓ Success — reset counter

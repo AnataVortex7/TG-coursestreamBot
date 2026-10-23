@@ -1034,6 +1034,9 @@ function openModal(title, msg, onConfirm, confirmLabel, confirmClass) {
 function closeModal(){document.getElementById('delModal').classList.remove('open');pendingConfirm=null;}
 
 // ─── Escape helper ────────────────────────────────────────────────────────────
+// jsq — value as a JS string literal that is safe inside a double-quoted onclick="…" attribute.
+// (esc() alone is NOT enough there: the browser decodes &#39; back to ' BEFORE running the handler.)
+function jsq(s){return esc(JSON.stringify(String(s==null?'':s)));}
 function esc(s){if(!s)return'';return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1166,15 +1169,15 @@ async function loadUsers() {
         <td style="font-size:12px;color:#888">${joined}</td>
         <td style="text-align:center"><span class="badge" style="background:#eef2ff;color:#4f46e5;font-weight:700">${u.videos_watched||0}</span></td>
         <td style="white-space:nowrap">
-          <button class="btn btn-sm" style="background:#0ea5e9;color:#fff;margin-bottom:4px" onclick="openUserDetailModal('${u.id}','${esc(u.full_name||u.username)}')">👁️ Details</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}','${esc(u.full_name||u.username)}')">🗑 Delete</button>
-          <button class="btn btn-sm" style="background:#16a34a;color:#fff;margin-left:4px" onclick="openSendCourseModal('${u.id}','${esc(u.full_name||u.username)}')">📤 Send Course</button>
-          ${u.email?`<button class="btn btn-sm" style="background:#4f46e5;color:#fff;margin-left:4px" onclick="openMsgModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email)}')">📩 Msg</button>`:''}
-          <button class="btn btn-warning btn-sm" style="margin-left:4px" onclick="openChangePwdModal('${u.id}','${esc(u.full_name||u.username)}','${esc(u.email||'')}')">🔑 Password</button>
-          ${u.is_active?`<button class="btn btn-info btn-sm" style="margin-left:4px" onclick="loginAsUser('${u.id}','${esc(u.full_name||u.username)}')">👤 Login As</button>`:''}
+          <button class="btn btn-sm" style="background:#0ea5e9;color:#fff;margin-bottom:4px" onclick="openUserDetailModal('${u.id}',${jsq(u.full_name||u.username)})">👁️ Details</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteUser('${u.id}',${jsq(u.full_name||u.username)})">🗑 Delete</button>
+          <button class="btn btn-sm" style="background:#16a34a;color:#fff;margin-left:4px" onclick="openSendCourseModal('${u.id}',${jsq(u.full_name||u.username)})">📤 Send Course</button>
+          ${u.email?`<button class="btn btn-sm" style="background:#4f46e5;color:#fff;margin-left:4px" onclick="openMsgModal('${u.id}',${jsq(u.full_name||u.username)},${jsq(u.email)})">📩 Msg</button>`:''}
+          <button class="btn btn-warning btn-sm" style="margin-left:4px" onclick="openChangePwdModal('${u.id}',${jsq(u.full_name||u.username)},${jsq(u.email||'')})">🔑 Password</button>
+          ${u.is_active?`<button class="btn btn-info btn-sm" style="margin-left:4px" onclick="loginAsUser('${u.id}',${jsq(u.full_name||u.username)})">👤 Login As</button>`:''}
           ${u.is_special_user
-            ?`<button class="btn btn-sm" style="background:#f59e0b;color:#fff;margin-left:4px" onclick="toggleSpecialUser('${u.id}','${esc(u.full_name||u.username)}',false)">⭐ Special: ON</button>`
-            :`<button class="btn btn-sm" style="background:#888;color:#fff;margin-left:4px" onclick="toggleSpecialUser('${u.id}','${esc(u.full_name||u.username)}',true)">☆ Special: OFF</button>`}
+            ?`<button class="btn btn-sm" style="background:#f59e0b;color:#fff;margin-left:4px" onclick="toggleSpecialUser('${u.id}',${jsq(u.full_name||u.username)},false)">⭐ Special: ON</button>`
+            :`<button class="btn btn-sm" style="background:#888;color:#fff;margin-left:4px" onclick="toggleSpecialUser('${u.id}',${jsq(u.full_name||u.username)},true)">☆ Special: OFF</button>`}
         </td>
       </tr>`;
     });
@@ -1425,10 +1428,10 @@ async function loadCourses() {
         <td style="font-family:monospace;font-size:11px;color:#888">${c.source_id || c.channel_id}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap;padding:10px 14px">
           <button class="btn btn-warning btn-sm" onclick="toggleSync('${syncRowId}')">🔄 Sync</button>
-          <button class="btn btn-info btn-sm" onclick="openFoldersForCourse('${c.id}','${esc(c.title)}')">📁 Folders</button>
+          <button class="btn btn-info btn-sm" onclick="openFoldersForCourse('${c.id}',${jsq(c.title)})">📁 Folders</button>
           <button class="btn btn-sm" style="background:#6c63ff;color:#fff" onclick="openEditCourseModal('${c.id}')">✏️ Edit</button>
-          <button class="btn btn-sm" style="background:#0d9488;color:#fff" onclick="openBulkRenameModal('${c.id}','${esc(c.title)}')">🔤 Bulk Rename</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteCourse('${c.id}','${esc(c.title)}')">🗑 Delete</button>
+          <button class="btn btn-sm" style="background:#0d9488;color:#fff" onclick="openBulkRenameModal('${c.id}',${jsq(c.title)})">🔤 Bulk Rename</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteCourse('${c.id}',${jsq(c.title)})">🗑 Delete</button>
         </td>
       </tr>
       <tr class="sync-row" id="${syncRowId}">
@@ -1436,7 +1439,7 @@ async function loadCourses() {
           <div class="sync-inner">
             <div class="sync-field"><label>Start Message ID</label><input type="number" id="s-start-${i}" value="1" min="1" /></div>
             <div class="sync-field"><label>End Message ID</label><input type="number" id="s-end-${i}" min="1" placeholder="e.g. 500" /></div>
-            <button class="btn btn-primary btn-sm" onclick="execSync('${c.id}','${esc(c.title)}','${i}')">▶ Start Sync</button>
+            <button class="btn btn-primary btn-sm" onclick="execSync('${c.id}',${jsq(c.title)},'${i}')">▶ Start Sync</button>
             <span class="sync-status" id="sync-status-${i}">✅ Sync chalu zali!</span>
           </div>
         </td>
@@ -1627,7 +1630,7 @@ async function udLoadWatchSummary() {
       return;
     }
     body.innerHTML = list.map(c => `
-      <div onclick="udLoadCourseHistory('${c.course_id}','${esc(c.course_title)}')"
+      <div onclick="udLoadCourseHistory('${c.course_id}',${jsq(c.course_title)})"
            style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border:1px solid #e5e5e5;border-radius:10px;margin-bottom:8px;cursor:pointer;transition:background .15s"
            onmouseover="this.style.background='#f8f9fb'" onmouseout="this.style.background='transparent'">
         <div style="font-weight:600;font-size:14px">${esc(c.course_title)}</div>
@@ -1764,7 +1767,7 @@ async function loadFolders() {
         <td>
           <div style="display:flex;gap:6px">
             <button class="btn btn-warning btn-sm" onclick='openFolderModal(${JSON.stringify(f)})'>✏️ Edit</button>
-            <button class="btn btn-danger btn-sm" onclick="deleteFolderConfirm('${f.id}','${esc(f.name)}')">🗑 Delete</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteFolderConfirm('${f.id}',${jsq(f.name)})">🗑 Delete</button>
           </div>
         </td>
       </tr>`;
@@ -2070,7 +2073,7 @@ async function loadSessions() {
           <div class="meta">${s.mobile?'📱 '+esc(s.mobile)+' &nbsp;·&nbsp; ':''}${s.email?'📧 '+esc(s.email)+' &nbsp;·&nbsp; ':''}🌐 ${esc(s.ip)} &nbsp;·&nbsp; ⏰ Expires: ${esc(s.expires_at)}</div>
           <div class="token">Token: ${esc(s.token_hint)}</div>
         </div>
-        <button class="btn btn-danger btn-sm" onclick="killSession(${JSON.stringify(s.token)},'${esc(s.username)}')">💀 Kill</button>
+        <button class="btn btn-danger btn-sm" onclick="killSession(${jsq(s.token)},${jsq(s.username)})">💀 Kill</button>
       </div>`;
     });
     wrap.innerHTML=h; loadStats();
@@ -2175,9 +2178,9 @@ async function loadURLMonitor() {
         <td style="font-size:12px;font-family:monospace">${latency}</td>
         <td style="font-weight:600;color:${uptimeColor}">${uptime}</td>
         <td><div class="um-actions">
-          <button class="btn btn-info btn-sm" onclick="showHistory('${u.id}','${esc(u.label||u.url)}')">📊 History</button>
-          <button class="btn btn-warning btn-sm" onclick="manualCheck('${u.id}','${esc(u.label||displayURL)}')">⚡ Check</button>
-          <button class="btn btn-danger btn-sm" onclick="removeURL('${u.id}','${esc(u.label||displayURL)}')">🗑 Remove</button>
+          <button class="btn btn-info btn-sm" onclick="showHistory('${u.id}',${jsq(u.label||u.url)})">📊 History</button>
+          <button class="btn btn-warning btn-sm" onclick="manualCheck('${u.id}',${jsq(u.label||displayURL)})">⚡ Check</button>
+          <button class="btn btn-danger btn-sm" onclick="removeURL('${u.id}',${jsq(u.label||displayURL)})">🗑 Remove</button>
         </div></td>
       </tr>`;
     });
@@ -2488,7 +2491,7 @@ async function loadWorkers() {
         <td style="font-size:11px;color:#888">${esc(w.added_at)}</td>
         <td>
           <button class="btn btn-sm" style="background:#fee2e2;color:#b91c1c;border:none;padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px"
-            onclick="removeWorker('${esc(w.url)}')">🗑 Remove</button>
+            onclick="removeWorker(${jsq(w.url)})">🗑 Remove</button>
         </td>
       </tr>`;
     }

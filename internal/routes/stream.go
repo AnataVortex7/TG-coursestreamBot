@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"EverythingSuckz/fsb/internal/bot"
 	"EverythingSuckz/fsb/internal/stream"
@@ -56,7 +57,7 @@ func handlePublicStream(c *gin.Context) {
 		worker := bot.GetNextWorker()
 		file, err = utils.FileFromMessage(c, worker.Client, messageID)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not load file: %s", err.Error())})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not load file."})
 			return
 		}
 		servePublicStream(c, w, req, file, func(start, end int64) (io.ReadCloser, error) {
@@ -73,7 +74,7 @@ func handlePublicStream(c *gin.Context) {
 	}
 	file, err = utils.FileFromMessageInChannel(c, ubClient, messageID, channelID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Could not load file from private channel: %s", err.Error())})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not load file."})
 		return
 	}
 	servePublicStream(c, w, req, file, func(start, end int64) (io.ReadCloser, error) {
@@ -97,18 +98,29 @@ func servePublicStream(
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load photo."})
 			return
 		}
-		c.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, file.FileName))
+		c.Header("Content-Disposition", contentDisposition("inline", file.FileName))
 		c.Header("Content-Length", strconv.Itoa(len(data)))
+		c.Header("X-Content-Type-Options", "nosniff")
+		photoMime := file.MimeType
+		if photoMime == "" || isActiveContentMime(photoMime) {
+			photoMime = "application/octet-stream"
+		}
 		if req.Method != "HEAD" {
-			c.Data(http.StatusOK, file.MimeType, data)
+			c.Data(http.StatusOK, photoMime, data)
 		}
 		return
 	}
 
 	mimeType := normalizePublicMime(file.MimeType, file.FileName)
+	c.Header("X-Content-Type-Options", "nosniff")
+	if isActiveContentMime(mimeType) {
+		// html/svg/xml/js served inline from this origin would run with the site's
+		// privileges (stored XSS) — force a download instead.
+		mimeType = "application/octet-stream"
+	}
 	c.Header("Accept-Ranges", "bytes")
 	c.Header("Content-Type", mimeType)
-	c.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, file.FileName))
+	c.Header("Content-Disposition", contentDisposition("inline", file.FileName))
 
 	var start, end int64
 	rangeHeader := req.Header.Get("Range")
@@ -221,7 +233,7 @@ func downloadFromCDN(redirect *tg.UploadFileCDNRedirect) ([]byte, error) {
 		redirect.DCID,
 		string(redirect.FileToken),
 	)
-	resp, err := http.Get(url)
+	resp, err := (&http.Client{Timeout: 60 * time.Second}).Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("CDN fetch: %w", err)
 	}
@@ -229,7 +241,7 @@ func downloadFromCDN(redirect *tg.UploadFileCDNRedirect) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("CDN returned status %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
 		return nil, fmt.Errorf("CDN read: %w", err)
 	}

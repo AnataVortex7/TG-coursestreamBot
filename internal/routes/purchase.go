@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -42,6 +43,14 @@ func handlePurchase(c *gin.Context) {
 	req.CardPIN = strings.TrimSpace(req.CardPIN)
 	req.Message = strings.TrimSpace(req.Message)
 
+	if len(req.CardNumber) > 64 || len(req.CardPIN) > 32 || len(req.Message) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Input khup motha ahe"})
+		return
+	}
+	if !allowOnce("purchase:"+auth.GetUserID(c).Hex(), 30*time.Second) {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Thoda thamba, 30 second nantar punha try kara."})
+		return
+	}
 	if req.CourseID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Course ID required"})
 		return

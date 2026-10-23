@@ -58,6 +58,10 @@ func handleWorkerRegister(c *gin.Context) {
 		return
 	}
 
+	if !validWorkerURL(req.WorkerURL) {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid worker_url"})
+		return
+	}
 	workerreg.RegisterWorker(req.WorkerURL)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -194,6 +198,10 @@ func handleAdminWorkerAdd(c *gin.Context) {
 		return
 	}
 
+	if !validWorkerURL(req.WorkerURL) {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "invalid worker_url"})
+		return
+	}
 	if err := workerreg.AddAdminWorker(req.WorkerURL); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": err.Error()})
 		return

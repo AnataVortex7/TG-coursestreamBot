@@ -10,8 +10,13 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"os"
+	"strings"
 	"time"
+
+	// Loads fsb.env before init() below runs (see internal/envinit).
+	_ "EverythingSuckz/fsb/internal/envinit"
 )
 
 // ─── Key setup ────────────────────────────────────────────────────────────────
@@ -24,9 +29,37 @@ func init() {
 		log.Fatal("FATAL: STREAM_SECRET environment variable is not set. " +
 			"Set a strong random secret before running in production.")
 	}
+	// Reject the placeholder from fsb.sample.env and obviously weak values.
+	// (A 16 char floor keeps older deployments booting; < 32 only warns.)
+	if strings.Contains(strings.ToLower(secret), "change-me") || len(secret) < 16 {
+		log.Fatal("FATAL: STREAM_SECRET is a placeholder or too short. " +
+			"Generate one with: openssl rand -hex 32 " +
+			"(the same value must be configured on every worker).")
+	}
+	if len(secret) < 32 {
+		log.Println("WARNING: STREAM_SECRET is shorter than 32 characters — " +
+			"rotate it to `openssl rand -hex 32` (update workers too).")
+	}
 	sum := sha256.Sum256([]byte(secret))
 	aesKey = sum[:]
 }
+
+// ─── Domain separation (AAD) ──────────────────────────────────────────────────
+// Every token type is AES-256-GCM encrypted with the same key. Without domain
+// separation a token minted for one purpose could be replayed for another
+// (e.g. an authenticated /watch/ token used on the unauthenticated /stream/
+// endpoint, which removes the session / single-device / nonce checks).
+// Each type below is therefore bound to its own Additional Authenticated Data:
+// a token only decrypts for the purpose it was created for.
+//
+// NOTE: worker tokens intentionally keep NO AAD — the external worker
+// (separate project, token/verify.go) decrypts them with a plain GCM Open.
+
+var (
+	aadStream  = []byte("fsb/token/stream/v1")
+	aadPublic  = []byte("fsb/token/public/v1")
+	aadFileKey = []byte("fsb/token/filekey/v1")
+)
 
 // ─── Token TTLs ───────────────────────────────────────────────────────────────
 
@@ -67,7 +100,7 @@ type WorkerTokenPayload struct {
 
 	// File location — pre-fetched by main server
 	// Worker does NOT need to re-query Telegram
-	FileType      string `json:"ftype"`  // "document" | "photo"
+	FileType      string `json:"ftype"` // "document" | "photo"
 	FileID        int64  `json:"fid"`
 	AccessHash    int64  `json:"fah"`
 	FileReference []byte `json:"fref"`
@@ -163,18 +196,20 @@ func encryptStream(payload StreamPayload) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return encryptBytes(plaintext)
+	return sealWithAAD(plaintext, aadStream)
 }
 
+// encryptWorker — NO AAD (external worker decrypts with a plain GCM Open).
 func encryptWorker(payload WorkerTokenPayload) (string, error) {
 	plaintext, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
 	}
-	return encryptBytes(plaintext)
+	return sealWithAAD(plaintext, nil)
 }
 
-func encryptBytes(plaintext []byte) (string, error) {
+// sealWithAAD encrypts plaintext with AES-256-GCM, binding it to aad.
+func sealWithAAD(plaintext, aad []byte) (string, error) {
 	block, err := aes.NewCipher(aesKey)
 	if err != nil {
 		return "", err
@@ -190,8 +225,39 @@ func encryptBytes(plaintext []byte) (string, error) {
 		return "", err
 	}
 
-	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, aad)
 	return base64.RawURLEncoding.EncodeToString(ciphertext), nil
+}
+
+// openWithAAD decrypts a token produced by sealWithAAD with the same aad.
+// Any failure (bad base64, wrong key, wrong aad, tampering) → ErrTokenInvalid.
+func openWithAAD(tokenStr string, aad []byte) ([]byte, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(tokenStr)
+	if err != nil {
+		return nil, ErrTokenInvalid
+	}
+
+	block, err := aes.NewCipher(aesKey)
+	if err != nil {
+		return nil, ErrTokenInvalid
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, ErrTokenInvalid
+	}
+
+	nonceSize := gcm.NonceSize()
+	if len(raw) < nonceSize {
+		return nil, ErrTokenInvalid
+	}
+
+	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
+	if err != nil {
+		return nil, ErrTokenInvalid
+	}
+	return plaintext, nil
 }
 
 // ─── Verify (main stream token — sessionToken must NOT be empty) ──────────────
@@ -229,30 +295,9 @@ func Verify(tokenStr string) (*VerifyResult, error) {
 }
 
 func decryptPayload(tokenStr string) (*StreamPayload, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(tokenStr)
+	plaintext, err := openWithAAD(tokenStr, aadStream)
 	if err != nil {
-		return nil, ErrTokenInvalid
-	}
-
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return nil, ErrTokenInvalid
-	}
-
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, ErrTokenInvalid
-	}
-
-	nonceSize := gcm.NonceSize()
-	if len(raw) < nonceSize {
-		return nil, ErrTokenInvalid
-	}
-
-	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return nil, ErrTokenInvalid
+		return nil, err
 	}
 
 	var payload StreamPayload
@@ -292,7 +337,7 @@ func NewPublicTokenForChannel(messageID int, channelID int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return encryptBytes(raw)
+	return sealWithAAD(raw, aadPublic)
 }
 
 // VerifyPublicToken decrypts and validates a public stream token.
@@ -305,27 +350,9 @@ func VerifyPublicToken(tokenStr string) (int, error) {
 // VerifyPublicTokenFull returns (messageID, channelID, error).
 // channelID = 0 → LOG_CHANNEL; channelID != 0 → private channel via userbot.
 func VerifyPublicTokenFull(tokenStr string) (int, int64, error) {
-	raw, err := base64.RawURLEncoding.DecodeString(tokenStr)
+	plaintext, err := openWithAAD(tokenStr, aadPublic)
 	if err != nil {
-		return 0, 0, ErrTokenInvalid
-	}
-
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return 0, 0, ErrTokenInvalid
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return 0, 0, ErrTokenInvalid
-	}
-	nonceSize := gcm.NonceSize()
-	if len(raw) < nonceSize {
-		return 0, 0, ErrTokenInvalid
-	}
-	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return 0, 0, ErrTokenInvalid
+		return 0, 0, err
 	}
 
 	var payload PublicStreamPayload
@@ -340,21 +367,12 @@ func VerifyPublicTokenFull(tokenStr string) (int, int64, error) {
 
 // ─── IP helper (kept for logging only — not used in auth) ────────────────────
 
+// ClientIP returns the host part of remoteAddr (IPv4, IPv6 and host:port safe).
 func ClientIP(forwardedFor, remoteAddr string) string {
-	if idx := lastIndex(remoteAddr, ":"); idx != -1 {
-		return remoteAddr[:idx]
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
 	}
 	return remoteAddr
-}
-
-func lastIndex(s, substr string) int {
-	idx := -1
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			idx = i
-		}
-	}
-	return idx
 }
 
 // ─── File Key (offline download — hides message_id + channel_id) ─────────────
@@ -377,31 +395,14 @@ func NewFileKey(messageID int, channelID int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return encryptBytes(raw)
+	return sealWithAAD(raw, aadFileKey)
 }
 
 // DecryptFileKey decrypts a file key back to message_id + channel_id.
 func DecryptFileKey(fileKey string) (messageID int, channelID int64, err error) {
-	raw, err := base64.RawURLEncoding.DecodeString(fileKey)
+	plaintext, err := openWithAAD(fileKey, aadFileKey)
 	if err != nil {
-		return 0, 0, ErrTokenInvalid
-	}
-	block, err := aes.NewCipher(aesKey)
-	if err != nil {
-		return 0, 0, ErrTokenInvalid
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return 0, 0, ErrTokenInvalid
-	}
-	nonceSize := gcm.NonceSize()
-	if len(raw) < nonceSize {
-		return 0, 0, ErrTokenInvalid
-	}
-	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
-	if err != nil {
-		return 0, 0, ErrTokenInvalid
+		return 0, 0, err
 	}
 	var p FileKeyPayload
 	if err = json.Unmarshal(plaintext, &p); err != nil {

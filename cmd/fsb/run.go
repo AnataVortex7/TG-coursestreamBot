@@ -233,7 +233,15 @@ func runApp(cmd *cobra.Command, args []string) {
 	mainLogger.Sugar().Infof("Server is running at %s", config.ValueOf.Host)
 	mainLogger.Sugar().Infof("External workers: %d healthy", workerreg.HealthyCount())
 
-	err = router.Run(fmt.Sprintf(":%d", config.ValueOf.Port))
+	srv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", config.ValueOf.Port),
+		Handler: router,
+		// Slowloris protection. No Read/WriteTimeout on purpose: video streams are long-lived.
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+	err = srv.ListenAndServe()
 	if err != nil {
 		mainLogger.Sugar().Fatalf("Server failed to start: %v", err)
 	}
@@ -246,7 +254,8 @@ func waitForPrimary(log *zap.Logger, mainLogger *zap.Logger) {
 		return
 	}
 	standby := &http.Server{
-		Addr: fmt.Sprintf(":%d", config.ValueOf.Port),
+		Addr:              fmt.Sprintf(":%d", config.ValueOf.Port),
+		ReadHeaderTimeout: 15 * time.Second,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
@@ -354,6 +363,48 @@ func globalSecurityHeaders() gin.HandlerFunc {
 	}
 }
 
+// trustedProxyList — reverse proxies whose X-Forwarded-For header is believed.
+// TRUSTED_PROXIES=comma separated IPs/CIDRs. "*" = trust everyone (old, spoofable
+// behaviour). Default = loopback + private ranges, which covers the usual PaaS
+// load balancers (Koyeb/Render/HF/Docker). Behind Cloudflare or any proxy with
+// PUBLIC addresses, add that proxy's CIDRs here, otherwise every client appears
+// to come from the proxy IP.
+func trustedProxyList(log *zap.Logger) []string {
+	raw := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES"))
+	if raw == "*" {
+		log.Sugar().Warn("TRUSTED_PROXIES=* — client IPs can be spoofed via X-Forwarded-For")
+		return []string{"0.0.0.0/0", "::/0"}
+	}
+	if raw == "" {
+		return []string{
+			"127.0.0.0/8", "::1/128",
+			"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+			"100.64.0.0/10", "fc00::/7",
+		}
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// redactPath hides secret tokens that are carried in the URL path, so they do
+// not end up in access logs.
+func redactPath(p string) string {
+	for _, prefix := range []string{
+		"/stream/", "/watch/", "/watch-stream/", "/pdf-download/", "/pdf-view/",
+		"/worker-stream/", "/api/colab/tempfile/", "/api/watch/position/",
+	} {
+		if strings.HasPrefix(p, prefix) {
+			return prefix + "<redacted>"
+		}
+	}
+	return p
+}
+
 func getRouter(log *zap.Logger) *gin.Engine {
 	if config.ValueOf.Dev {
 		gin.SetMode(gin.DebugMode)
@@ -362,6 +413,13 @@ func getRouter(log *zap.Logger) *gin.Engine {
 	}
 
 	router := gin.New()
+	// [SECURITY] Without this gin trusts X-Forwarded-For from EVERYONE, so any
+	// client could fake its IP (bypassing the admin brute-force limiter and
+	// ADMIN_ALLOWED_IPS). Only the proxies listed here may set it.
+	if err := router.SetTrustedProxies(trustedProxyList(log)); err != nil {
+		log.Sugar().Warnf("TRUSTED_PROXIES invalid (%v) — trusting no proxy headers", err)
+		_ = router.SetTrustedProxies(nil)
+	}
 	router.Use(gin.Recovery())
 	router.Use(prefixAwareLogger())
 	router.Use(gin.ErrorLogger())
@@ -400,7 +458,13 @@ func prefixAwareLogger() gin.HandlerFunc {
 		"/api/colab/progress",
 		"/api/admin/stream/live",
 	}
-	logger := gin.LoggerWithConfig(gin.LoggerConfig{})
+	logger := gin.LoggerWithConfig(gin.LoggerConfig{
+		Formatter: func(p gin.LogFormatterParams) string {
+			return fmt.Sprintf("[GIN] %s | %3d | %13v | %15s | %-7s %q\n",
+				p.TimeStamp.Format("2006/01/02 - 15:04:05"), p.StatusCode, p.Latency,
+				p.ClientIP, p.Method, redactPath(p.Path))
+		},
+	})
 	return func(c *gin.Context) {
 		p := c.Request.URL.Path
 		if skipExact[p] {

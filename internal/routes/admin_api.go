@@ -12,6 +12,7 @@ import (
 	"EverythingSuckz/fsb/internal/utils"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	fmt "fmt"
@@ -61,56 +62,98 @@ func genAdminToken() string {
 }
 
 // ─── Brute Force Limiter ──────────────────────────────────────────────────────
-// Per-IP: max 5 failed attempts in 15 min → 30 min lockout.
+// Per-IP: max 5 attempts per 15 min → 30 min lockout.
+// Attempts are counted BEFORE the credentials are checked and under a mutex, so
+// a burst of parallel requests cannot slip past the limit (the old
+// check-then-record flow was racy and mutated shared state without a lock).
+// The IP comes from c.ClientIP(), which is only spoof-proof when TRUSTED_PROXIES
+// is configured correctly (see cmd/fsb/run.go).
 
 type loginAttempt struct {
-	failures int
-	lastFail time.Time
+	attempts int
+	first    time.Time
 	lockedAt time.Time
 }
 
 var (
-	loginAttempts   sync.Map // ip(string) → *loginAttempt
+	loginMu         sync.Mutex
+	loginAttempts   = map[string]*loginAttempt{}
 	maxFailures     = 5
 	window          = 15 * time.Minute
 	lockoutDuration = 30 * time.Minute
 )
 
-func checkBruteForce(ip string) (locked bool, remaining time.Duration) {
-	v, _ := loginAttempts.LoadOrStore(ip, &loginAttempt{})
-	a := v.(*loginAttempt)
+// beginLoginAttempt counts one attempt for ip. locked=true → reject the request.
+func beginLoginAttempt(ip string) (locked bool, remaining time.Duration) {
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	now := time.Now()
 
-	// Lockout active?
-	if !a.lockedAt.IsZero() {
-		unlockAt := a.lockedAt.Add(lockoutDuration)
-		if time.Now().Before(unlockAt) {
-			return true, time.Until(unlockAt)
+	// keep the map bounded (spoofed / rotating IPs)
+	if len(loginAttempts) > 5000 {
+		for k, v := range loginAttempts {
+			lockExpired := v.lockedAt.IsZero() || now.After(v.lockedAt.Add(lockoutDuration))
+			if lockExpired && now.Sub(v.first) > window {
+				delete(loginAttempts, k)
+			}
 		}
-		// Lockout expired — reset
-		a.failures = 0
-		a.lockedAt = time.Time{}
 	}
 
-	// Window expired — reset counter
-	if time.Since(a.lastFail) > window {
-		a.failures = 0
+	a := loginAttempts[ip]
+	if a == nil {
+		a = &loginAttempt{first: now}
+		loginAttempts[ip] = a
+	}
+	if !a.lockedAt.IsZero() {
+		unlockAt := a.lockedAt.Add(lockoutDuration)
+		if now.Before(unlockAt) {
+			return true, unlockAt.Sub(now)
+		}
+		*a = loginAttempt{first: now} // lockout expired
+	}
+	if now.Sub(a.first) > window {
+		*a = loginAttempt{first: now} // window expired
+	}
+	a.attempts++
+	if a.attempts > maxFailures {
+		a.lockedAt = now
+		log.Warn(fmt.Sprintf("Admin brute force lockout: IP %s (%d attempts)", ip, a.attempts))
+		return true, lockoutDuration
 	}
 	return false, 0
 }
 
-func recordFailure(ip string) {
-	v, _ := loginAttempts.LoadOrStore(ip, &loginAttempt{})
-	a := v.(*loginAttempt)
-	a.failures++
-	a.lastFail = time.Now()
-	if a.failures >= maxFailures {
-		a.lockedAt = time.Now()
-		log.Warn(fmt.Sprintf("Admin brute force lockout: IP %s (%d failures)", ip, a.failures))
+// attemptsLeftAfterFailure — attempts remaining after a failed login; locks
+// the IP immediately when it reaches 0.
+func attemptsLeftAfterFailure(ip string) int {
+	loginMu.Lock()
+	defer loginMu.Unlock()
+	a := loginAttempts[ip]
+	if a == nil {
+		return 0
 	}
+	left := maxFailures - a.attempts
+	if left <= 0 && a.lockedAt.IsZero() {
+		a.lockedAt = time.Now()
+		log.Warn(fmt.Sprintf("Admin brute force lockout: IP %s (%d attempts)", ip, a.attempts))
+	}
+	if left < 0 {
+		left = 0
+	}
+	return left
 }
 
 func recordSuccess(ip string) {
-	loginAttempts.Delete(ip) // success → counter reset
+	loginMu.Lock()
+	delete(loginAttempts, ip) // success → counter reset
+	loginMu.Unlock()
+}
+
+// secureEqual compares two strings in constant time without leaking their length.
+func secureEqual(a, b string) bool {
+	ha := sha256.Sum256([]byte(a))
+	hb := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
 }
 
 // ─── Admin IP whitelist (optional) ───────────────────────────────────────────
@@ -172,8 +215,8 @@ func adminLogin(c *gin.Context) {
 		return
 	}
 
-	// ── 2. Brute force check ──────────────────────────────────────────────────
-	if locked, remaining := checkBruteForce(ip); locked {
+	// ── 2. Brute force check (attempt is counted up-front) ────────────────────
+	if locked, remaining := beginLoginAttempt(ip); locked {
 		mins := int(remaining.Minutes()) + 1
 		log.Warn(fmt.Sprintf("Admin login blocked (lockout): IP %s, %dm remaining", ip, mins))
 		c.JSON(http.StatusTooManyRequests, gin.H{
@@ -191,14 +234,12 @@ func adminLogin(c *gin.Context) {
 	}
 
 	// Constant-time comparison — timing attack नाही
-	uOK := subtle.ConstantTimeCompare([]byte(u), []byte(adminUser())) == 1
-	pOK := subtle.ConstantTimeCompare([]byte(p), []byte(adminPass())) == 1
+	configured := adminUser() != "" && adminPass() != ""
+	uOK := secureEqual(u, adminUser())
+	pOK := secureEqual(p, adminPass())
 
-	if !uOK || !pOK {
-		recordFailure(ip)
-		v, _ := loginAttempts.Load(ip)
-		a := v.(*loginAttempt)
-		left := maxFailures - a.failures
+	if !configured || !uOK || !pOK {
+		left := attemptsLeftAfterFailure(ip)
 		log.Warn(fmt.Sprintf("Admin login failed: IP %s, user=%q, attempts_left=%d", ip, u, left))
 		if left <= 0 {
 			c.JSON(http.StatusTooManyRequests, gin.H{
@@ -226,6 +267,7 @@ func adminLogin(c *gin.Context) {
 
 	// Secure=true in production (HTTPS), false in dev
 	secure := !config.ValueOf.Dev
+	c.SetSameSite(http.SameSiteStrictMode)
 	c.SetCookie(adminCookieName, tok, int(adminSessionTTL.Seconds()), "/", "", secure, true)
 
 	log.Info(fmt.Sprintf("Admin login success: IP %s", ip))
@@ -1758,6 +1800,10 @@ func adminChangeUserPassword(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "DB update failed: " + err.Error()})
 		return
 	}
+
+	// [SECURITY] A password reset must also end every existing session —
+	// otherwise someone already logged in on a compromised account stays in.
+	_ = db.DeleteAllSessionsForUser(id)
 
 	// Email notification — email असल्यासच, silently fail if email down
 	if user.Email != "" {

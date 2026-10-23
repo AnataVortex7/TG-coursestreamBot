@@ -111,6 +111,11 @@ func handleNotifyAdminDeviceIssue(c *gin.Context) {
 		return
 	}
 
+	if !allowOnce("devnotify:"+userID.Hex(), 5*time.Minute) {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Admin la already notify kela ahe. Thoda vel wait kara."})
+		return
+	}
+
 	msg := fmt.Sprintf(
 		"🔒 Device Login Issue\n\nUser: %s\nMobile: %s\nEmail: %s\n\nYa user cha account doosrya device var aadhich login aahe ani navin device varun login karaycha try kartoy. Fresh login allow karaycha asel tar:\n/kill %s",
 		user.FullName, user.Mobile, user.Email, user.Mobile,

@@ -229,7 +229,7 @@ func handleColabTempFile(c *gin.Context) {
 	// ── Pipe mode (userbot direct stream) ────────────────────────────────
 	fileName, fileSize, pipeFn, ok := wmqueue.GetPipe(tkn)
 	if ok {
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+		c.Header("Content-Disposition", contentDisposition("attachment", fileName))
 		if fileSize > 0 {
 			c.Header("Content-Length", fmt.Sprintf("%d", fileSize))
 		}
@@ -253,7 +253,7 @@ func handleColabTempFile(c *gin.Context) {
 		c.JSON(http.StatusGone, gin.H{"error": "file no longer available"})
 		return
 	}
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName2))
+	c.Header("Content-Disposition", contentDisposition("attachment", fileName2))
 	c.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
 	c.File(filePath)
 }

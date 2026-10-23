@@ -12,6 +12,7 @@ package wmqueue
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1118,7 +1119,7 @@ func SecretOK(headerVal string) bool {
 	if secret == "" {
 		return false
 	}
-	return headerVal == secret
+	return subtle.ConstantTimeCompare([]byte(headerVal), []byte(secret)) == 1
 }
 
 // ── StartCleanupLoop ──────────────────────────────────────────────────────────
