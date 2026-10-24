@@ -106,6 +106,7 @@ const (
 )
 
 type loginState struct {
+	slotOwner int64 // != 0 → AutoSync sathi extra userbot account ("user_<slotOwner>" mhanun save hoto)
 	phase     loginPhase
 	phone     string
 	phoneHash string
@@ -562,12 +563,12 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 				reply(ctx, u, "❌ "+err.Error())
 				return dispatcher.EndGroups
 			}
-			setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: phone, phoneHash: hash, apiID: int(dbUser.TgApiID), apiHash: dbUser.TgApiHash})
+			setUserbotLogin(adminID, &loginState{slotOwner: ls.slotOwner, phase: loginPhaseCode, phone: phone, phoneHash: hash, apiID: int(dbUser.TgApiID), apiHash: dbUser.TgApiHash})
 			reply(ctx, u, "✅ OTP पाठवला! (stored API creds वापरले)\n\n🔢 Telegram वर आलेला OTP code टाका:\n\n⚠️ *टीप:* code मध्ये space किंवा dash देऊन टाका. (उदा: `9-9-0-8-7`)")
 			return dispatcher.EndGroups
 		}
 		// No stored creds — API_ID विचारा
-		setUserbotLogin(adminID, &loginState{phase: loginPhaseApiID, phone: phone})
+		setUserbotLogin(adminID, &loginState{slotOwner: ls.slotOwner, phase: loginPhaseApiID, phone: phone})
 		reply(ctx, u, "🔑 *Telegram API ID टाका:*\n\n[my.telegram.org](https://my.telegram.org) वरून मिळतो.\n\nDefault global config वापरायचा असेल तर `-` पाठवा.")
 		return dispatcher.EndGroups
 
@@ -589,11 +590,11 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 				reply(ctx, u, "❌ "+err.Error())
 				return dispatcher.EndGroups
 			}
-			setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: ls.phone, phoneHash: hash})
+			setUserbotLogin(adminID, &loginState{slotOwner: ls.slotOwner, phase: loginPhaseCode, phone: ls.phone, phoneHash: hash})
 			reply(ctx, u, "✅ OTP पाठवला! (global API creds)\n\n🔢 OTP code टाका:")
 			return dispatcher.EndGroups
 		}
-		setUserbotLogin(adminID, &loginState{phase: loginPhaseApiHash, phone: ls.phone, apiID: apiID})
+		setUserbotLogin(adminID, &loginState{slotOwner: ls.slotOwner, phase: loginPhaseApiHash, phone: ls.phone, apiID: apiID})
 		reply(ctx, u, "🔑 *API Hash टाका:*\n\n(my.telegram.org वरूनच मिळतो — API ID सोबतच असतो)")
 		return dispatcher.EndGroups
 
@@ -613,7 +614,7 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 			reply(ctx, u, "❌ "+err.Error())
 			return dispatcher.EndGroups
 		}
-		setUserbotLogin(adminID, &loginState{phase: loginPhaseCode, phone: ls.phone, phoneHash: hash, apiID: ls.apiID, apiHash: apiHash})
+		setUserbotLogin(adminID, &loginState{slotOwner: ls.slotOwner, phase: loginPhaseCode, phone: ls.phone, phoneHash: hash, apiID: ls.apiID, apiHash: apiHash})
 		reply(ctx, u, "✅ OTP पाठवला! API creds save केले.\n\n🔢 OTP code टाका:")
 		return dispatcher.EndGroups
 
@@ -621,7 +622,7 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 		sessionStr, firstName, lastName, username, phoneOut, userID, err := UserbotVerifyCode(ls.phone, ls.phoneHash, text, "")
 		if err != nil {
 			if err.Error() == "SESSION_PASSWORD_NEEDED" {
-				setUserbotLogin(adminID, &loginState{phase: loginPhasePassword, phone: ls.phone, phoneHash: ls.phoneHash})
+				setUserbotLogin(adminID, &loginState{slotOwner: ls.slotOwner, phase: loginPhasePassword, phone: ls.phone, phoneHash: ls.phoneHash})
 				reply(ctx, u, "🔒 या account ला 2FA आहे — Password टाका:")
 				return dispatcher.EndGroups
 			}
@@ -647,7 +648,21 @@ func handleUserbotLoginReply(ctx *ext.Context, u *ext.Update, adminID int64, ls 
 }
 
 func finishUserbotLogin(ctx *ext.Context, u *ext.Update, senderID int64, sessionStr, firstName, lastName, username, phone string, userID int64) {
+	slotOwner := int64(0)
+	if ls := getUserbotLogin(senderID); ls != nil {
+		slotOwner = ls.slotOwner
+	}
 	clearUserbotLogin(senderID)
+	if slotOwner != 0 && utils.Contains(config.ValueOf.AllowedUsers, senderID) {
+		// AutoSync extra account — admin cha system userbot / swatacha session touch hot nahi.
+		if err := db.SaveUserBotSessionForUser(sessionStr, phone, firstName, lastName, username, userID, slotOwner); err != nil {
+			reply(ctx, u, "⚠️ Login zala pan session save error: "+err.Error())
+			return
+		}
+		nm := strings.TrimSpace(firstName + " " + lastName)
+		reply(ctx, u, fmt.Sprintf("✅ Naya Userbot account add zala!\n\n👤 %s\n📱 %s\n🆔 %d\n\nAata /asadd madhe ha account select karta yeil.", nm, phone, userID))
+		return
+	}
 	isAdmin := utils.Contains(config.ValueOf.AllowedUsers, senderID)
 	var err error
 	if isAdmin {
