@@ -303,6 +303,13 @@ func ExtractFloodWaitSeconds(err error) (int, bool) {
 	return 0, false
 }
 
+type floodNotifyKey struct{}
+
+// WithFloodWaitNotify — ctx madhe callback thevto; FloodWait madhe thambtana to (seconds) sobat call hoto.
+func WithFloodWaitNotify(ctx context.Context, fn func(sec int)) context.Context {
+	return context.WithValue(ctx, floodNotifyKey{}, fn)
+}
+
 func ExecuteWithFloodWait[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 	var zero T
 	maxAttempts := 5
@@ -314,6 +321,9 @@ func ExecuteWithFloodWait[T any](ctx context.Context, fn func() (T, error)) (T, 
 		if waitSecs, isFlood := ExtractFloodWaitSeconds(err); isFlood {
 			if waitSecs > 300 {
 				return zero, err
+			}
+			if fn, ok := ctx.Value(floodNotifyKey{}).(func(sec int)); ok && fn != nil {
+				fn(waitSecs + 1)
 			}
 			Logger.Warn(fmt.Sprintf("⚡ FloodWait detected: sleeping for %d seconds (attempt %d/%d)", waitSecs, attempt, maxAttempts))
 			select {

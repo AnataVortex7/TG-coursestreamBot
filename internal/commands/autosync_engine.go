@@ -655,6 +655,23 @@ func asMaxPerRun() int {
 	return 2000
 }
 
+// asEnvMs — env var (milliseconds) vachto, nasel/chukicha tar def.
+func asEnvMs(name string, def int) time.Duration {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v >= 0 {
+		return time.Duration(v) * time.Millisecond
+	}
+	return time.Duration(def) * time.Millisecond
+}
+
+// asPauseFor — message nantar kiti thambaycha (text-only fast, media thoda jast).
+func asPauseFor(m *tg.Message) time.Duration {
+	switch m.Media.(type) {
+	case nil, *tg.MessageMediaEmpty, *tg.MessageMediaWebPage:
+		return asEnvMs("AUTOSYNC_TEXT_DELAY_MS", 500)
+	}
+	return asEnvMs("AUTOSYNC_MEDIA_DELAY_MS", 1200)
+}
+
 func asFinish(t *db.AutoSyncTask, status string, copied int, notify bool) string {
 	return asFinishEx(t, status, copied, notify, true)
 }
@@ -705,6 +722,13 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 
 	asProgStart(taskID, t.Name, t.Mode)
 	defer asProgFinish(taskID)
+
+	// FloodWait madhe thambla tar progress madhe disel (elapsed vadhto pan index nahi — tyacha karan).
+	ctx = utils.WithFloodWaitNotify(ctx, func(sec int) {
+		asProgUpdate(taskID, func(p *asProgress) {
+			p.Phase = fmt.Sprintf("⏳ Telegram FloodWait — %d sec thambla ahe (aapoaap continue hoil)", sec)
+		})
+	})
 
 	client, err := asClientForKey(ctx, t.SessionKey)
 	if err != nil {
@@ -778,6 +802,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		}
 		processed++
 		asProgUpdate(taskID, func(p *asProgress) {
+			p.Phase = "📨 Messages pathvat ahe"
 			p.Done, p.Copied, p.Skipped, p.Errors = processed-1, copied, skipped, errCount
 			p.CurMsgID, p.CurDesc = m.ID, asDescribeMsg(m)
 			p.Sub, p.SubWritten, p.SubTotal = "", 0, 0
@@ -796,6 +821,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		if mirror {
 			srcTopic = asMsgTopic(m)
 			if srcTopic > 1 {
+				asProgUpdate(taskID, func(p *asProgress) { p.Phase = "📂 Destination topic check/create hot ahe" })
 				dt, terr := asRetryConn(ctx, holder, func(c *gotgproto.Client) (int, error) {
 					return asEnsureTopic(ctx, c.API(), t, src, dst, srcTopic)
 				})
@@ -910,12 +936,10 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		advance(m.ID)
 		copied++
 
-		// Flood avoid: pratyek message nantar thoda thamba (text/fast = 1.2s, full = 1s).
-		// Text message madhe download/upload nasalyane Mode "full" madhe pan sleep lagto.
-		pause := 1200 * time.Millisecond
-		if t.Mode == "full" {
-			pause = 1000 * time.Millisecond
-		}
+		// Flood avoid: pratyek message nantar thoda thamba.
+		// Text-only = AUTOSYNC_TEXT_DELAY_MS (default 500ms), media = AUTOSYNC_MEDIA_DELAY_MS (default 1200ms).
+		// FloodWait aala tar ExecuteWithFloodWait aapoaap thambto ani parat try karto.
+		pause := asPauseFor(m)
 		select {
 		case <-time.After(pause):
 		case <-ctx.Done():
