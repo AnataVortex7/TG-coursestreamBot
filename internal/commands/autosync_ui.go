@@ -173,6 +173,7 @@ func asButtonsMarkup() tg.ReplyMarkupClass {
 	return &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
 		{Buttons: []tg.KeyboardButtonClass{btn("🔑 Add Userbot Login", "cmd:asaccount")}},
 		{Buttons: []tg.KeyboardButtonClass{btn("➕ New Task", "cmd:asadd"), btn("📋 Tasks", "cmd:autosync")}},
+		{Buttons: []tg.KeyboardButtonClass{btn("📊 Progress (Live)", "cmd:asprogress")}},
 		{Buttons: []tg.KeyboardButtonClass{btn("⬅️ Menu", "menu:root")}},
 	}}
 }
@@ -574,7 +575,15 @@ func cmdASRun(ctx *ext.Context, u *ext.Update) error {
 		reply(ctx, u, "⏳ Ha task adhich chalu ahe.")
 		return dispatcher.EndGroups
 	}
-	reply(ctx, u, fmt.Sprintf("▶️ “%s” suru kela… result thodya velane yeil (bot tumhala message pathavel).", t.Name))
+	runText := fmt.Sprintf("▶️ “%s” suru kela… result thodya velane yeil.\n\n📊 Progress pahaicha asel tar khali button dabva (ON kelyashivay kahi update yet nahi).", t.Name)
+	runMarkup := &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
+		{Buttons: []tg.KeyboardButtonClass{&tg.KeyboardButtonCallback{Text: "📊 Live Progress", Data: []byte("asp:on:" + id)}}},
+	}}
+	if u.CallbackQuery != nil {
+		editMenu(ctx, u, runText, runMarkup)
+	} else {
+		_, _ = ctx.Reply(u, ext.ReplyTextString(runText), &ext.ReplyOpts{Markup: runMarkup})
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -804,7 +813,7 @@ func init() {
 	}})
 
 	categories = append(categories, category{"autosync", "🔁 Auto Sync (Channel → Channel)", []string{
-		"autosync", "asadd", "asaccount", "asrun", "astoggle", "astimes", "asreplace", "asreset", "asdel",
+		"autosync", "asprogress", "asadd", "asaccount", "asrun", "astoggle", "astimes", "asreplace", "asreset", "asdel",
 	}})
 }
 

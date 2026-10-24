@@ -350,6 +350,7 @@ var errAsUnsupported = errors.New("unsupported message type (poll/game/etc) — 
 
 func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst *asChat, m *tg.Message, destTopic, replyDest int) (int, error) {
 	api := c.API()
+	tid := t.ID.Hex()
 
 	text := m.Message
 	newText := applyRules(applyAdminReplaces(text), t.Replaces)
@@ -436,10 +437,12 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			if err != nil {
 				return nil, cleanup, err
 			}
+			asProgSub(tid, "⬇️ Download (photo)", 0, 0)
 			var buf bytes.Buffer
 			if _, err := downloader.NewDownloader().Download(api, f.Location).Stream(ctx, &buf); err != nil {
 				return nil, cleanup, fmt.Errorf("photo download fail: %w", err)
 			}
+			asProgSub(tid, "⬆️ Upload (photo)", 0, 0)
 			up, err := uploader.NewUploader(api).FromBytes(ctx, f.FileName, buf.Bytes())
 			if err != nil {
 				return nil, cleanup, fmt.Errorf("photo upload fail: %w", err)
@@ -454,7 +457,9 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			if err != nil {
 				return nil, cleanup, err
 			}
-			upFile, tmpPath, err := downloadAndReupload(ctx, ctx, c, c, f, nil, nil)
+			onDl := func(w, tot int64) { asProgSub(tid, "⬇️ Download", w, tot) }
+			onUp := func(w, tot int64) { asProgSub(tid, "⬆️ Upload", w, tot) }
+			upFile, tmpPath, err := downloadAndReupload(ctx, ctx, c, c, f, onDl, onUp)
 			if tmpPath != "" {
 				cleanup = func() { _ = os.Remove(tmpPath) }
 			}
@@ -467,6 +472,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 	}
 
 	sendMedia := func(im tg.InputMediaClass) (int, error) {
+		asProgSub(tid, "📤 Telegram la pathvat ahe", 0, 0)
 		upd, err := utils.ExecuteWithFloodWait(ctx, func() (tg.UpdatesClass, error) {
 			return api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 				Peer:     dst.Peer,
@@ -488,6 +494,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 	tryFull := t.Mode == "full"
 
 	if !tryFull { // fast
+		asProgSub(tid, "⚡ Fast copy", 0, 0)
 		im, err := buildFast()
 		if err == nil {
 			destID, sendErr = sendMedia(im)
@@ -521,6 +528,50 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 	return destID, nil
 }
 
+// asIsFatalErr — systemic error (permission / ban / dead session / flood): message skip karun
+// pudhe jaycha nahi — run thambvaycha, admin la hint dyaycha ani message GELE NAHIT (cursor tasach).
+func asIsFatalErr(err error) (bool, string) {
+	if err == nil {
+		return false, ""
+	}
+	up := strings.ToUpper(err.Error())
+	for _, h := range []struct{ code, hint string }{
+		{"CHAT_ADMIN_REQUIRED", "Userbot la destination madhe ADMIN right dya (Post Messages + Manage Topics)."},
+		{"CHAT_WRITE_FORBIDDEN", "Userbot la destination madhe post karnyachi parvangi nahi."},
+		{"CHAT_SEND_PLAIN_FORBIDDEN", "Destination madhe text pathvnyachi parvangi nahi."},
+		{"CHAT_SEND_MEDIA_FORBIDDEN", "Destination madhe media pathvnyachi parvangi nahi."},
+		{"CHAT_SEND_PHOTOS_FORBIDDEN", "Destination madhe photos pathvnyachi parvangi nahi."},
+		{"CHAT_SEND_VIDEOS_FORBIDDEN", "Destination madhe videos pathvnyachi parvangi nahi."},
+		{"CHAT_SEND_DOCS_FORBIDDEN", "Destination madhe files pathvnyachi parvangi nahi."},
+		{"USER_BANNED_IN_CHANNEL", "Userbot destination madhun ban ahe."},
+		{"CHANNEL_PRIVATE", "Userbot la chat cha access nahi (left / banned)."},
+		{"CHANNEL_INVALID", "Chat access invalid — userbot tya chat madhe ahe ka?"},
+		{"CHAT_RESTRICTED", "Chat restricted ahe."},
+		{"TOPIC_CLOSED", "Destination topic CLOSED ahe — topic reopen kara."},
+		{"CHANNEL_FORUM_MISSING", "Destination forum nahi (Topics ON kara)."},
+		{"FORUM_ENABLED", "Destination forum setting cha problem — Topics setting tapasa."},
+		{"AUTH_KEY_UNREGISTERED", "Userbot session expire zala — parat login kara."},
+		{"SESSION_REVOKED", "Userbot session revoke zala — parat login kara."},
+		{"USER_DEACTIVATED", "Userbot account deactivate/ban ahe."},
+	} {
+		if strings.Contains(up, h.code) {
+			return true, h.hint
+		}
+	}
+	if sec, ok := utils.ExtractFloodWaitSeconds(err); ok {
+		return true, fmt.Sprintf("Telegram flood limit (%d sec wait) — pudhchya run madhe continue hoil.", sec)
+	}
+	return false, ""
+}
+
+func asIsTopicGoneErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	up := strings.ToUpper(err.Error())
+	return strings.Contains(up, "TOPIC_DELETED") || strings.Contains(up, "TOPIC_ID_INVALID")
+}
+
 // ─── run one task ────────────────────────────────────────────────────────────
 
 func asMaxPerRun() int {
@@ -531,6 +582,7 @@ func asMaxPerRun() int {
 }
 
 func asFinish(t *db.AutoSyncTask, status string, copied int, notify bool) string {
+	asProgFinish(t.ID.Hex())
 	_ = db.SetAutoSyncFields(t.ID, bson.M{"last_run_at": time.Now(), "last_status": status})
 	if copied > 0 {
 		_ = db.IncAutoSyncCopied(t.ID, int64(copied))
@@ -568,6 +620,9 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	ctx, cancel := context.WithTimeout(parent, 6*time.Hour)
 	defer cancel()
 
+	asProgStart(taskID, t.Name, t.Mode)
+	defer asProgFinish(taskID)
+
 	client, err := asClientForKey(ctx, t.SessionKey)
 	if err != nil {
 		return asFinish(t, "❌ Userbot problem: "+err.Error(), 0, true)
@@ -590,9 +645,29 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	mirror := t.MirrorTopics && src.Forum && dst.Forum
 
 	copied, skipped, errCount, remaining := 0, 0, 0, 0
+	{
+		total, beyond := len(msgs), 0
+		if total > maxPerRun {
+			total, beyond = maxPerRun, total-maxPerRun
+		}
+		asProgUpdate(taskID, func(p *asProgress) {
+			p.Total, p.Beyond, p.Phase = total, beyond, "📨 Messages pathvat ahe"
+		})
+	}
 	var lastErr string
 	completed := true
 	processed := 0
+
+	// firstFail — pehla message jyacha send fail zala; cursor tyachya pudhe jat nahi, mhanje
+	// to pudhchya run madhe parat try hoto (3 run nantar sodun dila jato). Message HARVAT NAHI.
+	firstFail := 0
+	var gaveUp []int
+	var fatalHint string
+	advance := func(id int) {
+		if firstFail == 0 {
+			_ = db.SetAutoSyncFields(t.ID, bson.M{"last_msg_id": id})
+		}
+	}
 
 	for idx, m := range msgs {
 		if ctx.Err() != nil {
@@ -605,30 +680,40 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			break
 		}
 		processed++
+		asProgUpdate(taskID, func(p *asProgress) {
+			p.Done, p.Copied, p.Skipped, p.Errors = processed-1, copied, skipped, errCount
+			p.CurMsgID, p.CurDesc = m.ID, asDescribeMsg(m)
+			p.Sub, p.SubWritten, p.SubTotal = "", 0, 0
+		})
 
 		// ── duplicate guard ──
 		if _, done := db.AutoSyncMapGet(t.ID, m.ID); done {
 			skipped++
-			_ = db.SetAutoSyncFields(t.ID, bson.M{"last_msg_id": m.ID})
+			advance(m.ID)
 			continue
 		}
 
 		// ── topic ──
 		destTopic := 0
+		srcTopic := 0
 		if mirror {
-			if st := asMsgTopic(m); st > 1 {
-				dt, terr := asEnsureTopic(ctx, client.API(), t, src, dst, st)
+			srcTopic = asMsgTopic(m)
+			if srcTopic > 1 {
+				dt, terr := asEnsureTopic(ctx, client.API(), t, src, dst, srcTopic)
 				if terr != nil {
-					if isTransientConnErr(terr) || ctx.Err() != nil {
-						completed = false
-						lastErr = terr.Error()
-						break
-					}
+					// Topic nasel tar message chukichya thikani takaycha nahi, ani skip pan karaycha nahi —
+					// run thambvaycha. Fix (rights / forum setting) nantar tithunach continue hoil.
+					completed = false
 					errCount++
 					lastErr = terr.Error()
-					_ = db.AutoSyncMapPut(t.ID, m.ID, 0)
-					_ = db.SetAutoSyncFields(t.ID, bson.M{"last_msg_id": m.ID})
-					continue
+					if ctx.Err() == nil && !isTransientConnErr(terr) {
+						if _, h := asIsFatalErr(terr); h != "" {
+							fatalHint = h
+						} else {
+							fatalHint = "Destination madhe topic banvta ala nahi — userbot la 'Manage Topics' admin right ahe ka ani destination khara FORUM ahe ka?"
+						}
+					}
+					break
 				}
 				destTopic = dt
 			}
@@ -655,6 +740,19 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 				aborted = true
 				break
 			}
+			if fatal, hint := asIsFatalErr(sendErr); fatal {
+				fatalHint = hint
+				aborted = true
+				break
+			}
+			// destination topic delete zala asel — mapping kadhun topic parat banva, mag retry
+			if mirror && destTopic > 0 && asIsTopicGoneErr(sendErr) {
+				db.AutoSyncTopicDelete(t.ID, srcTopic)
+				if dt, terr := asEnsureTopic(ctx, client.API(), t, src, dst, srcTopic); terr == nil {
+					destTopic = dt
+					continue
+				}
+			}
 			select {
 			case <-time.After(time.Duration(attempt) * 3 * time.Second):
 			case <-ctx.Done():
@@ -664,18 +762,29 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			completed = false
 			if sendErr != nil {
 				lastErr = sendErr.Error()
+				if fatalHint != "" {
+					errCount++
+				}
 			}
 			break
 		}
 		if sendErr != nil {
 			if errors.Is(sendErr, errAsUnsupported) {
 				skipped++
-			} else {
-				errCount++
-				lastErr = fmt.Sprintf("msg %d: %v", m.ID, sendErr)
+				_ = db.AutoSyncMapPut(t.ID, m.ID, 0)
+				advance(m.ID)
+				continue
 			}
-			_ = db.AutoSyncMapPut(t.ID, m.ID, 0)
-			_ = db.SetAutoSyncFields(t.ID, bson.M{"last_msg_id": m.ID})
+			errCount++
+			lastErr = fmt.Sprintf("msg %d: %v", m.ID, sendErr)
+			if db.AutoSyncFailInc(t.ID, m.ID) >= 3 {
+				// 3 vela (3 runs) fail — ha message sodun dyaycha, pudhche chalu theva
+				gaveUp = append(gaveUp, m.ID)
+				_ = db.AutoSyncMapPut(t.ID, m.ID, 0)
+				advance(m.ID)
+			} else if firstFail == 0 {
+				firstFail = m.ID
+			}
 			continue
 		}
 
@@ -683,7 +792,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			destID = -1
 		}
 		_ = db.AutoSyncMapPut(t.ID, m.ID, destID)
-		_ = db.SetAutoSyncFields(t.ID, bson.M{"last_msg_id": m.ID})
+		advance(m.ID)
 		copied++
 
 		if t.Mode != "full" {
@@ -694,8 +803,13 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		}
 	}
 
+	asProgUpdate(taskID, func(p *asProgress) {
+		p.Done, p.Copied, p.Skipped, p.Errors = processed, copied, skipped, errCount
+		p.CurDesc, p.Sub = "", ""
+	})
+
 	// sagle messages (service sahit) pahile — cursor pudhe nya
-	if completed && maxSeen > t.LastMsgID {
+	if completed && maxSeen > t.LastMsgID && firstFail == 0 {
 		_ = db.SetAutoSyncFields(t.ID, bson.M{"last_msg_id": maxSeen})
 	}
 
@@ -709,10 +823,20 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	if t.MirrorTopics && !mirror {
 		status += "\nℹ️ Topics mirror nahi zale (source/destination forum nahi)."
 	}
-	if lastErr != "" {
-		status += "\nLast error: " + lastErr
+	if firstFail > 0 {
+		status += fmt.Sprintf("\n🔁 Msg %d fail zala — pudhchya run madhe parat try hoil (3 run nantar sodun dila jato). Message harvat nahi.", firstFail)
 	}
-	notify := manual || copied > 0 || errCount > 0 || !completed
+	if len(gaveUp) > 0 {
+		status += fmt.Sprintf("\n⛔ 3 vela fail mhanun sodle: %v", gaveUp)
+	}
+	if fatalHint != "" {
+		status += "\n🛠 " + fatalHint + "\n(Fix kelyavar next run ya /asrun ne tithunach continue hoil — kahi message gelele nahit.)"
+	}
+	if lastErr != "" {
+		status += "\nLast error: " + clipRunes(lastErr, 200)
+	}
+	notify := manual || copied > 0 || errCount > 0 || !completed || fatalHint != ""
+
 	return asFinish(t, status, copied, notify)
 }
 

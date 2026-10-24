@@ -40,6 +40,7 @@ type AutoSyncTask struct {
 func colAutoSyncTasks() *mongo.Collection  { return Database.Collection("autosync_tasks") }
 func colAutoSyncMap() *mongo.Collection    { return Database.Collection("autosync_map") }
 func colAutoSyncTopics() *mongo.Collection { return Database.Collection("autosync_topics") }
+func colAutoSyncFails() *mongo.Collection  { return Database.Collection("autosync_fails") }
 
 // EnsureAutoSyncIndexes — unique indexes (duplicate protection DB level var pan).
 func EnsureAutoSyncIndexes() {
@@ -115,7 +116,33 @@ func DeleteAutoSyncTask(id primitive.ObjectID) error {
 	}
 	_, _ = colAutoSyncMap().DeleteMany(ctx, bson.M{"task_id": id})
 	_, _ = colAutoSyncTopics().DeleteMany(ctx, bson.M{"task_id": id})
+	_, _ = colAutoSyncFails().DeleteMany(ctx, bson.M{"task_id": id})
 	return nil
+}
+
+// AutoSyncFailInc — ya message cha send kiti vela (runs madhe) fail zala; navin count return karto.
+func AutoSyncFailInc(taskID primitive.ObjectID, srcMsg int) int {
+	ctx, cancel := Ctx()
+	defer cancel()
+	var d struct {
+		Count int `bson:"count"`
+	}
+	err := colAutoSyncFails().FindOneAndUpdate(ctx,
+		bson.M{"task_id": taskID, "src_msg_id": srcMsg},
+		bson.M{"$inc": bson.M{"count": 1}},
+		options.FindOneAndUpdate().SetUpsert(true).SetReturnDocument(options.After),
+	).Decode(&d)
+	if err != nil {
+		return 1
+	}
+	return d.Count
+}
+
+// AutoSyncTopicDelete — destination topic delete zala asel tar mapping kadhto (parat banvla jail).
+func AutoSyncTopicDelete(taskID primitive.ObjectID, srcTopic int) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = colAutoSyncTopics().DeleteOne(ctx, bson.M{"task_id": taskID, "src_topic": srcTopic})
 }
 
 // AutoSyncMapGet — source msg already copy zala ka? (destMsgID 0 = skip kelela)
@@ -147,6 +174,7 @@ func AutoSyncMapPut(taskID primitive.ObjectID, srcMsg, destMsg int) error {
 func AutoSyncMapDeleteFrom(taskID primitive.ObjectID, afterID int) error {
 	ctx, cancel := Ctx()
 	defer cancel()
+	_, _ = colAutoSyncFails().DeleteMany(ctx, bson.M{"task_id": taskID, "src_msg_id": bson.M{"$gt": afterID}})
 	_, err := colAutoSyncMap().DeleteMany(ctx, bson.M{"task_id": taskID, "src_msg_id": bson.M{"$gt": afterID}})
 	return err
 }
