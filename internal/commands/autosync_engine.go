@@ -45,6 +45,80 @@ var (
 	asLog     *zap.Logger
 )
 
+// ─── connection resilience ───────────────────────────────────────────────────
+// Karan: pahile run madhe client ek vela ghetla jaycha ani connection tutla ("engine forcibly
+// closed: context canceled") ki run lagech thambaycha + last_run_at set vhaycha => pudhcha run
+// dusrya divshi. Aata: transient error aala ki client refresh (revive) karun SAME message parat
+// pathavto (deterministic RandomID mule duplicate hot nahi).
+
+const (
+	asMaxConnRetries = 8 // ek message/step sathi connection-error retries
+	asMaxConnRuns    = 6 // sallagpane itkya runs connection mule adhurya rahile tar shevti stamp
+)
+
+// asClientHolder — run chalu astana client badalta yava mhanun.
+type asClientHolder struct {
+	mu  sync.Mutex
+	c   *gotgproto.Client
+	key string
+}
+
+func (h *asClientHolder) Get() *gotgproto.Client {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.c
+}
+
+// Refresh — client jivant nasel tar navin ghet.
+func (h *asClientHolder) Refresh(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.c != nil && pingUserbot(ctx, h.c) {
+		return nil
+	}
+	c, err := asClientForKey(ctx, h.key)
+	if err != nil {
+		return err
+	}
+	h.c = c
+	return nil
+}
+
+// asBackoff — connection error nantar thamba (ctx cancel zala tar lagech sutto).
+func asBackoff(ctx context.Context, n int) {
+	d := time.Duration(n) * 5 * time.Second
+	if d > 30*time.Second {
+		d = 30 * time.Second
+	}
+	select {
+	case <-time.After(d):
+	case <-ctx.Done():
+	}
+}
+
+// asRetryConn — fn la connection error aala tar client refresh karun parat try karto.
+func asRetryConn[T any](ctx context.Context, h *asClientHolder, fn func(c *gotgproto.Client) (T, error)) (T, error) {
+	var zero T
+	for n := 0; ; n++ {
+		v, err := fn(h.Get())
+		if err == nil || !isTransientConnErr(err) || ctx.Err() != nil || n >= asMaxConnRetries {
+			return v, err
+		}
+		asBackoff(ctx, n+1)
+		_ = h.Refresh(ctx)
+		if ctx.Err() != nil {
+			return zero, err
+		}
+	}
+}
+
+type asConnState struct {
+	n    int
+	next time.Time
+}
+
+var asConnRetry sync.Map // task hex ID -> *asConnState
+
 // ─── userbot client ──────────────────────────────────────────────────────────
 
 func asClientForKey(ctx context.Context, key string) (*gotgproto.Client, error) {
@@ -582,8 +656,17 @@ func asMaxPerRun() int {
 }
 
 func asFinish(t *db.AutoSyncTask, status string, copied int, notify bool) string {
+	return asFinishEx(t, status, copied, notify, true)
+}
+
+// asFinishEx — stamp=false: last_run_at set karat nahi, mhanje scheduler lavkarch parat chalvel.
+func asFinishEx(t *db.AutoSyncTask, status string, copied int, notify, stamp bool) string {
 	asProgFinish(t.ID.Hex())
-	_ = db.SetAutoSyncFields(t.ID, bson.M{"last_run_at": time.Now(), "last_status": status})
+	f := bson.M{"last_status": status}
+	if stamp {
+		f["last_run_at"] = time.Now()
+	}
+	_ = db.SetAutoSyncFields(t.ID, f)
 	if copied > 0 {
 		_ = db.IncAutoSyncCopied(t.ID, int64(copied))
 	}
@@ -625,21 +708,34 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 
 	client, err := asClientForKey(ctx, t.SessionKey)
 	if err != nil {
-		return asFinish(t, "❌ Userbot problem: "+err.Error(), 0, true)
+		return asFinishEx(t, "❌ Userbot problem: "+err.Error(), 0, true, false)
 	}
-	src, err := asResolveChat(ctx, client, t.SourceChat)
+	holder := &asClientHolder{c: client, key: t.SessionKey}
+	src, err := asRetryConn(ctx, holder, func(c *gotgproto.Client) (*asChat, error) {
+		return asResolveChat(ctx, c, t.SourceChat)
+	})
 	if err != nil {
-		return asFinish(t, "❌ Source: "+err.Error(), 0, true)
+		return asFinishEx(t, "❌ Source: "+err.Error(), 0, true, !isTransientConnErr(err))
 	}
-	dst, err := asResolveChat(ctx, client, t.DestChat)
+	dst, err := asRetryConn(ctx, holder, func(c *gotgproto.Client) (*asChat, error) {
+		return asResolveChat(ctx, c, t.DestChat)
+	})
 	if err != nil {
-		return asFinish(t, "❌ Destination: "+err.Error(), 0, true)
+		return asFinishEx(t, "❌ Destination: "+err.Error(), 0, true, !isTransientConnErr(err))
 	}
 
-	msgs, maxSeen, err := asFetchNew(ctx, client.API(), src.Peer, t.LastMsgID)
-	if err != nil {
-		return asFinish(t, "❌ Source history fetch fail: "+err.Error(), 0, true)
+	type fetchRes struct {
+		msgs    []*tg.Message
+		maxSeen int
 	}
+	fr, err := asRetryConn(ctx, holder, func(c *gotgproto.Client) (fetchRes, error) {
+		m, mx, e := asFetchNew(ctx, c.API(), src.Peer, t.LastMsgID)
+		return fetchRes{m, mx}, e
+	})
+	if err != nil {
+		return asFinishEx(t, "❌ Source history fetch fail: "+err.Error(), 0, true, !isTransientConnErr(err))
+	}
+	msgs, maxSeen := fr.msgs, fr.maxSeen
 
 	maxPerRun := asMaxPerRun()
 	mirror := t.MirrorTopics && src.Forum && dst.Forum
@@ -663,6 +759,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	firstFail := 0
 	var gaveUp []int
 	var fatalHint string
+	connAbort := false // connection mule run adhura rahila (retries sampalya)
 	advance := func(id int) {
 		if firstFail == 0 {
 			_ = db.SetAutoSyncFields(t.ID, bson.M{"last_msg_id": id})
@@ -699,8 +796,13 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		if mirror {
 			srcTopic = asMsgTopic(m)
 			if srcTopic > 1 {
-				dt, terr := asEnsureTopic(ctx, client.API(), t, src, dst, srcTopic)
+				dt, terr := asRetryConn(ctx, holder, func(c *gotgproto.Client) (int, error) {
+					return asEnsureTopic(ctx, c.API(), t, src, dst, srcTopic)
+				})
 				if terr != nil {
+					if isTransientConnErr(terr) {
+						connAbort = true
+					}
 					// Topic nasel tar message chukichya thikani takaycha nahi, ani skip pan karaycha nahi —
 					// run thambvaycha. Fix (rights / forum setting) nantar tithunach continue hoil.
 					completed = false
@@ -731,14 +833,27 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		var destID int
 		var sendErr error
 		aborted := false
+		connFails := 0
 		for attempt := 1; attempt <= 3; attempt++ {
-			destID, sendErr = asSendOne(ctx, client, t, dst, m, destTopic, replyDest)
+			destID, sendErr = asSendOne(ctx, holder.Get(), t, dst, m, destTopic, replyDest)
 			if sendErr == nil || ctx.Err() != nil || errors.Is(sendErr, errAsUnsupported) {
 				break
 			}
 			if isTransientConnErr(sendErr) {
-				aborted = true
-				break
+				// Run thambvu nako: client refresh karun SAME message parat pathva.
+				connFails++
+				if connFails > asMaxConnRetries {
+					aborted = true
+					connAbort = true
+					break
+				}
+				asProgUpdate(taskID, func(p *asProgress) {
+					p.Phase = fmt.Sprintf("🔄 Connection tutla — reconnect (%d/%d)", connFails, asMaxConnRetries)
+				})
+				asBackoff(ctx, connFails)
+				_ = holder.Refresh(ctx)
+				attempt-- // connection retry mhanje normal attempt khat nahi
+				continue
 			}
 			if fatal, hint := asIsFatalErr(sendErr); fatal {
 				fatalHint = hint
@@ -748,7 +863,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			// destination topic delete zala asel — mapping kadhun topic parat banva, mag retry
 			if mirror && destTopic > 0 && asIsTopicGoneErr(sendErr) {
 				db.AutoSyncTopicDelete(t.ID, srcTopic)
-				if dt, terr := asEnsureTopic(ctx, client.API(), t, src, dst, srcTopic); terr == nil {
+				if dt, terr := asEnsureTopic(ctx, holder.Get().API(), t, src, dst, srcTopic); terr == nil {
 					destTopic = dt
 					continue
 				}
@@ -795,11 +910,15 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		advance(m.ID)
 		copied++
 
-		if t.Mode != "full" {
-			select {
-			case <-time.After(1200 * time.Millisecond): // flood avoid
-			case <-ctx.Done():
-			}
+		// Flood avoid: pratyek message nantar thoda thamba (text/fast = 1.2s, full = 1s).
+		// Text message madhe download/upload nasalyane Mode "full" madhe pan sleep lagto.
+		pause := 1200 * time.Millisecond
+		if t.Mode == "full" {
+			pause = 1000 * time.Millisecond
+		}
+		select {
+		case <-time.After(pause):
+		case <-ctx.Done():
 		}
 	}
 
@@ -835,9 +954,27 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	if lastErr != "" {
 		status += "\nLast error: " + clipRunes(lastErr, 200)
 	}
+	// Connection mule adhurा run: last_run_at stamp karu nako => scheduler (30s tick) auto-resume karel.
+	stamp := true
+	if connAbort {
+		v, _ := asConnRetry.LoadOrStore(taskID, &asConnState{})
+		st := v.(*asConnState)
+		st.n++
+		if st.n < asMaxConnRuns {
+			wait := time.Duration(st.n) * 2 * time.Minute
+			st.next = time.Now().Add(wait)
+			stamp = false
+			status += fmt.Sprintf("\n🔄 Connection problem — %d min nantar aapoaap parat chalel (%d/%d).", int(wait.Minutes()), st.n, asMaxConnRuns)
+		} else {
+			asConnRetry.Delete(taskID)
+			status += "\n⛔ Sallagpane connection fail — pudhchya scheduled time la parat try hoil (kiva /asrun)."
+		}
+	} else {
+		asConnRetry.Delete(taskID)
+	}
 	notify := manual || copied > 0 || errCount > 0 || !completed || fatalHint != ""
 
-	return asFinish(t, status, copied, notify)
+	return asFinishEx(t, status, copied, notify, stamp)
 }
 
 // ─── schedule ────────────────────────────────────────────────────────────────
@@ -960,6 +1097,9 @@ func asTick(ctx context.Context) {
 		id := t.ID.Hex()
 		if _, running := asRunning.Load(id); running {
 			continue
+		}
+		if v, ok := asConnRetry.Load(id); ok && time.Now().Before(v.(*asConnState).next) {
+			continue // connection backoff chalu ahe
 		}
 		go func() {
 			defer func() {
