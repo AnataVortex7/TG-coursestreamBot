@@ -170,6 +170,70 @@ func AutoSyncMapPut(taskID primitive.ObjectID, srcMsg, destMsg int) error {
 	return err
 }
 
+// AutoSyncMapPutPlaceholder — copy fail zalyane "fake" media pathvla; asli media pudhchya run madhe replace hoil.
+func AutoSyncMapPutPlaceholder(taskID primitive.ObjectID, srcMsg, destMsg int) error {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, err := colAutoSyncMap().UpdateOne(ctx,
+		bson.M{"task_id": taskID, "src_msg_id": srcMsg},
+		bson.M{"$set": bson.M{"dest_msg_id": destMsg, "placeholder": true, "ph_tries": 0, "created_at": time.Now()}},
+		options.Update().SetUpsert(true),
+	)
+	return err
+}
+
+// AutoSyncPh — placeholder entry.
+type AutoSyncPh struct {
+	SrcMsg  int `bson:"src_msg_id"`
+	DestMsg int `bson:"dest_msg_id"`
+	Tries   int `bson:"ph_tries"`
+}
+
+// AutoSyncPlaceholderList — replace baki asleli placeholders (src msg id kramane), tries < maxTries.
+func AutoSyncPlaceholderList(taskID primitive.ObjectID, maxTries, limit int) []AutoSyncPh {
+	ctx, cancel := Ctx()
+	defer cancel()
+	cur, err := colAutoSyncMap().Find(ctx,
+		bson.M{"task_id": taskID, "placeholder": true, "dest_msg_id": bson.M{"$gt": 0}, "ph_tries": bson.M{"$lt": maxTries}},
+		options.Find().SetSort(bson.D{{Key: "src_msg_id", Value: 1}}).SetLimit(int64(limit)),
+	)
+	if err != nil {
+		return nil
+	}
+	defer cur.Close(ctx)
+	var out []AutoSyncPh
+	_ = cur.All(ctx, &out)
+	return out
+}
+
+// AutoSyncPlaceholderDone — asli media replace zali (kiva source message nahi) — placeholder flag kadhto.
+func AutoSyncPlaceholderDone(taskID primitive.ObjectID, srcMsg int) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = colAutoSyncMap().UpdateOne(ctx,
+		bson.M{"task_id": taskID, "src_msg_id": srcMsg},
+		bson.M{"$set": bson.M{"placeholder": false}},
+	)
+}
+
+// AutoSyncPlaceholderTry — replace attempt fail zala; tries vadhvto.
+func AutoSyncPlaceholderTry(taskID primitive.ObjectID, srcMsg int) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = colAutoSyncMap().UpdateOne(ctx,
+		bson.M{"task_id": taskID, "src_msg_id": srcMsg},
+		bson.M{"$inc": bson.M{"ph_tries": 1}},
+	)
+}
+
+// AutoSyncPlaceholderCount — kiti placeholders ajun replace vhaychya baki ahet.
+func AutoSyncPlaceholderCount(taskID primitive.ObjectID) int {
+	ctx, cancel := Ctx()
+	defer cancel()
+	n, _ := colAutoSyncMap().CountDocuments(ctx, bson.M{"task_id": taskID, "placeholder": true})
+	return int(n)
+}
+
 // AutoSyncMapDeleteFrom — reset sathi: src_msg_id > afterID che map entries kadhto (parat copy hotil).
 func AutoSyncMapDeleteFrom(taskID primitive.ObjectID, afterID int) error {
 	ctx, cancel := Ctx()

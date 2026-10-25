@@ -28,6 +28,7 @@ import (
 	"EverythingSuckz/fsb/internal/utils"
 
 	"github.com/celestix/gotgproto"
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
@@ -55,6 +56,18 @@ const (
 	asMaxConnRetries = 8 // ek message/step sathi connection-error retries
 	asMaxConnRuns    = 6 // sallagpane itkya runs connection mule adhurya rahile tar shevti stamp
 )
+
+// asDstClient — DESTINATION cha sarva kaam (send / upload / topic / edit) course BOT kadun hota.
+// Userbot cha kaam fakt SOURCE madhun history fetch ani file download. (Bot destination madhe owner/admin ahe.)
+func asDstClient() (*gotgproto.Client, error) {
+	if MainBotClient == nil {
+		return nil, errors.New("main bot client ready nahi")
+	}
+	return MainBotClient, nil
+}
+
+// asBotAPI — bot cha tg.Client (nil-safe nahi; run chya survatila asDstClient() ne check hoto).
+func asBotAPI() *tg.Client { return MainBotClient.API() }
 
 // asClientHolder — run chalu astana client badalta yava mhanun.
 type asClientHolder struct {
@@ -375,7 +388,7 @@ func asMsgIDFromUpdates(upd tg.UpdatesClass) int {
 }
 
 // asEnsureTopic — source topic sathi destination madhe topic (nasel tar banavto, title copy karto).
-func asEnsureTopic(ctx context.Context, api *tg.Client, t *db.AutoSyncTask, src, dst *asChat, srcTopic int) (int, error) {
+func asEnsureTopic(ctx context.Context, srcAPI, api *tg.Client, t *db.AutoSyncTask, src, dst *asChat, srcTopic int) (int, error) {
 	if srcTopic <= 1 {
 		return 0, nil // General topic
 	}
@@ -383,7 +396,7 @@ func asEnsureTopic(ctx context.Context, api *tg.Client, t *db.AutoSyncTask, src,
 		return d, nil
 	}
 	title := fmt.Sprintf("Topic %d", srcTopic)
-	if res, err := api.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+	if res, err := srcAPI.ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
 		Channel: src.Input,
 		ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: srcTopic}},
 	}); err == nil {
@@ -422,16 +435,81 @@ func asEnsureTopic(ctx context.Context, api *tg.Client, t *db.AutoSyncTask, src,
 
 var errAsUnsupported = errors.New("unsupported message type (poll/game/etc) — skip")
 
-func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst *asChat, m *tg.Message, destTopic, replyDest int) (int, error) {
-	api := c.API()
+// asApplyRules — SARVA replace rules ekatra:
+//  1) global (admin) rules — /userbotdl sarkhech, sarvansathi common
+//  2) task cha owner cha personal rules (non-admin asel tar)
+//  3) userbot account cha owner (session user_<id>) cha personal rules
+//  4) task-specific rules (/asreplace)
+func asApplyRules(t *db.AutoSyncTask, s string) string {
+	s = applyReplacesForUser(t.OwnerID, s)
+	if strings.HasPrefix(t.SessionKey, "user_") {
+		if uid, err := strconv.ParseInt(strings.TrimPrefix(t.SessionKey, "user_"), 10, 64); err == nil &&
+			uid != t.OwnerID && !isReplaceAdmin(uid) {
+			s = applyRules(s, db.GetReplaceRules(uid))
+		}
+	}
+	return applyRules(s, t.Replaces)
+}
+
+// asCloneEntities — entities deep copy (transformTextEntities IN-PLACE modify karto; retry var double-shift nako).
+func asCloneEntities(in []tg.MessageEntityClass) []tg.MessageEntityClass {
+	out := make([]tg.MessageEntityClass, 0, len(in))
+	for _, e := range in {
+		var b bin.Buffer
+		if err := e.Encode(&b); err != nil {
+			continue
+		}
+		c, err := tg.DecodeMessageEntity(&b)
+		if err != nil {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// asTransformText — message text/caption + entities var sarva replace rules lavto.
+// Formatting (bold/link/spoiler...) tikavto: entity-aware (offsets navin text pramane). Link URLs var pan rules lagtat.
+// Jar rule ek formatting boundary olandto (piece-wise match hot nahi), tar plain full-text replace (entities nahit).
+func asTransformText(t *db.AutoSyncTask, m *tg.Message) (string, []tg.MessageEntityClass) {
+	full := asApplyRules(t, m.Message)
+	ents := asCloneEntities(m.Entities)
+	pieceText, pieceEnts := transformTextEntities(m.Message, ents,
+		func(x string) string { return asApplyRules(t, x) },
+		func(u string) (string, bool) {
+			nu := asApplyRules(t, u)
+			if strings.TrimSpace(nu) == "" {
+				return u, true
+			}
+			return nu, true
+		})
+	if pieceText == full {
+		return pieceText, pieceEnts
+	}
+	if full == m.Message {
+		return m.Message, m.Entities
+	}
+	return full, nil
+}
+
+// asSendOpt — Placeholder: asli media na pathvta same-type chhota fake file pathva.
+// EditID > 0: navin message na pathvta tya destination message chi media asli media ne replace kar.
+type asSendOpt struct {
+	Placeholder bool
+	EditID      int
+}
+
+func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst *asChat, m *tg.Message, destTopic, replyDest int, opt asSendOpt) (int, error) {
+	// c = userbot (SOURCE: fakt download). Destination la sarva kaam BOT (dstC) kadun.
+	dstC, derr := asDstClient()
+	if derr != nil {
+		return 0, derr
+	}
+	srcAPI := c.API()
+	api := dstC.API()
 	tid := t.ID.Hex()
 
-	text := m.Message
-	newText := applyRules(applyAdminReplaces(text), t.Replaces)
-	var entities []tg.MessageEntityClass
-	if newText == text {
-		entities = m.Entities
-	}
+	newText, entities := asTransformText(t, m)
 
 	var replyTo tg.InputReplyToClass
 	if replyDest > 0 {
@@ -470,6 +548,12 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 	case *tg.MessageMediaPhoto, *tg.MessageMediaDocument:
 		// niche
 	default:
+		// Media type copy karta yet nahi (paid/story/giveaway/unsupported...) — caption text jato, media nahi.
+		// Gap lapu naye mhanun log + progress madhe type dakhavto.
+		if asLog != nil {
+			asLog.Warn(fmt.Sprintf("AutoSync msg %d: media type %T copy hot nahi — fakt caption text pathvla", m.ID, media))
+		}
+		asNoteMediaSkipped(tid, m.ID, fmt.Sprintf("%T", media))
 		if strings.TrimSpace(newText) == "" {
 			return 0, errAsUnsupported
 		}
@@ -513,7 +597,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			}
 			asProgSub(tid, "⬇️ Download (photo)", 0, 0)
 			var buf bytes.Buffer
-			if _, err := downloader.NewDownloader().Download(api, f.Location).Stream(ctx, &buf); err != nil {
+			if _, err := downloader.NewDownloader().Download(srcAPI, f.Location).Stream(ctx, &buf); err != nil {
 				return nil, cleanup, fmt.Errorf("photo download fail: %w", err)
 			}
 			asProgSub(tid, "⬆️ Upload (photo)", 0, 0)
@@ -533,7 +617,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			}
 			onDl := func(w, tot int64) { asProgSub(tid, "⬇️ Download", w, tot) }
 			onUp := func(w, tot int64) { asProgSub(tid, "⬆️ Upload", w, tot) }
-			upFile, tmpPath, err := downloadAndReupload(ctx, ctx, c, c, f, onDl, onUp)
+			upFile, tmpPath, err := downloadAndReupload(ctx, ctx, c, dstC, f, onDl, onUp)
 			if tmpPath != "" {
 				cleanup = func() { _ = os.Remove(tmpPath) }
 			}
@@ -547,6 +631,21 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 
 	sendMedia := func(im tg.InputMediaClass) (int, error) {
 		asProgSub(tid, "📤 Telegram la pathvat ahe", 0, 0)
+		if opt.EditID > 0 { // placeholder → asli media replace
+			_, err := utils.ExecuteWithFloodWait(ctx, func() (tg.UpdatesClass, error) {
+				return api.MessagesEditMessage(ctx, &tg.MessagesEditMessageRequest{
+					Peer:     dst.Peer,
+					ID:       opt.EditID,
+					Media:    im,
+					Message:  caption,
+					Entities: capEnts,
+				})
+			})
+			if err != nil && !strings.Contains(strings.ToUpper(err.Error()), "MESSAGE_NOT_MODIFIED") {
+				return 0, err
+			}
+			return opt.EditID, nil
+		}
 		upd, err := utils.ExecuteWithFloodWait(ctx, func() (tg.UpdatesClass, error) {
 			return api.MessagesSendMedia(ctx, &tg.MessagesSendMediaRequest{
 				Peer:     dst.Peer,
@@ -563,9 +662,53 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 		return asMsgIDFromUpdates(upd), nil
 	}
 
+	// Placeholder: same type (jpg→jpg, mp4→mp4, mkv→mkv) chhota fake file + caption.
+	buildPlaceholder := func() (tg.InputMediaClass, error) {
+		switch md := media.(type) {
+		case *tg.MessageMediaPhoto:
+			up, err := uploader.NewUploader(api).FromBytes(ctx, "photo.jpg", asPlaceholderBytes("jpg"))
+			if err != nil {
+				return nil, err
+			}
+			return &tg.InputMediaUploadedPhoto{File: up}, nil
+		case *tg.MessageMediaDocument:
+			d, ok := md.Document.AsNotEmpty()
+			if !ok {
+				return nil, errors.New("document empty")
+			}
+			name := "file"
+			for _, a := range d.Attributes {
+				if fa, ok := a.(*tg.DocumentAttributeFilename); ok && fa.FileName != "" {
+					name = fa.FileName
+				}
+			}
+			_, data := asPlaceholderFor(name, d.MimeType)
+			up, err := uploader.NewUploader(api).FromBytes(ctx, name, data)
+			if err != nil {
+				return nil, err
+			}
+			return &tg.InputMediaUploadedDocument{File: up, MimeType: d.MimeType, Attributes: d.Attributes}, nil
+		}
+		return nil, errAsUnsupported
+	}
+	if opt.Placeholder {
+		im, err := buildPlaceholder()
+		if err != nil {
+			return 0, err
+		}
+		destID, err := sendMedia(im)
+		if err != nil {
+			return 0, err
+		}
+		if followText != "" {
+			_, _ = sendText(followText, followEnts, "cap")
+		}
+		return destID, nil
+	}
+
 	var destID int
 	var sendErr error
-	tryFull := t.Mode == "full"
+	tryFull := true // fast (file-reference copy) userbot->bot madhe chalat nahi — nehmi full (userbot download → bot upload)
 
 	if !tryFull { // fast
 		asProgSub(tid, "⚡ Fast copy", 0, 0)
@@ -594,7 +737,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 		}
 	}
 
-	if followText != "" {
+	if followText != "" && opt.EditID == 0 {
 		if _, err := sendText(followText, followEnts, "cap"); err != nil {
 			return destID, nil // media gela — caption text fail zala tari message "copied"
 		}
@@ -610,16 +753,16 @@ func asIsFatalErr(err error) (bool, string) {
 	}
 	up := strings.ToUpper(err.Error())
 	for _, h := range []struct{ code, hint string }{
-		{"CHAT_ADMIN_REQUIRED", "Userbot la destination madhe ADMIN right dya (Post Messages + Manage Topics)."},
-		{"CHAT_WRITE_FORBIDDEN", "Userbot la destination madhe post karnyachi parvangi nahi."},
+		{"CHAT_ADMIN_REQUIRED", "Bot la destination madhe ADMIN right dya (Post Messages + Manage Topics + Edit Messages)."},
+		{"CHAT_WRITE_FORBIDDEN", "Bot la destination madhe post karnyachi parvangi nahi."},
 		{"CHAT_SEND_PLAIN_FORBIDDEN", "Destination madhe text pathvnyachi parvangi nahi."},
 		{"CHAT_SEND_MEDIA_FORBIDDEN", "Destination madhe media pathvnyachi parvangi nahi."},
 		{"CHAT_SEND_PHOTOS_FORBIDDEN", "Destination madhe photos pathvnyachi parvangi nahi."},
 		{"CHAT_SEND_VIDEOS_FORBIDDEN", "Destination madhe videos pathvnyachi parvangi nahi."},
 		{"CHAT_SEND_DOCS_FORBIDDEN", "Destination madhe files pathvnyachi parvangi nahi."},
-		{"USER_BANNED_IN_CHANNEL", "Userbot destination madhun ban ahe."},
-		{"CHANNEL_PRIVATE", "Userbot la chat cha access nahi (left / banned)."},
-		{"CHANNEL_INVALID", "Chat access invalid — userbot tya chat madhe ahe ka?"},
+		{"USER_BANNED_IN_CHANNEL", "Bot destination madhun ban ahe."},
+		{"CHANNEL_PRIVATE", "Userbot (source) kiva Bot (destination) la chat cha access nahi (left / banned)."},
+		{"CHANNEL_INVALID", "Chat access invalid — source madhe userbot ani destination madhe bot ahe ka?"},
 		{"CHAT_RESTRICTED", "Chat restricted ahe."},
 		{"TOPIC_CLOSED", "Destination topic CLOSED ahe — topic reopen kara."},
 		{"CHANNEL_FORUM_MISSING", "Destination forum nahi (Topics ON kara)."},
@@ -653,6 +796,115 @@ func asMaxPerRun() int {
 		return v
 	}
 	return 2000
+}
+
+// asIsFileRefErr — Telegram file reference expire/invalid (message jun/old fetch zala).
+func asIsFileRefErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	up := strings.ToUpper(err.Error())
+	return strings.Contains(up, "FILE_REFERENCE_EXPIRED") ||
+		strings.Contains(up, "FILE_REFERENCE_EMPTY") ||
+		strings.Contains(up, "FILE_REFERENCE_INVALID") ||
+		strings.Contains(up, "FILE_REFERENCE_")
+}
+
+// asRefetchMsg — source message parat Telegram kadun ghet (taaje file reference milavnyasathi).
+func asRefetchMsg(ctx context.Context, h *asClientHolder, src *asChat, id int) (*tg.Message, error) {
+	res, err := asRetryConn(ctx, h, func(c *gotgproto.Client) (tg.MessagesMessagesClass, error) {
+		return utils.ExecuteWithFloodWait(ctx, func() (tg.MessagesMessagesClass, error) {
+			return c.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
+				Channel: src.Input,
+				ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: id}},
+			})
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	var list []tg.MessageClass
+	switch r := res.(type) {
+	case *tg.MessagesChannelMessages:
+		list = r.Messages
+	case *tg.MessagesMessagesSlice:
+		list = r.Messages
+	case *tg.MessagesMessages:
+		list = r.Messages
+	}
+	for _, mc := range list {
+		if mm, ok := mc.(*tg.Message); ok && mm.ID == id {
+			return mm, nil
+		}
+	}
+	return nil, errors.New("message source madhe sapadla nahi (delete zala?)")
+}
+
+var asMediaSkipNote sync.Map // task hex ID -> string (shevtcha unsupported media message/type)
+
+func asNoteMediaSkipped(tid string, msgID int, typ string) {
+	asMediaSkipNote.Store(tid, fmt.Sprintf("msg %d (%s)", msgID, typ))
+}
+
+// asReplacePlaceholders — junya run madhe fail zalelya media sathi jo fake file takla hota, tyala
+// asli media ne EDIT karun replace karto (message jagevarach rahto, order bighadat nahi).
+func asReplacePlaceholders(ctx context.Context, h *asClientHolder, t *db.AutoSyncTask, src, dst *asChat, taskID string) (done, failed int, left int) {
+	list := db.AutoSyncPlaceholderList(t.ID, 6, 100)
+	if len(list) == 0 {
+		return 0, 0, db.AutoSyncPlaceholderCount(t.ID)
+	}
+	asProgUpdate(taskID, func(p *asProgress) {
+		p.Phase = fmt.Sprintf("🧩 Placeholder → asli media replace (%d)", len(list))
+	})
+	for _, ph := range list {
+		if ctx.Err() != nil {
+			break
+		}
+		m, err := asRefetchMsg(ctx, h, src, ph.SrcMsg)
+		if err != nil {
+			if strings.Contains(err.Error(), "sapadla nahi") { // source delete zala — placeholder tasach thev
+				db.AutoSyncPlaceholderDone(t.ID, ph.SrcMsg)
+				continue
+			}
+			db.AutoSyncPlaceholderTry(t.ID, ph.SrcMsg)
+			failed++
+			continue
+		}
+		var serr error
+		for n := 0; n <= 3; n++ {
+			_, serr = asSendOne(ctx, h.Get(), t, dst, m, 0, 0, asSendOpt{EditID: ph.DestMsg})
+			if serr == nil || ctx.Err() != nil {
+				break
+			}
+			if isTransientConnErr(serr) {
+				asBackoff(ctx, n+1)
+				_ = h.Refresh(ctx)
+				continue
+			}
+			if asIsFileRefErr(serr) {
+				if fresh, ferr := asRefetchMsg(ctx, h, src, ph.SrcMsg); ferr == nil {
+					m = fresh
+				}
+				continue
+			}
+			break
+		}
+		if serr == nil {
+			db.AutoSyncPlaceholderDone(t.ID, ph.SrcMsg)
+			done++
+		} else if ctx.Err() == nil {
+			db.AutoSyncPlaceholderTry(t.ID, ph.SrcMsg)
+			failed++
+			if asLog != nil {
+				asLog.Warn(fmt.Sprintf("AutoSync placeholder replace fail msg %d: %v", ph.SrcMsg, serr))
+			}
+		}
+		select {
+		case <-time.After(asPauseFor(m)):
+		case <-ctx.Done():
+		}
+	}
+	return done, failed, db.AutoSyncPlaceholderCount(t.ID)
 }
 
 // asEnvMs — env var (milliseconds) vachto, nasel/chukicha tar def.
@@ -741,11 +993,16 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	if err != nil {
 		return asFinishEx(t, "❌ Source: "+err.Error(), 0, true, !isTransientConnErr(err))
 	}
-	dst, err := asRetryConn(ctx, holder, func(c *gotgproto.Client) (*asChat, error) {
-		return asResolveChat(ctx, c, t.DestChat)
-	})
+	dstC, derr := asDstClient()
+	if derr != nil {
+		return asFinishEx(t, "❌ Destination: "+derr.Error(), 0, true, false)
+	}
+	dst, err := asResolveChat(ctx, dstC, t.DestChat) // DESTINATION = BOT (userbot nahi)
 	if err != nil {
-		return asFinishEx(t, "❌ Destination: "+err.Error(), 0, true, !isTransientConnErr(err))
+		return asFinishEx(t, "❌ Destination: bot la chat "+strconv.FormatInt(t.DestChat, 10)+" sapadla nahi — bot tya channel madhe owner/admin ahe ka? ("+err.Error()+")", 0, true, !isTransientConnErr(err))
+	}
+	if !dst.CanPost {
+		return asFinishEx(t, "❌ Destination: bot la tya channel madhe post karnyacha (admin) access nahi.", 0, true, true)
 	}
 
 	type fetchRes struct {
@@ -760,6 +1017,14 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		return asFinishEx(t, "❌ Source history fetch fail: "+err.Error(), 0, true, !isTransientConnErr(err))
 	}
 	msgs, maxSeen := fr.msgs, fr.maxSeen
+	fetchedAt := time.Now() // file reference fakt kahi vel valid asto — jun zala tar refetch karto
+
+	// Junya run che placeholders (fake media) aadhi asli media ne replace kara.
+	phDone, phFailed, _ := asReplacePlaceholders(ctx, holder, t, src, dst, taskID)
+	if phDone+phFailed > 0 {
+		fetchedAt = time.Now()
+	}
+	phNew := 0 // ya run madhe nave placeholders
 
 	maxPerRun := asMaxPerRun()
 	mirror := t.MirrorTopics && src.Forum && dst.Forum
@@ -823,7 +1088,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			if srcTopic > 1 {
 				asProgUpdate(taskID, func(p *asProgress) { p.Phase = "📂 Destination topic check/create hot ahe" })
 				dt, terr := asRetryConn(ctx, holder, func(c *gotgproto.Client) (int, error) {
-					return asEnsureTopic(ctx, c.API(), t, src, dst, srcTopic)
+					return asEnsureTopic(ctx, c.API(), asBotAPI(), t, src, dst, srcTopic)
 				})
 				if terr != nil {
 					if isTransientConnErr(terr) {
@@ -859,9 +1124,20 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		var destID int
 		var sendErr error
 		aborted := false
+		refErrs := 0
+		hasMedia := false
+		switch m.Media.(type) {
+		case *tg.MessageMediaPhoto, *tg.MessageMediaDocument:
+			hasMedia = true
+		}
+		if hasMedia && time.Since(fetchedAt) > 3*time.Minute {
+			if fresh, ferr := asRefetchMsg(ctx, holder, src, m.ID); ferr == nil {
+				m = fresh
+			}
+		}
 		connFails := 0
 		for attempt := 1; attempt <= 3; attempt++ {
-			destID, sendErr = asSendOne(ctx, holder.Get(), t, dst, m, destTopic, replyDest)
+			destID, sendErr = asSendOne(ctx, holder.Get(), t, dst, m, destTopic, replyDest, asSendOpt{})
 			if sendErr == nil || ctx.Err() != nil || errors.Is(sendErr, errAsUnsupported) {
 				break
 			}
@@ -881,6 +1157,16 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 				attempt-- // connection retry mhanje normal attempt khat nahi
 				continue
 			}
+			if hasMedia && asIsFileRefErr(sendErr) && refErrs < 3 {
+				// FILE_REFERENCE_EXPIRED: message parat fetch kar (taaje reference) ani SAME message retry.
+				refErrs++
+				if fresh, ferr := asRefetchMsg(ctx, holder, src, m.ID); ferr == nil {
+					m = fresh
+				}
+				asBackoff(ctx, 1)
+				attempt--
+				continue
+			}
 			if fatal, hint := asIsFatalErr(sendErr); fatal {
 				fatalHint = hint
 				aborted = true
@@ -889,7 +1175,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			// destination topic delete zala asel — mapping kadhun topic parat banva, mag retry
 			if mirror && destTopic > 0 && asIsTopicGoneErr(sendErr) {
 				db.AutoSyncTopicDelete(t.ID, srcTopic)
-				if dt, terr := asEnsureTopic(ctx, holder.Get().API(), t, src, dst, srcTopic); terr == nil {
+				if dt, terr := asEnsureTopic(ctx, holder.Get().API(), asBotAPI(), t, src, dst, srcTopic); terr == nil {
 					destTopic = dt
 					continue
 				}
@@ -897,6 +1183,21 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			select {
 			case <-time.After(time.Duration(attempt) * 3 * time.Second):
 			case <-ctx.Done():
+			}
+		}
+		// Media copy fail zali (retries nantar) — message jagevar rahava mhanun same-type fake media + caption pathva.
+		if sendErr != nil && !aborted && ctx.Err() == nil && hasMedia && !errors.Is(sendErr, errAsUnsupported) {
+			origErr := sendErr
+			pdID, perr := asRetryConn(ctx, holder, func(c *gotgproto.Client) (int, error) {
+				return asSendOne(ctx, c, t, dst, m, destTopic, replyDest, asSendOpt{Placeholder: true})
+			})
+			if perr == nil {
+				destID, sendErr = pdID, nil
+				phNew++
+				_ = db.AutoSyncMapPutPlaceholder(t.ID, m.ID, pdID)
+				if asLog != nil {
+					asLog.Warn(fmt.Sprintf("AutoSync msg %d: media copy fail (%v) — placeholder pathvla, next run madhe replace hoil", m.ID, origErr))
+				}
 			}
 		}
 		if aborted || ctx.Err() != nil {
@@ -978,7 +1279,19 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	if lastErr != "" {
 		status += "\nLast error: " + clipRunes(lastErr, 200)
 	}
-	// Connection mule adhurा run: last_run_at stamp karu nako => scheduler (30s tick) auto-resume karel.
+	if phNew > 0 {
+		status += fmt.Sprintf("\n🧩 %d media copy zali nahi — same-type placeholder pathvla (jagevar rahila). Pudhchya run madhe asli media replace hoil.", phNew)
+	}
+	if phDone > 0 {
+		status += fmt.Sprintf("\n✅ %d placeholder → asli media replace zali.", phDone)
+	}
+	if phFailed > 0 {
+		status += fmt.Sprintf("\n⚠️ %d placeholder replace fail (parat try hoil).", phFailed)
+	}
+	if v, ok := asMediaSkipNote.LoadAndDelete(taskID); ok {
+		status += fmt.Sprintf("\n⚠️ Media copy hot nahi (fakt caption gela): %v", v)
+	}
+	// Connection mule adhura run: last_run_at stamp karu nako => scheduler (30s tick) auto-resume karel.
 	stamp := true
 	if connAbort {
 		v, _ := asConnRetry.LoadOrStore(taskID, &asConnState{})

@@ -247,14 +247,14 @@ func asPromptSource(ctx *ext.Context, u *ext.Update, w *asWizard, which string) 
 	}
 	sb.WriteString("\n✏️ Yadi madhla number pathva, kiva Chat ID type kara (-100... kiva t.me/c/ cha positive ID)")
 	if which == "dst" {
-		sb.WriteString("\n⚠️ Userbot ne destination madhe post karnyacha access (admin) asava.")
+		sb.WriteString("\n⚠️ DESTINATION madhe BOT (course bot) owner/admin asava — userbot nahi. Userbot fakt SOURCE madhun fetch karto.")
 	}
 	sb.WriteString(asWizardCancelHint())
 	reply(ctx, u, sb.String())
 }
 
 // asPickChat — number (yadi) kiva Chat ID.
-func asPickChat(cctx context.Context, w *asWizard, text string) (*asChat, error) {
+func asPickChat(cctx context.Context, w *asWizard, text string, viaBot bool) (*asChat, error) {
 	text = strings.TrimSpace(text)
 	if n, err := strconv.Atoi(text); err == nil && len(text) <= 3 {
 		shown := w.chats
@@ -262,6 +262,9 @@ func asPickChat(cctx context.Context, w *asWizard, text string) (*asChat, error)
 			shown = shown[:40]
 		}
 		if n >= 1 && n <= len(shown) {
+			if viaBot { // destination: bot cha access (hash) ghya
+				return asResolveViaBot(cctx, shown[n-1].ID)
+			}
 			return shown[n-1], nil
 		}
 		return nil, fmt.Errorf("yadit %d number nahi", n)
@@ -273,11 +276,27 @@ func asPickChat(cctx context.Context, w *asWizard, text string) (*asChat, error)
 	if v > 0 {
 		v = -1000000000000 - v
 	}
+	if viaBot {
+		return asResolveViaBot(cctx, v)
+	}
 	c, err := asClientForKey(cctx, w.sessionKey)
 	if err != nil {
 		return nil, err
 	}
 	return asResolveChat(cctx, c, v)
+}
+
+// asResolveViaBot — destination chat BOT kadun resolve (bot tya channel madhe owner/admin asava).
+func asResolveViaBot(cctx context.Context, chatID int64) (*asChat, error) {
+	bc, err := asDstClient()
+	if err != nil {
+		return nil, err
+	}
+	ch, err := asResolveChat(cctx, bc, chatID)
+	if err != nil {
+		return nil, fmt.Errorf("bot la chat sapadla nahi — bot tya channel madhe owner/admin ahe ka?")
+	}
+	return ch, nil
 }
 
 func asWizardStep(ctx *ext.Context, u *ext.Update, senderID int64, w *asWizard, text string) {
@@ -334,7 +353,7 @@ func asWizardStep(ctx *ext.Context, u *ext.Update, senderID int64, w *asWizard, 
 		asPromptSource(ctx, u, w, "src")
 
 	case asStepSource:
-		c, err := asPickChat(cctx, w, text)
+		c, err := asPickChat(cctx, w, text, false)
 		if err != nil {
 			reply(ctx, u, "❌ "+err.Error()+"\nPunha pathva:")
 			return
@@ -344,7 +363,7 @@ func asWizardStep(ctx *ext.Context, u *ext.Update, senderID int64, w *asWizard, 
 		asPromptSource(ctx, u, w, "dst")
 
 	case asStepDest:
-		c, err := asPickChat(cctx, w, text)
+		c, err := asPickChat(cctx, w, text, true)
 		if err != nil {
 			reply(ctx, u, "❌ "+err.Error()+"\nPunha pathva:")
 			return
@@ -356,7 +375,7 @@ func asWizardStep(ctx *ext.Context, u *ext.Update, senderID int64, w *asWizard, 
 		w.dst = c
 		warn := ""
 		if !c.CanPost {
-			warn = "\n⚠️ Ha broadcast channel ahe — userbot admin nasel tar post fail hoil."
+			warn = "\n⚠️ Bot ya channel madhe admin nahi — post fail hoil."
 		}
 		if w.src.Forum && c.Forum {
 			w.step = asStepTopics
