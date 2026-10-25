@@ -403,6 +403,15 @@ func handleCatalogCallbackInner(ctx *ext.Context, u *ext.Update) (retErr error) 
 		editCatalogMessage(ctx, u, text, markup)
 		
 	default:
+		if strings.HasPrefix(parts[0], "ub_logout") {
+			if !utils.Contains(config.ValueOf.AllowedUsers, chatID) {
+				answerCatalogError(ctx, u, fmt.Errorf("⛔ Fakt admin"))
+				return dispatcher.EndGroups
+			}
+			text, markup := handleAdminUserbotLogout(chatID, parts[0])
+			editCatalogMessage(ctx, u, text, markup)
+			return dispatcher.EndGroups
+		}
 		if strings.HasPrefix(parts[0], "impersonate_") {
 			targetIDStr := strings.TrimPrefix(parts[0], "impersonate_")
 			targetID, err := strconv.ParseInt(targetIDStr, 10, 64)
@@ -2461,6 +2470,7 @@ func renderImpersonateMenu(senderID int64) (string, tg.ReplyMarkupClass) {
 		rows = append(rows, tg.KeyboardButtonRow{
 			Buttons: []tg.KeyboardButtonClass{
 				&tg.KeyboardButtonCallback{Text: btnText, Data: []byte(data)},
+				&tg.KeyboardButtonCallback{Text: "🚪 Logout", Data: []byte(fmt.Sprintf("wc:ub_logout_%d", ownerID))},
 			},
 		})
 	}
