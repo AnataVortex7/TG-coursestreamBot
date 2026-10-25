@@ -234,6 +234,45 @@ func AutoSyncPlaceholderCount(taskID primitive.ObjectID) int {
 	return int(n)
 }
 
+// AutoSyncLinkPending — message madhe links ajun resolve zale nahit (target copy zala nahi); nantar edit karun fix.
+func AutoSyncLinkPending(taskID primitive.ObjectID, srcMsg int, on bool) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	set := bson.M{"link_pending": on}
+	if on {
+		set["link_tries"] = 0
+	}
+	_, _ = colAutoSyncMap().UpdateOne(ctx, bson.M{"task_id": taskID, "src_msg_id": srcMsg}, bson.M{"$set": set})
+}
+
+type AutoSyncLp struct {
+	SrcMsg  int `bson:"src_msg_id"`
+	DestMsg int `bson:"dest_msg_id"`
+	Tries   int `bson:"link_tries"`
+}
+
+func AutoSyncLinkPendingList(taskID primitive.ObjectID, maxTries, limit int) []AutoSyncLp {
+	ctx, cancel := Ctx()
+	defer cancel()
+	cur, err := colAutoSyncMap().Find(ctx,
+		bson.M{"task_id": taskID, "link_pending": true, "dest_msg_id": bson.M{"$gt": 0}, "link_tries": bson.M{"$lt": maxTries}},
+		options.Find().SetSort(bson.D{{Key: "src_msg_id", Value: 1}}).SetLimit(int64(limit)),
+	)
+	if err != nil {
+		return nil
+	}
+	defer cur.Close(ctx)
+	var out []AutoSyncLp
+	_ = cur.All(ctx, &out)
+	return out
+}
+
+func AutoSyncLinkTry(taskID primitive.ObjectID, srcMsg int) {
+	ctx, cancel := Ctx()
+	defer cancel()
+	_, _ = colAutoSyncMap().UpdateOne(ctx, bson.M{"task_id": taskID, "src_msg_id": srcMsg}, bson.M{"$inc": bson.M{"link_tries": 1}})
+}
+
 // AutoSyncMapDeleteFrom — reset sathi: src_msg_id > afterID che map entries kadhto (parat copy hotil).
 func AutoSyncMapDeleteFrom(taskID primitive.ObjectID, afterID int) error {
 	ctx, cancel := Ctx()

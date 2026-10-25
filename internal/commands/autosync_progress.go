@@ -46,6 +46,8 @@ type asProgress struct {
 	SubWritten int64
 	SubTotal   int64
 	Finished   bool
+	Touched    time.Time // shevtcha progress (bytes / phase badal) — stall watchdog sathi
+	GraceUntil time.Time // FloodWait/backoff madhe watchdog band
 }
 
 var (
@@ -63,14 +65,23 @@ func asProgUpdate(id string, fn func(p *asProgress)) {
 	asProgMu.Lock()
 	if p := asProgMap[id]; p != nil {
 		fn(p)
+		p.Touched = time.Now()
 	}
 	asProgMu.Unlock()
 }
 
 func asProgSub(id, label string, written, total int64) {
-	asProgUpdate(id, func(p *asProgress) {
-		p.Sub, p.SubWritten, p.SubTotal = label, written, total
-	})
+	asProgMu.Lock()
+	defer asProgMu.Unlock()
+	p := asProgMap[id]
+	if p == nil {
+		return
+	}
+	// Touch fakt jevha label badalla kiva bytes pudhe gele (real progress) — repeat call la nahi.
+	if p.Sub != label || p.SubWritten != written || p.SubTotal != total {
+		p.Touched = time.Now()
+	}
+	p.Sub, p.SubWritten, p.SubTotal = label, written, total
 }
 
 func asProgFinish(id string) {

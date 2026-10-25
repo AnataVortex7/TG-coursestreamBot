@@ -1,363 +1,351 @@
-// internal/commands/autosync_links.go
-//
-// AutoSync sathi 2 goshti:
-//
-//	A) Summary / index message madhle t.me/c/<source>/<msg> links => destination channel che
-//	   NAVIN message links (autosync_map: source msg -> destination msg). User ne link press kela
-//	   ki destination madhlya tyach message var jato (source channel var nahi).
-//	B) Download prefetch — current message upload hot astana pudhcha media message download hoto
-//	   (userbotdl sarkhach pipeline). Download ani upload ekamekanchi vaat baghat nahit.
 package commands
 
+// AutoSync — source channel madhle message links (summary / index messages) destination madhe
+// tyach message chya links ne aapoaap replace. User link press kela ki DESTINATION channel madhe
+// tya message var jato (source madhe nahi).
+//
+//   t.me/c/<src>/<msg>, t.me/c/<src>/<topic>/<msg>, t.me/<srcUsername>/<msg>
+//     -> https://t.me/c/<dst>/<destMsg>   (kiva t.me/<dstUsername>/<destMsg> jar destination public asel)
+//
+// Baher che / dusrya channel che links, ani deep links (bots, invite) JASE AAHET TASE.
+// Jar linked message ajun destination madhe copy zala nahi (map madhe nahi) tar link tasach rahto ani
+// message "link_pending" mark hoto — nantar (next run) edit karun link fix hoto.
 import (
 	"context"
 	"fmt"
-	"io"
-	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"EverythingSuckz/fsb/internal/db"
-	"EverythingSuckz/fsb/internal/types"
 	"EverythingSuckz/fsb/internal/utils"
 
 	"github.com/celestix/gotgproto"
-	"github.com/gotd/td/telegram/downloader"
-	"github.com/gotd/td/telegram/uploader"
 	"github.com/gotd/td/tg"
-	"go.uber.org/zap"
 )
 
-// ─── A) summary links ────────────────────────────────────────────────────────
+var asTmeLinkRe = regexp.MustCompile(`(?i)(https?://)?(?:t|telegram)\.me/(c/(\d+)|([A-Za-z][A-Za-z0-9_]{3,}))/(\d+)(?:/(\d+))?`)
 
-// asLinkResult — ek message cha link rewrite cha nikal.
-type asLinkResult struct {
-	Total      int // source channel che kiti links sapadle
-	Unresolved int // kiti links cha target ajun destination madhe nahi (copy zala nahi / skip)
+var asUsernames sync.Map // "<taskHex>:src" / "<taskHex>:dst" -> username (lowercase, "" = private)
+
+func asRawChannelID(chatID int64) int64 {
+	if chatID < 0 {
+		return -chatID - 1000000000000
+	}
+	return chatID
 }
 
-// asLinkRewriter — source channel che links => destination links.
-// Tya task chya DB map madhun (source msg -> destination msg) shodhto.
-type asLinkRewriter struct {
-	t       *db.AutoSyncTask
-	srcRaw  int64
-	dstRaw  int64
-	mirror  bool
-	cache   map[int]int // src msg -> dest msg (0 = nahi)
-	res     asLinkResult
-	enabled bool
+func asUname(taskHex, side string) string {
+	if v, ok := asUsernames.Load(taskHex + ":" + side); ok {
+		return v.(string)
+	}
+	return ""
 }
 
-func asNewLinkRewriter(t *db.AutoSyncTask, mirror bool) *asLinkRewriter {
-	return &asLinkRewriter{
-		t:       t,
-		srcRaw:  channelRawID(t.SourceChat),
-		dstRaw:  channelRawID(t.DestChat),
-		mirror:  mirror,
-		cache:   map[int]int{},
-		enabled: true,
+// asRewriteLinks — text madhle t.me message links source -> destination. unres = ajun resolve na zalele links.
+func asRewriteLinks(t *db.AutoSyncTask, s string, unres *int) string {
+	if !strings.Contains(strings.ToLower(s), "t.me/") && !strings.Contains(strings.ToLower(s), "telegram.me/") {
+		return s
 	}
-}
+	tid := t.ID.Hex()
+	srcRaw := asRawChannelID(t.SourceChat)
+	dstRaw := asRawChannelID(t.DestChat)
+	srcUser, dstUser := asUname(tid, "src"), asUname(tid, "dst")
 
-func (r *asLinkRewriter) lookup(srcMsg int) int {
-	if v, ok := r.cache[srcMsg]; ok {
-		return v
-	}
-	d, ok := db.AutoSyncMapGet(r.t.ID, srcMsg)
-	if !ok || d <= 0 {
-		d = 0
-	}
-	r.cache[srcMsg] = d
-	return d
-}
-
-// rewrite — ek URL. Source channel cha nasel tar jasa aahe tasa. Target copy zala nasel tar
-// original link thevto (ani unresolved count vadhavto — run shevti parat fix karto).
-func (r *asLinkRewriter) rewrite(u string) string {
-	if r == nil || !r.enabled {
-		return u
-	}
-	ch, topic, mid, ok := parseTmeCLink(u)
-	if !ok || ch != r.srcRaw {
-		return u
-	}
-	r.res.Total++
-	nid := r.lookup(mid)
-	if nid <= 0 {
-		r.res.Unresolved++
-		return u
-	}
-	if topic > 1 && r.mirror {
-		if dt, ok := db.AutoSyncTopicGet(r.t.ID, topic); ok && dt > 0 {
-			return fmt.Sprintf("https://t.me/c/%d/%d/%d", r.dstRaw, dt, nid)
+	return asTmeLinkRe.ReplaceAllStringFunc(s, func(link string) string {
+		sm := asTmeLinkRe.FindStringSubmatch(link)
+		if sm == nil {
+			return link
 		}
-	}
-	return fmt.Sprintf("https://t.me/c/%d/%d", r.dstRaw, nid)
-}
-
-// asUnresolvedSummary — run shevti parat fix karaychya summary msgs.
-type asUnresolvedSummary struct {
-	SrcMsg  int
-	DestMsg int
-}
-
-var asUnresolvedMu sync.Mutex
-var asUnresolvedMap = map[string][]asUnresolvedSummary{} // task hex ID -> list
-
-func asNoteUnresolved(tid string, srcMsg, destMsg int) {
-	if destMsg <= 0 {
-		return
-	}
-	asUnresolvedMu.Lock()
-	defer asUnresolvedMu.Unlock()
-	for _, u := range asUnresolvedMap[tid] {
-		if u.SrcMsg == srcMsg {
-			return
+		scheme, cPart, cID, user, msgStr := sm[1], sm[2], sm[3], sm[4], sm[5]
+		last := msgStr
+		if sm[6] != "" { // .../<topic>/<msg>
+			last = sm[6]
 		}
-	}
-	asUnresolvedMap[tid] = append(asUnresolvedMap[tid], asUnresolvedSummary{srcMsg, destMsg})
+		// source channel cha link ahe ka?
+		isSrc := false
+		if strings.HasPrefix(strings.ToLower(cPart), "c/") {
+			if id, err := strconv.ParseInt(cID, 10, 64); err == nil && id == srcRaw {
+				isSrc = true
+			}
+		} else if srcUser != "" && strings.EqualFold(user, srcUser) {
+			isSrc = true
+		}
+		if !isSrc {
+			return link // baher cha / dusra channel — jasa aahe tasa
+		}
+		mid, err := strconv.Atoi(last)
+		if err != nil {
+			return link
+		}
+		destID, ok := db.AutoSyncMapGet(t.ID, mid)
+		if !ok || destID <= 0 {
+			if unres != nil {
+				*unres++
+			}
+			return link // target ajun copy zala nahi — nantar fix hoil
+		}
+		out := fmt.Sprintf("t.me/c/%d/%d", dstRaw, destID)
+		if dstUser != "" {
+			out = fmt.Sprintf("t.me/%s/%d", dstUser, destID)
+		}
+		if scheme != "" {
+			out = "https://" + out
+		}
+		return out
+	})
 }
 
-func asTakeUnresolved(tid string) []asUnresolvedSummary {
-	asUnresolvedMu.Lock()
-	defer asUnresolvedMu.Unlock()
-	l := asUnresolvedMap[tid]
-	delete(asUnresolvedMap, tid)
-	return l
-}
-
-// asFixUnresolvedSummaries — run shevti : jya summary msgs madhle links cha target tevha copy navhta,
-// tyanna destination madhe EDIT karun links fix karto. returns: fixed, stillUnresolved.
-func asFixUnresolvedSummaries(ctx context.Context, h *asClientHolder, t *db.AutoSyncTask, src, dst *asChat, mirror bool) (fixed, still int) {
-	list := asTakeUnresolved(t.ID.Hex())
+// asFixPendingLinks — junya messages (summary) jyanche links tevha resolve zale navhte: aata map madhe
+// target aale asel tar destination message EDIT karun links fix kar.
+func asFixPendingLinks(ctx context.Context, h *asClientHolder, t *db.AutoSyncTask, src, dst *asChat) (fixed int) {
+	list := db.AutoSyncLinkPendingList(t.ID, 8, 50)
 	if len(list) == 0 {
-		return 0, 0
+		return 0
 	}
 	dstC, err := asDstClient()
 	if err != nil {
-		return 0, len(list)
+		return 0
 	}
-	for _, u := range list {
+	for _, p := range list {
 		if ctx.Err() != nil {
-			still++
-			continue
+			break
 		}
-		m, err := asRefetchMsg(ctx, h, src, u.SrcMsg)
+		m, err := asRefetchMsg(ctx, h, src, p.SrcMsg)
 		if err != nil {
-			still++
+			if strings.Contains(err.Error(), "sapadla nahi") {
+				db.AutoSyncLinkPending(t.ID, p.SrcMsg, false)
+			} else {
+				db.AutoSyncLinkTry(t.ID, p.SrcMsg)
+			}
 			continue
 		}
-		text, ents, lr := asTransformTextLinks(t, m, mirror)
-		if strings.TrimSpace(text) == "" || lr.Total == 0 {
+		text, ents, unres := asTransformText(t, m)
+		if unres > 0 {
+			db.AutoSyncLinkTry(t.ID, p.SrcMsg) // ajun target copy zala nahi
 			continue
 		}
-		if lr.Unresolved >= lr.Total {
-			still++ // kahich resolve zala nahi — edit karun kahi upayog nahi
+		if strings.TrimSpace(text) == "" || (m.Media != nil && len([]rune(text)) > 1024) {
+			db.AutoSyncLinkPending(t.ID, p.SrcMsg, false)
 			continue
 		}
-		_, eErr := utils.ExecuteWithFloodWait(ctx, func() (tg.UpdatesClass, error) {
+		_, eerr := utils.ExecuteWithFloodWait(ctx, func() (tg.UpdatesClass, error) {
 			return dstC.API().MessagesEditMessage(ctx, &tg.MessagesEditMessageRequest{
-				Peer:      dst.Peer,
-				ID:        u.DestMsg,
-				Message:   text,
-				Entities:  ents,
-				NoWebpage: true,
+				Peer:     dst.Peer,
+				ID:       p.DestMsg,
+				Message:  text,
+				Entities: ents,
 			})
 		})
-		if eErr != nil && !strings.Contains(strings.ToUpper(eErr.Error()), "MESSAGE_NOT_MODIFIED") {
-			if asLog != nil {
-				asLog.Warn("AutoSync summary link fix edit failed", zap.Error(eErr), zap.Int("destMsg", u.DestMsg))
-			}
-			still++
+		if eerr != nil && !strings.Contains(strings.ToUpper(eerr.Error()), "MESSAGE_NOT_MODIFIED") {
+			db.AutoSyncLinkTry(t.ID, p.SrcMsg)
 			continue
 		}
-		if lr.Unresolved > 0 {
-			still++
-		}
+		db.AutoSyncLinkPending(t.ID, p.SrcMsg, false)
 		fixed++
+		select {
+		case <-time.After(700 * time.Millisecond):
+		case <-ctx.Done():
+		}
 	}
-	return fixed, still
+	return fixed
 }
 
-// ─── B) download prefetch ────────────────────────────────────────────────────
+var _ *gotgproto.Client // (import)
 
-// asPre — ek message cha background download.
-type asPre struct {
-	msgID  int
-	done   chan struct{}
-	path   string
-	size   int64
-	err    error
-	cancel context.CancelFunc
+// ─── username rules → link URLs (t.me/<user>, tg://resolve?domain=<user>) ───────
+// Rule "@old=new" fakt text madhle "@old" la match karto. Pan hidden hyperlink / visible URL madhe username
+// "t.me/old" kiva "tg://resolve?domain=old" ashya roopat asto (@ nahi) — tya var rule lagat nahi.
+// Ata username-rule (Old = @name kiva name) URL forms var pan aapoaap lagto:
+//   New = username / @username  → URL madhla username badalto (t.me/old/xyz → t.me/new/xyz)
+//   New = full link             → to link vaparto
+//   New = saadha shabd ("A")     → hyperlink kadhun takto (old deep link nako), visible URL text madhe shabd.
+var (
+	asUserTokRe = regexp.MustCompile(`^@?([A-Za-z][A-Za-z0-9_]{3,31})$`)
+	asURLUserRe = regexp.MustCompile(`(?i)((?:https?://)?(?:t|telegram)\.me/|(?:https?://)?telegram\.dog/|tg://resolve\?domain=)([A-Za-z][A-Za-z0-9_]{3,31})`)
+)
+
+var asTmeReserved = map[string]bool{
+	"joinchat": true, "addstickers": true, "addemoji": true, "share": true, "proxy": true, "socks": true,
+	"setlanguage": true, "login": true, "invoice": true, "boost": true, "addlist": true, "addtheme": true,
+	"confirmphone": true, "contact": true, "bg": true, "iv": true,
 }
 
-var asPreMu sync.Mutex
-var asPreMap = map[string]*asPre{} // task hex ID -> current prefetch (ekach)
-
-func asPrefetchEnabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("AUTOSYNC_PREFETCH")))
-	return v != "0" && v != "false" && v != "off"
+// asApplyUsernameRules — s madhe URL(s) var username rules. unlink=true => hyperlink kadhun taka.
+func asApplyUsernameRules(t *db.AutoSyncTask, s string, isLink bool) (out string, unlink bool) {
+	low := strings.ToLower(s)
+	if !strings.Contains(low, "t.me/") && !strings.Contains(low, "telegram.me/") &&
+		!strings.Contains(low, "telegram.dog/") && !strings.Contains(low, "tg://resolve") {
+		return s, false
+	}
+	rules := asRulesFor(t)
+	out = asURLUserRe.ReplaceAllStringFunc(s, func(match string) string {
+		sm := asURLUserRe.FindStringSubmatch(match)
+		if sm == nil {
+			return match
+		}
+		prefix, user := sm[1], sm[2]
+		if asTmeReserved[strings.ToLower(user)] {
+			return match
+		}
+		for _, r := range rules {
+			tok := asUserTokRe.FindStringSubmatch(strings.TrimSpace(r.Old))
+			if tok == nil || !strings.EqualFold(tok[1], user) {
+				continue
+			}
+			nw := strings.TrimSpace(r.New)
+			lnw := strings.ToLower(nw)
+			switch {
+			case nw == "":
+				if isLink {
+					unlink = true
+				}
+				return ""
+			case strings.HasPrefix(lnw, "http") || strings.Contains(lnw, "t.me/") || strings.HasPrefix(lnw, "tg://"):
+				return nw
+			case asUserTokRe.MatchString(nw):
+				return prefix + asUserTokRe.FindStringSubmatch(nw)[1]
+			default: // saadha shabd — username nahi
+				if isLink {
+					unlink = true
+					return match
+				}
+				return nw
+			}
+		}
+		return match
+	})
+	return out, unlink
 }
 
-// asPrefetchMaxBytes — evdhya mothya file cha prefetch karaycha nahi (disk). Default 2 GB.
-func asPrefetchMaxBytes() int64 {
-	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("AUTOSYNC_PREFETCH_MAX_MB"))); err == nil && n > 0 {
-		return int64(n) * 1024 * 1024
+// ─── entity remap (cross-boundary replace) ─────────────────────────────────────
+// Rule formatting/link boundary olandto tevha piece-wise replace chalat nahi. Tya veli full text var replace
+// karun, old→new text diff (LCS) varun entities cha offsets/length navin text madhe map karto.
+// Nahi jamla (text khup motha) tar ok=false.
+func asRemapEntities(oldText, newText string, ents []tg.MessageEntityClass) ([]tg.MessageEntityClass, bool) {
+	o, n := []rune(oldText), []rune(newText)
+	if len(o)*len(n) > 6_000_000 {
+		return nil, false
 	}
-	return 2048 * 1024 * 1024
-}
-
-// asDownloadToTemp — file temp madhe parallel download (userbotdl che dlThreads vaparto).
-func asDownloadToTemp(ctx context.Context, c *gotgproto.Client, f *types.File, onProgress func(w, tot int64)) (string, error) {
-	tmp, err := os.CreateTemp("", "autosync-*.tmp")
-	if err != nil {
-		return "", fmt.Errorf("temp file create failed: %w", err)
+	// common prefix/suffix trim
+	pre := 0
+	for pre < len(o) && pre < len(n) && o[pre] == n[pre] {
+		pre++
 	}
-	path := tmp.Name()
-	var w io.WriterAt = tmp
-	if onProgress != nil {
-		w = &progressWriter{w: tmp, total: f.FileSize, onProgress: onProgress}
+	suf := 0
+	for suf < len(o)-pre && suf < len(n)-pre && o[len(o)-1-suf] == n[len(n)-1-suf] {
+		suf++
 	}
-	_, err = downloader.NewDownloader().Download(c.API(), f.Location).WithThreads(dlThreads).Parallel(ctx, w)
-	_ = tmp.Close()
-	if err != nil {
-		_ = os.Remove(path)
-		return "", fmt.Errorf("download failed: %w", err)
+	om, nm := o[pre:len(o)-suf], n[pre:len(n)-suf]
+	// LCS dp (middle part)
+	R, C := len(om), len(nm)
+	dp := make([][]uint16, R+1)
+	for i := range dp {
+		dp[i] = make([]uint16, C+1)
 	}
-	return path, nil
-}
-
-// asUploadFromTemp — temp file bot kadun upload (userbotdl che upThreads / part size).
-func asUploadFromTemp(ctx context.Context, up *gotgproto.Client, name, path string, onProgress func(w, tot int64)) (tg.InputFileClass, error) {
-	st, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("temp file stat failed: %w", err)
+	for i := R - 1; i >= 0; i-- {
+		for j := C - 1; j >= 0; j-- {
+			if om[i] == nm[j] {
+				dp[i][j] = dp[i+1][j+1] + 1
+			} else if dp[i+1][j] >= dp[i][j+1] {
+				dp[i][j] = dp[i+1][j]
+			} else {
+				dp[i][j] = dp[i][j+1]
+			}
+		}
 	}
-	rf, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("temp file reopen failed: %w", err)
+	// startMap[i], endMap[i]: old rune index -> new rune index
+	startMap := make([]int, len(o)+1)
+	endMap := make([]int, len(o)+1)
+	for i := 0; i < pre; i++ {
+		startMap[i], endMap[i+1] = i, i+1
 	}
-	defer rf.Close()
-	u := uploader.NewUploader(up.API()).WithPartSize(upPartSize).WithThreads(upThreads)
-	if onProgress != nil {
-		u = u.WithProgress(&uploadProgressAdapter{onProgress: onProgress})
-	}
-	file, err := u.Upload(ctx, uploader.NewUpload(name, rf, st.Size()))
-	if err != nil {
-		return nil, fmt.Errorf("upload failed: %w", err)
-	}
-	return file, nil
-}
-
-// asStartPrefetch — m (document) cha download background madhe suru karto. Aadhicha prefetch asel tar cancel.
-func asStartPrefetch(parent context.Context, c *gotgproto.Client, tid string, m *tg.Message) {
-	if !asPrefetchEnabled() || c == nil || m == nil {
-		return
-	}
-	md, ok := m.Media.(*tg.MessageMediaDocument)
-	if !ok {
-		return
-	}
-	d, ok := md.Document.AsNotEmpty()
-	if !ok || d.Size <= 0 || d.Size > asPrefetchMaxBytes() {
-		return
-	}
-	f, err := utils.FileFromMedia(md)
-	if err != nil {
-		return
-	}
-	asPreMu.Lock()
-	if cur := asPreMap[tid]; cur != nil {
-		if cur.msgID == m.ID {
-			asPreMu.Unlock()
+	i, j := 0, 0
+	blockOldStart, blockNewStart := -1, 0
+	flush := func(oldEnd, newEnd int) {
+		if blockOldStart < 0 {
 			return
 		}
-		cur.cancel()
-		go asDiscardPre(cur)
-	}
-	ctx, cancel := context.WithCancel(parent)
-	p := &asPre{msgID: m.ID, done: make(chan struct{}), cancel: cancel}
-	asPreMap[tid] = p
-	asPreMu.Unlock()
-
-	go func() {
-		defer close(p.done)
-		path, err := asDownloadToTemp(ctx, c, f, nil)
-		p.path, p.err = path, err
-		if err == nil {
-			p.size = d.Size
+		for k := blockOldStart; k < oldEnd; k++ {
+			startMap[pre+k] = pre + blockNewStart
+			endMap[pre+k+1] = pre + newEnd
 		}
-	}()
-}
-
-func asPrefetchActiveFor(tid string, msgID int) bool {
-	asPreMu.Lock()
-	defer asPreMu.Unlock()
-	p := asPreMap[tid]
-	return p != nil && p.msgID == msgID
-}
-
-func asDiscardPre(p *asPre) {
-	<-p.done
-	if p.path != "" {
-		_ = os.Remove(p.path)
+		blockOldStart = -1
 	}
-}
-
-// asTakePrefetch — msgID cha prefetch tayar asel tar (path) dyato; nasel / fail asel tar "".
-// Prefetch chalu asel tar tyachi vaat baghto (tyat tyachi download progress dakhavli jat nahi).
-func asTakePrefetch(ctx context.Context, tid string, msgID int) string {
-	asPreMu.Lock()
-	p := asPreMap[tid]
-	if p == nil || p.msgID != msgID {
-		asPreMu.Unlock()
-		return ""
-	}
-	delete(asPreMap, tid)
-	asPreMu.Unlock()
-
-	select {
-	case <-p.done:
-	case <-ctx.Done():
-		p.cancel()
-		go asDiscardPre(p)
-		return ""
-	}
-	if p.err != nil || p.path == "" {
-		return ""
-	}
-	return p.path
-}
-
-// asClearPrefetch — run sampla / thambla : bakiche prefetch cancel + temp delete.
-func asClearPrefetch(tid string) {
-	asPreMu.Lock()
-	p := asPreMap[tid]
-	delete(asPreMap, tid)
-	asPreMu.Unlock()
-	if p != nil {
-		p.cancel()
-		go asDiscardPre(p)
-	}
-}
-
-// asNextDocMsg — msgs[from:] madhla pahila navin (aadhi copy na zalela) document message.
-func asNextDocMsg(t *db.AutoSyncTask, msgs []*tg.Message, from int) *tg.Message {
-	for i := from; i < len(msgs) && i < from+3; i++ { // fakt javalche 3 baghto
-		m := msgs[i]
-		if _, done := db.AutoSyncMapGet(t.ID, m.ID); done {
+	for i < R || j < C {
+		if i < R && j < C && om[i] == nm[j] {
+			flush(i, j)
+			startMap[pre+i], endMap[pre+i+1] = pre+j, pre+j+1
+			i++
+			j++
 			continue
 		}
-		switch m.Media.(type) {
-		case *tg.MessageMediaDocument:
-			return m
-		case *tg.MessageMediaPhoto:
-			continue
+		if blockOldStart < 0 {
+			blockOldStart, blockNewStart = i, j
+		}
+		if j < C && (i >= R || dp[i][j+1] >= dp[i+1][j]) {
+			j++ // insertion
+		} else {
+			i++ // deletion
 		}
 	}
-	return nil
-}
+	flush(R, C)
+	for k := 0; k < suf; k++ {
+		oi := pre + R + k
+		ni := pre + C + k
+		startMap[oi], endMap[oi+1] = ni, ni+1
+	}
+	startMap[len(o)] = len(n)
+	endMap[0] = 0
 
-var _ = time.Second
+	// utf16 <-> rune prefix tables
+	pref := func(rs []rune) []int {
+		p := make([]int, len(rs)+1)
+		for k, r := range rs {
+			w := 1
+			if r > 0xFFFF {
+				w = 2
+			}
+			p[k+1] = p[k] + w
+		}
+		return p
+	}
+	po, pn := pref(o), pref(n)
+	toRune := func(p []int, u16 int) int { // utf16 offset -> rune idx
+		lo, hi := 0, len(p)-1
+		for lo < hi {
+			mid := (lo + hi) / 2
+			if p[mid] < u16 {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		return lo
+	}
+	out := make([]tg.MessageEntityClass, 0, len(ents))
+	for _, e := range ents {
+		off, ln := entFields(e)
+		if off == nil || ln == nil {
+			out = append(out, e)
+			continue
+		}
+		rs, re := toRune(po, *off), toRune(po, *off+*ln)
+		if rs > len(o) || re > len(o) {
+			continue
+		}
+		ns, ne := startMap[rs], endMap[re]
+		if ne < ns {
+			ne = ns
+		}
+		*off = pn[ns]
+		*ln = pn[ne] - pn[ns]
+		if *ln <= 0 {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out, true
+}

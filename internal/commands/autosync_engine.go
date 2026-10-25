@@ -115,7 +115,7 @@ func asRetryConn[T any](ctx context.Context, h *asClientHolder, fn func(c *gotgp
 	var zero T
 	for n := 0; ; n++ {
 		v, err := fn(h.Get())
-		if err == nil || !isTransientConnErr(err) || ctx.Err() != nil || n >= asMaxConnRetries {
+		if err == nil || !asIsConnErr(err) || ctx.Err() != nil || n >= asMaxConnRetries {
 			return v, err
 		}
 		asBackoff(ctx, n+1)
@@ -186,6 +186,7 @@ type asChat struct {
 	Forum     bool
 	Broadcast bool
 	CanPost   bool
+	Username  string
 	Input     *tg.InputChannel
 	Peer      *tg.InputPeerChannel
 }
@@ -195,6 +196,7 @@ func asFromChannel(c *tg.Channel) *asChat {
 	return &asChat{
 		ID:        -1000000000000 - c.ID,
 		Title:     c.Title,
+		Username:  strings.ToLower(c.Username),
 		Forum:     c.Forum,
 		Broadcast: c.Broadcast,
 		CanPost:   c.Creator || hasAdmin || !c.Broadcast,
@@ -544,53 +546,86 @@ func asCloneEntities(in []tg.MessageEntityClass) []tg.MessageEntityClass {
 }
 
 // asTransformText — message text/caption + entities var sarva replace rules lavto.
-// (link rewrite nasleli junich signature — navin code asTransformTextLinks vaparto.)
-func asTransformText(t *db.AutoSyncTask, m *tg.Message) (string, []tg.MessageEntityClass) {
-	txt, ents, _ := asTransformTextLinks(t, m, false)
-	return txt, ents
-}
-
-// asTransformTextLinks — asTransformText + SUMMARY LINKS:
-// text madhle t.me/c/<source>/<msg> links => t.me/c/<destination>/<navin msg> (autosync_map var).
 // Formatting (bold/link/spoiler...) tikavto: entity-aware (offsets navin text pramane). Link URLs var pan rules lagtat.
 // Jar rule ek formatting boundary olandto (piece-wise match hot nahi), tar plain full-text replace (entities nahit).
-func asTransformTextLinks(t *db.AutoSyncTask, m *tg.Message, mirror bool) (string, []tg.MessageEntityClass, asLinkResult) {
-	lr := asNewLinkRewriter(t, mirror)
-	full := asApplyRules(t, m.Message)
-	ents := asCloneEntities(m.Entities)
-	pieceText, pieceEnts := transformTextEntities(m.Message, ents,
-		func(x string) string {
-			// plain URL entity (displayed text = URL) — rule nahi, link rewrite
-			if _, _, _, ok := parseTmeCLink(x); ok {
-				return lr.rewrite(x)
-			}
-			return asApplyRules(t, x)
-		},
-		func(u string) (string, bool) {
-			if _, _, _, ok := parseTmeCLink(u); ok {
-				return lr.rewrite(u), true
-			}
-			nu := asApplyRules(t, u)
-			if strings.TrimSpace(nu) == "" {
-				return u, true
-			}
-			return nu, true
-		})
-	if pieceText == full {
-		return pieceText, pieceEnts, lr.res
+// asTransformText — asTransformTextRaw + hidden user-mention links kadhun takto.
+// MessageEntityMentionName (nav-var click honara hidden user link) destination madhe bot ne pathvta yet nahi
+// (user access hash nahi) ani to junya admin/user cha profile link thevto — mhanun text rahto, link jato.
+func asTransformText(t *db.AutoSyncTask, m *tg.Message) (string, []tg.MessageEntityClass, int) {
+	text, ents, un := asTransformTextRaw(t, m)
+	if len(ents) == 0 {
+		return text, ents, un
 	}
-	// Message madhe links/deep links asel tar entities KADHI sodu nako (hidden hyperlink gelya tar link harvto).
-	// Boundary olandnara rule fakt tya veli lagnar nahi — pan links surakshit rahtat.
+	kept := make([]tg.MessageEntityClass, 0, len(ents))
+	for _, e := range ents {
+		switch e.(type) {
+		case *tg.MessageEntityMentionName, *tg.InputMessageEntityMentionName:
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return text, kept, un
+}
+
+func asTransformTextRaw(t *db.AutoSyncTask, m *tg.Message) (string, []tg.MessageEntityClass, int) {
+	unres := 0
+	// pipeline: replace rules -> source message links (destination la) -> username rules (URL forms)
+	pipe := func(x string, un *int) string {
+		x = asApplyRules(t, x)
+		x = asRewriteLinks(t, x, un)
+		x, _ = asApplyUsernameRules(t, x, false)
+		return x
+	}
+	tf := func(x string) string { return pipe(x, &unres) }
+	linkFn := func(u string) (string, bool) {
+		nu := asApplyRules(t, u)
+		nu = asRewriteLinks(t, nu, &unres)
+		nu, unlink := asApplyUsernameRules(t, nu, true)
+		if unlink {
+			return u, false // old deep link nako — hyperlink kadhun taka (text rahto)
+		}
+		if strings.TrimSpace(nu) == "" {
+			return u, true
+		}
+		return nu, true
+	}
+	dummy := 0
+	full := pipe(m.Message, &dummy)
+
+	ents := asCloneEntities(m.Entities)
+	pieceText, pieceEnts := transformTextEntities(m.Message, ents, tf, linkFn)
+	if pieceText == full {
+		return pieceText, pieceEnts, unres
+	}
+	// Rule formatting/link boundary olandto => piece-wise match nahi. Full text var replace karun
+	// entities diff-remap kara (formatting + links tikatat).
+	unres = 0
+	_ = pipe(m.Message, &unres)
+	if re, ok := asRemapEntities(m.Message, full, asCloneEntities(m.Entities)); ok {
+		kept := make([]tg.MessageEntityClass, 0, len(re))
+		for _, e := range re {
+			if tu, isTU := e.(*tg.MessageEntityTextURL); isTU {
+				nu, keep := linkFn(tu.URL)
+				if !keep {
+					continue
+				}
+				tu.URL = nu
+			}
+			kept = append(kept, e)
+		}
+		return full, kept, unres
+	}
+	// Remap jamla nahi — links asel tar piece-wise (links surakshit), nahitar plain full text.
 	for _, e := range m.Entities {
 		switch e.(type) {
 		case *tg.MessageEntityTextURL, *tg.MessageEntityURL, *tg.MessageEntityMentionName:
-			return pieceText, pieceEnts, lr.res
+			return pieceText, pieceEnts, unres
 		}
 	}
 	if full == m.Message {
-		return m.Message, m.Entities, lr.res
+		return m.Message, m.Entities, 0
 	}
-	return full, nil, lr.res
+	return full, nil, unres
 }
 
 // asSendOpt — Placeholder: asli media na pathvta same-type chhota fake file pathva.
@@ -598,6 +633,7 @@ func asTransformTextLinks(t *db.AutoSyncTask, m *tg.Message, mirror bool) (strin
 type asSendOpt struct {
 	Placeholder bool
 	EditID      int
+	Unresolved  *int // out: source links jyanche destination message ajun nahit
 }
 
 func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst *asChat, m *tg.Message, destTopic, replyDest int, opt asSendOpt) (int, error) {
@@ -610,7 +646,10 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 	api := dstC.API()
 	tid := t.ID.Hex()
 
-	newText, entities, lres := asTransformTextLinks(t, m, t.MirrorTopics && dst.Forum)
+	newText, entities, unresN := asTransformText(t, m)
+	if opt.Unresolved != nil {
+		*opt.Unresolved = unresN
+	}
 
 	var replyTo tg.InputReplyToClass
 	if replyDest > 0 {
@@ -630,8 +669,6 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 				Entities: ents,
 				ReplyTo:  replyTo,
 				RandomID: rid(part),
-				// summary (links) var link-preview nako (pahilya link cha preview yeu naye)
-				NoWebpage: lres.Total > 0,
 			})
 		})
 		if err != nil {
@@ -647,11 +684,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 		if strings.TrimSpace(newText) == "" {
 			return 0, errAsUnsupported
 		}
-		id, err := sendText(newText, entities, "txt")
-		if err == nil && lres.Unresolved > 0 && opt.EditID == 0 {
-			asNoteUnresolved(tid, m.ID, id) // target nantar copy zala tar run shevti links fix hotil
-		}
-		return id, err
+		return sendText(newText, entities, "txt")
 	case *tg.MessageMediaPhoto, *tg.MessageMediaDocument:
 		// niche
 	default:
@@ -730,16 +763,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			}
 			onDl := func(w, tot int64) { asProgSub(tid, "⬇️ Download", w, tot) }
 			onUp := func(w, tot int64) { asProgSub(tid, "⬆️ Upload", w, tot) }
-			var upFile tg.InputFileClass
-			var tmpPath string
-			if pre := asTakePrefetch(ctx, tid, m.ID); pre != "" {
-				// pudhcha message aadhich download zala ahe (prefetch) — fakt upload
-				asProgSub(tid, "⬆️ Upload (prefetched)", 0, 0)
-				tmpPath = pre
-				upFile, err = asUploadFromTemp(ctx, dstC, f.FileName, pre, onUp)
-			} else {
-				upFile, tmpPath, err = downloadAndReupload(ctx, ctx, c, dstC, f, onDl, onUp)
-			}
+			upFile, tmpPath, err := downloadAndReupload(ctx, ctx, c, dstC, f, onDl, onUp)
 			if tmpPath != "" {
 				cleanup = func() { _ = os.Remove(tmpPath) }
 			}
@@ -1102,13 +1126,13 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 
 	asProgStart(taskID, t.Name, t.Mode)
 	defer asProgFinish(taskID)
-	defer asClearPrefetch(taskID) // run sampla/thambla — bakiche prefetch temp files delete
 
 	// FloodWait madhe thambla tar progress madhe disel (elapsed vadhto pan index nahi — tyacha karan).
 	ctx = utils.WithFloodWaitNotify(ctx, func(sec int) {
 		asProgUpdate(taskID, func(p *asProgress) {
 			p.Phase = fmt.Sprintf("⏳ Telegram FloodWait — %d sec thambla ahe (aapoaap continue hoil)", sec)
 		})
+		asProgGrace(taskID, time.Duration(sec+30)*time.Second)
 	})
 
 	client, err := asClientForKey(ctx, t.SessionKey)
@@ -1164,6 +1188,11 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	}
 	msgs, maxSeen := fr.msgs, fr.maxSeen
 	fetchedAt := time.Now() // file reference fakt kahi vel valid asto — jun zala tar refetch karto
+
+	asUsernames.Store(taskID+":src", src.Username)
+	asUsernames.Store(taskID+":dst", dst.Username)
+	// Junya summary messages che unresolved links ata fix kara (target copy zalyavar).
+	linksFixed := asFixPendingLinks(ctx, holder, t, src, dst)
 
 	// Junya run che placeholders (fake media) aadhi asli media ne replace kara.
 	phDone, phFailed, _ := asReplacePlaceholders(ctx, holder, t, src, dst, taskID)
@@ -1267,22 +1296,12 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			}
 		}
 
-		// ── prefetch: current upload hot astana pudhcha document download suru (userbotdl sarkhi pipeline) ──
-		if nm := asNextDocMsg(t, msgs, idx+1); nm != nil && !asPrefetchActiveFor(taskID, nm.ID) {
-			pm := nm
-			if time.Since(fetchedAt) > 3*time.Minute {
-				if fresh, ferr := asRefetchMsg(ctx, holder, src, nm.ID); ferr == nil {
-					pm = fresh
-				}
-			}
-			asStartPrefetch(ctx, holder.Get(), taskID, pm)
-		}
-
 		// ── send (retry) ──
 		var destID int
 		var sendErr error
 		aborted := false
 		refErrs := 0
+		unresLinks := 0
 		hasMedia := false
 		switch m.Media.(type) {
 		case *tg.MessageMediaPhoto, *tg.MessageMediaDocument:
@@ -1295,11 +1314,13 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		}
 		connFails := 0
 		for attempt := 1; attempt <= 3; attempt++ {
-			destID, sendErr = asSendOne(ctx, holder.Get(), t, dst, m, destTopic, replyDest, asSendOpt{})
+			destID, sendErr = asGuard(ctx, taskID, func(gctx context.Context) (int, error) {
+				return asSendOne(gctx, holder.Get(), t, dst, m, destTopic, replyDest, asSendOpt{Unresolved: &unresLinks})
+			})
 			if sendErr == nil || ctx.Err() != nil || errors.Is(sendErr, errAsUnsupported) {
 				break
 			}
-			if isTransientConnErr(sendErr) {
+			if asIsConnErr(sendErr) {
 				// Run thambvu nako: client refresh karun SAME message parat pathva.
 				connFails++
 				if connFails > asMaxConnRetries {
@@ -1310,6 +1331,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 				asProgUpdate(taskID, func(p *asProgress) {
 					p.Phase = fmt.Sprintf("🔄 Connection tutla — reconnect (%d/%d)", connFails, asMaxConnRetries)
 				})
+				asProgGrace(taskID, 3*time.Minute) // backoff + reconnect madhe watchdog nako
 				asBackoff(ctx, connFails)
 				_ = holder.Refresh(ctx)
 				attempt-- // connection retry mhanje normal attempt khat nahi
@@ -1353,7 +1375,9 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		if sendErr != nil && !aborted && ctx.Err() == nil && hasMedia && !errors.Is(sendErr, errAsUnsupported) {
 			origErr := sendErr
 			pdID, perr := asRetryConn(ctx, holder, func(c *gotgproto.Client) (int, error) {
-				return asSendOne(ctx, c, t, dst, m, destTopic, replyDest, asSendOpt{Placeholder: true})
+				return asGuard(ctx, taskID, func(gctx context.Context) (int, error) {
+					return asSendOne(gctx, c, t, dst, m, destTopic, replyDest, asSendOpt{Placeholder: true})
+				})
 			})
 			if perr == nil {
 				destID, sendErr = pdID, nil
@@ -1398,6 +1422,9 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			destID = -1
 		}
 		_ = db.AutoSyncMapPut(t.ID, m.ID, destID)
+		if unresLinks > 0 && destID > 0 {
+			db.AutoSyncLinkPending(t.ID, m.ID, true) // links nantar (map bharlyavar) edit karun fix
+		}
 		advance(m.ID)
 		copied++
 
@@ -1415,15 +1442,6 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		p.Done, p.Copied, p.Skipped, p.Errors = processed, copied, skipped, errCount
 		p.CurDesc, p.Sub = "", ""
 	})
-
-	// Summary madhle links jyanche target tevha copy navhte — aata fix (destination madhe EDIT).
-	linksFixed, linksLeft := 0, 0
-	if ctx.Err() == nil {
-		asProgUpdate(taskID, func(p *asProgress) { p.Phase = "🔗 Summary links fix hot ahet" })
-		linksFixed, linksLeft = asFixUnresolvedSummaries(ctx, holder, t, src, dst, mirror)
-	} else {
-		_ = asTakeUnresolved(taskID)
-	}
 
 	// sagle messages (service sahit) pahile — cursor pudhe nya
 	if completed && maxSeen > t.LastMsgID && firstFail == 0 {
@@ -1453,10 +1471,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		status += "\nLast error: " + clipRunes(lastErr, 200)
 	}
 	if linksFixed > 0 {
-		status += fmt.Sprintf("\n🔗 %d summary madhle links destination che banvle (late fix).", linksFixed)
-	}
-	if linksLeft > 0 {
-		status += fmt.Sprintf("\n⚠️ %d summary madhle kahi links cha target destination madhe nahi (copy/skip zala nahi) — te link source cha tasach rahila.", linksLeft)
+		status += fmt.Sprintf("\n🔗 %d message madhle links destination cha navin links ne fix kele.", linksFixed)
 	}
 	if phNew > 0 {
 		status += fmt.Sprintf("\n🧩 %d media copy zali nahi — same-type placeholder pathvla (jagevar rahila). Pudhchya run madhe asli media replace hoil.", phNew)
