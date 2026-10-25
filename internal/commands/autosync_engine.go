@@ -763,6 +763,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			}
 			onDl := func(w, tot int64) { asProgSub(tid, "⬇️ Download", w, tot) }
 			onUp := func(w, tot int64) { asProgSub(tid, "⬆️ Upload", w, tot) }
+			asProgSub(tid, "⬇️ Download suru hot ahe (first chunk wait)…", 0, 0)
 			upFile, tmpPath, err := downloadAndReupload(ctx, ctx, c, dstC, f, onDl, onUp)
 			if tmpPath != "" {
 				cleanup = func() { _ = os.Remove(tmpPath) }
@@ -965,10 +966,12 @@ func asIsFileRefErr(err error) bool {
 // asRefetchMsg — source message parat Telegram kadun ghet (taaje file reference milavnyasathi).
 func asRefetchMsg(ctx context.Context, h *asClientHolder, src *asChat, id int) (*tg.Message, error) {
 	res, err := asRetryConn(ctx, h, func(c *gotgproto.Client) (tg.MessagesMessagesClass, error) {
-		return utils.ExecuteWithFloodWait(ctx, func() (tg.MessagesMessagesClass, error) {
-			return c.API().ChannelsGetMessages(ctx, &tg.ChannelsGetMessagesRequest{
-				Channel: src.Input,
-				ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: id}},
+		return asGuard(ctx, "", func(gctx context.Context) (tg.MessagesMessagesClass, error) {
+			return utils.ExecuteWithFloodWait(gctx, func() (tg.MessagesMessagesClass, error) {
+				return c.API().ChannelsGetMessages(gctx, &tg.ChannelsGetMessagesRequest{
+					Channel: src.Input,
+					ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: id}},
+				})
 			})
 		})
 	})
@@ -1024,11 +1027,13 @@ func asReplacePlaceholders(ctx context.Context, h *asClientHolder, t *db.AutoSyn
 		}
 		var serr error
 		for n := 0; n <= 3; n++ {
-			_, serr = asSendOne(ctx, h.Get(), t, dst, m, 0, 0, asSendOpt{EditID: ph.DestMsg})
+			_, serr = asGuard(ctx, taskID, func(gctx context.Context) (int, error) {
+				return asSendOne(gctx, h.Get(), t, dst, m, 0, 0, asSendOpt{EditID: ph.DestMsg})
+			})
 			if serr == nil || ctx.Err() != nil {
 				break
 			}
-			if isTransientConnErr(serr) {
+			if asIsConnErr(serr) {
 				asBackoff(ctx, n+1)
 				_ = h.Refresh(ctx)
 				continue
@@ -1124,6 +1129,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	ctx, cancel := context.WithTimeout(parent, 6*time.Hour)
 	defer cancel()
 
+	ctx = context.WithValue(ctx, asTaskKey{}, taskID) // watchdog (asGuard) sathi
 	asProgStart(taskID, t.Name, t.Mode)
 	defer asProgFinish(taskID)
 
@@ -1264,7 +1270,9 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			if srcTopic > 1 {
 				asProgUpdate(taskID, func(p *asProgress) { p.Phase = "📂 Destination topic check/create hot ahe" })
 				dt, terr := asRetryConn(ctx, holder, func(c *gotgproto.Client) (int, error) {
-					return asEnsureTopic(ctx, c.API(), asBotAPI(), t, src, dst, srcTopic)
+					return asGuard(ctx, taskID, func(gctx context.Context) (int, error) {
+						return asEnsureTopic(gctx, c.API(), asBotAPI(), t, src, dst, srcTopic)
+					})
 				})
 				if terr != nil {
 					if isTransientConnErr(terr) {
@@ -1313,6 +1321,7 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			}
 		}
 		connFails := 0
+		stallFails := 0
 		for attempt := 1; attempt <= 3; attempt++ {
 			destID, sendErr = asGuard(ctx, taskID, func(gctx context.Context) (int, error) {
 				return asSendOne(gctx, holder.Get(), t, dst, m, destTopic, replyDest, asSendOpt{Unresolved: &unresLinks})
@@ -1323,6 +1332,17 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 			if asIsConnErr(sendErr) {
 				// Run thambvu nako: client refresh karun SAME message parat pathva.
 				connFails++
+				if errors.Is(sendErr, errAsStalled) {
+					stallFails++
+				}
+				if stallFails >= 3 {
+					// Hi file/message vaaranvaar atakte (message-specific hang) — run abort karu nako:
+					// break kara => khali placeholder pathvla jato ani run pudhe jato.
+					if asLog != nil {
+						asLog.Warn(fmt.Sprintf("AutoSync msg %d: 3 vela stall — placeholder pathvun pudhe", m.ID))
+					}
+					break
+				}
 				if connFails > asMaxConnRetries {
 					aborted = true
 					connAbort = true
