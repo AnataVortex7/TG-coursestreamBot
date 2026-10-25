@@ -12,6 +12,7 @@
 package commands
 
 import (
+	"sort"
 	"fmt"
 	"strings"
 	"unicode"
@@ -195,6 +196,15 @@ func dropBlankedLines(before, after string) string {
 }
 
 func applyRules(text string, rules []db.ReplaceRule) string {
+	// Lamb (specific) rule aadhi: "@abc_official=B" he "@abc=A" chya aadhi lagle pahije, nahitar
+	// pahila chhota rule motha match todto ani to rule kadhich lagat nahi (skip hoto).
+	if len(rules) > 1 {
+		sorted := append([]db.ReplaceRule(nil), rules...)
+		sort.SliceStable(sorted, func(i, j int) bool {
+			return len([]rune(strings.TrimSpace(sorted[i].Old))) > len([]rune(strings.TrimSpace(sorted[j].Old)))
+		})
+		rules = sorted
+	}
 	for _, r := range rules {
 		text = applyOneRule(text, r)
 	}

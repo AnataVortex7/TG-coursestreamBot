@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -435,20 +436,80 @@ func asEnsureTopic(ctx context.Context, srcAPI, api *tg.Client, t *db.AutoSyncTa
 
 var errAsUnsupported = errors.New("unsupported message type (poll/game/etc) — skip")
 
-// asApplyRules — SARVA replace rules ekatra:
-//  1) global (admin) rules — /userbotdl sarkhech, sarvansathi common
-//  2) task cha owner cha personal rules (non-admin asel tar)
-//  3) userbot account cha owner (session user_<id>) cha personal rules
-//  4) task-specific rules (/asreplace)
-func asApplyRules(t *db.AutoSyncTask, s string) string {
-	s = applyReplacesForUser(t.OwnerID, s)
-	if strings.HasPrefix(t.SessionKey, "user_") {
-		if uid, err := strconv.ParseInt(strings.TrimPrefix(t.SessionKey, "user_"), 10, 64); err == nil &&
-			uid != t.OwnerID && !isReplaceAdmin(uid) {
-			s = applyRules(s, db.GetReplaceRules(uid))
+// asRuleSnap — task sathi sarva replace rules chi snapshot (3 sec TTL). Run chalu astana /asreplace
+// kiva admin /replace madhe navin rule takla tar pudhchya message pasun (max ~3 sec) lagech lagto.
+type asRuleSnap struct {
+	at    time.Time
+	rules []db.ReplaceRule
+}
+
+var asRuleCache sync.Map // task hex ID -> *asRuleSnap
+
+// asRulesFor — SARVA replace rules ekatra (DB madhun fresh):
+//  1. global (admin) rules — /userbotdl sarkhech, sarvansathi common
+//  2. task cha owner cha personal rules (non-admin asel tar)
+//  3. userbot account cha owner (session user_<id>) cha personal rules
+//  4. task-specific rules (/asreplace) — DB madhun parat vachto (running task la pan lagto)
+func asRulesFor(t *db.AutoSyncTask) []db.ReplaceRule {
+	key := t.ID.Hex()
+	if v, ok := asRuleCache.Load(key); ok {
+		if c := v.(*asRuleSnap); time.Since(c.at) < 3*time.Second {
+			return c.rules
 		}
 	}
-	return applyRules(s, t.Replaces)
+	task := t
+	if nt, err := db.GetAutoSyncTask(t.ID); err == nil && nt != nil {
+		task = nt
+	}
+	rules := append([]db.ReplaceRule(nil), globalReplaceRules()...)
+	if !isReplaceAdmin(task.OwnerID) {
+		rules = append(rules, db.GetReplaceRules(task.OwnerID)...)
+	}
+	if strings.HasPrefix(task.SessionKey, "user_") {
+		if uid, err := strconv.ParseInt(strings.TrimPrefix(task.SessionKey, "user_"), 10, 64); err == nil &&
+			uid != task.OwnerID && !isReplaceAdmin(uid) {
+			rules = append(rules, db.GetReplaceRules(uid)...)
+		}
+	}
+	rules = append(rules, task.Replaces...)
+	asRuleCache.Store(key, &asRuleSnap{at: time.Now(), rules: rules})
+	return rules
+}
+
+// asApplyRules — text var sarva rules (longest-first, applyRules madhe sort hoto).
+func asApplyRules(t *db.AutoSyncTask, s string) string {
+	return applyRules(s, asRulesFor(t))
+}
+
+// asRenameFile — file naav var pan rules (extension tasach rahto).
+func asRenameFile(t *db.AutoSyncTask, name string) string {
+	if name == "" {
+		return name
+	}
+	ext := path.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	nb := strings.TrimSpace(asApplyRules(t, base))
+	nb = strings.NewReplacer("/", "_", "\\", "_", "\n", " ").Replace(nb)
+	if nb == "" {
+		return name
+	}
+	return nb + ext
+}
+
+// asRenameAttrs — document attributes madhla FileName replace karun navin attrs (original mutate hot nahi).
+// Returns: attrs, finalName ("" = filename attribute nahi).
+func asRenameAttrs(t *db.AutoSyncTask, attrs []tg.DocumentAttributeClass) ([]tg.DocumentAttributeClass, string) {
+	out := make([]tg.DocumentAttributeClass, 0, len(attrs))
+	final := ""
+	for _, a := range attrs {
+		if fa, ok := a.(*tg.DocumentAttributeFilename); ok {
+			final = asRenameFile(t, fa.FileName)
+			out = append(out, &tg.DocumentAttributeFilename{FileName: final})
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, final
 }
 
 // asCloneEntities — entities deep copy (transformTextEntities IN-PLACE modify karto; retry var double-shift nako).
@@ -615,6 +676,12 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			if err != nil {
 				return nil, cleanup, err
 			}
+			docAttrs, newName := asRenameAttrs(t, d.Attributes)
+			if newName != "" {
+				f.FileName = newName
+			} else {
+				f.FileName = asRenameFile(t, f.FileName)
+			}
 			onDl := func(w, tot int64) { asProgSub(tid, "⬇️ Download", w, tot) }
 			onUp := func(w, tot int64) { asProgSub(tid, "⬆️ Upload", w, tot) }
 			upFile, tmpPath, err := downloadAndReupload(ctx, ctx, c, dstC, f, onDl, onUp)
@@ -624,7 +691,7 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 			if err != nil {
 				return nil, cleanup, err
 			}
-			return &tg.InputMediaUploadedDocument{File: upFile, MimeType: d.MimeType, Attributes: d.Attributes}, cleanup, nil
+			return &tg.InputMediaUploadedDocument{File: upFile, MimeType: d.MimeType, Attributes: docAttrs}, cleanup, nil
 		}
 		return nil, cleanup, errAsUnsupported
 	}
@@ -682,12 +749,18 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 					name = fa.FileName
 				}
 			}
+			phAttrs, phName := asRenameAttrs(t, d.Attributes)
+			if phName != "" {
+				name = phName
+			} else {
+				name = asRenameFile(t, name)
+			}
 			_, data := asPlaceholderFor(name, d.MimeType)
 			up, err := uploader.NewUploader(api).FromBytes(ctx, name, data)
 			if err != nil {
 				return nil, err
 			}
-			return &tg.InputMediaUploadedDocument{File: up, MimeType: d.MimeType, Attributes: d.Attributes}, nil
+			return &tg.InputMediaUploadedDocument{File: up, MimeType: d.MimeType, Attributes: phAttrs}, nil
 		}
 		return nil, errAsUnsupported
 	}
