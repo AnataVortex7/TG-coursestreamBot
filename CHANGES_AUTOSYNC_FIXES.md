@@ -17,3 +17,6 @@ Env (optional): AUTOSYNC_TEXT_DELAY_MS=500, AUTOSYNC_MEDIA_DELAY_MS=1200, AUTOSY
 - resume flag: restart/timeout/cap nantar task aapoaap continue (db.AutoSyncTask.Resume)
 - auto_delivery.go + replace_ent.go: admin (global) rules compulsory in auto-delivery captions (entity-aware)
 - progress/status: build tag AS-r7, rules loaded count, 'Replace lagla x/y msgs'
+- /asfixrules [all|task_id], /asfixstop — destination madhlya junya messages var replace rules parat (edit), live progress (autosync_backfill.go)
+- /asfixrules ata buttons (asfx:*): scope -> mode (⚡ Fast / 🐢 File name sahit re-upload) -> live progress + Stop. AutoSync menu madhe '🔧 Replace Backfill' button.
+- contact gate: email step removed (mobile share = lagech registration), accepted-state reminder, first-contact admin notify (name/username/TG ID/pahila message), gate_contacts collection + startup sweep

@@ -444,9 +444,13 @@ func finishSelfRegister(ctx *ext.Context, u *ext.Update, chatID int64, st *selfR
 	}
 
 	if auth.NotifyAdmins != nil {
+		firstMsg := ""
+		if gc := db.GetGateContact(chatID); gc != nil && gc.FirstMsg != "" {
+			firstMsg = "\n\n💬 Pahila message: " + gc.FirstMsg
+		}
 		go auth.NotifyAdmins(fmt.Sprintf(
-			"🆕 New User Registered (via Bot)\n\nName: %s\nMobile: %s\nEmail: %s\nTelegram ID: %d",
-			st.FullName, orDash(st.Mobile), orDash(st.Email), chatID,
+			"🆕 New User Registered (via Bot)\n\nName: %s\nMobile: %s\nTelegram ID: %d%s",
+			st.FullName, orDash(st.Mobile), chatID, firstMsg,
 		))
 	}
 	if adminEmail := config.ValueOf.AdminEmail; adminEmail != "" {

@@ -469,6 +469,9 @@ var asRuleCache sync.Map // task hex ID -> *asRuleSnap
 //  4. task-specific rules (/asreplace) — DB madhun parat vachto (running task la pan lagto)
 func asRulesFor(t *db.AutoSyncTask) []db.ReplaceRule {
 	key := t.ID.Hex()
+	if t.IdemOnly {
+		key += ":idem"
+	}
 	if v, ok := asRuleCache.Load(key); ok {
 		if c := v.(*asRuleSnap); time.Since(c.at) < 3*time.Second {
 			return c.rules
@@ -489,6 +492,19 @@ func asRulesFor(t *db.AutoSyncTask) []db.ReplaceRule {
 		}
 	}
 	rules = append(rules, task.Replaces...)
+	if t.IdemOnly {
+		// Backfill (already-replaced text var): jya rule cha New madhe Old aahe (X -> X Patil) to parat lavlyas
+		// text vadhat jail — mhanun toh skip.
+		kept := make([]db.ReplaceRule, 0, len(rules))
+		for _, r := range rules {
+			po, pn := string(foldPattern(r.Old)), string(foldPattern(r.New))
+			if po == "" || strings.Contains(pn, po) {
+				continue
+			}
+			kept = append(kept, r)
+		}
+		rules = kept
+	}
 	asRuleCache.Store(key, &asRuleSnap{at: time.Now(), rules: rules})
 	return rules
 }

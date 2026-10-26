@@ -29,6 +29,7 @@ import (
 
 	"github.com/celestix/gotgproto/dispatcher"
 	"github.com/celestix/gotgproto/dispatcher/handlers"
+	"github.com/celestix/gotgproto/dispatcher/handlers/filters"
 	"github.com/celestix/gotgproto/ext"
 	"github.com/gotd/td/tg"
 	"go.mongodb.org/mongo-driver/bson"
@@ -173,7 +174,7 @@ func asButtonsMarkup() tg.ReplyMarkupClass {
 	return &tg.ReplyInlineMarkup{Rows: []tg.KeyboardButtonRow{
 		{Buttons: []tg.KeyboardButtonClass{btn("🔑 Add Userbot Login", "cmd:asaccount")}},
 		{Buttons: []tg.KeyboardButtonClass{btn("➕ New Task", "cmd:asadd"), btn("📋 Tasks", "cmd:autosync")}},
-		{Buttons: []tg.KeyboardButtonClass{btn("📊 Progress (Live)", "cmd:asprogress")}},
+		{Buttons: []tg.KeyboardButtonClass{btn("📊 Progress (Live)", "cmd:asprogress"), btn("🔧 Replace Backfill", "asfx:menu")}},
 		{Buttons: []tg.KeyboardButtonClass{btn("⬅️ Menu", "menu:root")}},
 	}}
 }
@@ -778,7 +779,7 @@ func cmdASList(ctx *ext.Context, u *ext.Update) error {
 		}
 		sb.WriteString(block)
 	}
-	sb.WriteString("\n/asrun /astoggle /astimes /asreplace /asreset /asdel")
+	sb.WriteString("\n/asrun /astoggle /astimes /asreplace /asreset /asdel /asfixrules")
 	asReplyWithButtons(ctx, u, sb.String())
 	return dispatcher.EndGroups
 }
@@ -850,6 +851,9 @@ func (m *command) LoadAutoSync(d dispatcher.Dispatcher) {
 	d.AddHandler(handlers.NewCommand("asreplace", adminOnly(cmdASReplace)))
 	d.AddHandler(handlers.NewCommand("asreset", adminOnly(cmdASReset)))
 	d.AddHandler(handlers.NewCommand("asdel", adminOnly(cmdASDel)))
+	d.AddHandler(handlers.NewCommand("asfixrules", adminOnly(cmdASFixRules)))
+	d.AddHandler(handlers.NewCommand("asfixstop", adminOnly(cmdASFixStop)))
+	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Prefix("asfx:"), handleASFixCb))
 
 	// Group -3 — menu pending (-2) ani relay (-1) chya aadhi: wizard che plain-text replies.
 	d.AddHandlerToGroup(handlers.NewMessage(nil, handleAutoSyncWizard), -3)

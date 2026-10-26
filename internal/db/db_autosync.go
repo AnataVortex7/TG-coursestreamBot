@@ -35,6 +35,7 @@ type AutoSyncTask struct {
 	LastStatus   string             `bson:"last_status"`
 	TotalCopied  int64              `bson:"total_copied"`
 	CreatedAt    time.Time          `bson:"created_at"`
+	IdemOnly     bool               `bson:"-"` // backfill: fakt idempotent rules (New madhe Old nasleli)
 	Resume       bool               `bson:"resume"` // run adhura (restart/timeout/cap) — scheduler aapoaap continue karel
 }
 
@@ -272,6 +273,36 @@ func AutoSyncLinkTry(taskID primitive.ObjectID, srcMsg int) {
 	ctx, cancel := Ctx()
 	defer cancel()
 	_, _ = colAutoSyncMap().UpdateOne(ctx, bson.M{"task_id": taskID, "src_msg_id": srcMsg}, bson.M{"$inc": bson.M{"link_tries": 1}})
+}
+
+// AutoSyncPair — source msg -> destination msg.
+type AutoSyncPair struct {
+	Src  int `bson:"src_msg_id"`
+	Dest int `bson:"dest_msg_id"`
+}
+
+// AutoSyncMapPage — destination msg id vadhtya kramane (afterDest nantarche) copy zalelya messages.
+func AutoSyncMapPage(taskID primitive.ObjectID, afterDest, limit int) []AutoSyncPair {
+	ctx, cancel := Ctx()
+	defer cancel()
+	cur, err := colAutoSyncMap().Find(ctx,
+		bson.M{"task_id": taskID, "dest_msg_id": bson.M{"$gt": afterDest}},
+		options.Find().SetSort(bson.D{{Key: "dest_msg_id", Value: 1}}).SetLimit(int64(limit)),
+	)
+	if err != nil {
+		return nil
+	}
+	defer cur.Close(ctx)
+	var out []AutoSyncPair
+	_ = cur.All(ctx, &out)
+	return out
+}
+
+func AutoSyncMapCount(taskID primitive.ObjectID) int {
+	ctx, cancel := Ctx()
+	defer cancel()
+	n, _ := colAutoSyncMap().CountDocuments(ctx, bson.M{"task_id": taskID, "dest_msg_id": bson.M{"$gt": 0}})
+	return int(n)
 }
 
 // AutoSyncMapDeleteFrom — reset sathi: src_msg_id > afterID che map entries kadhto (parat copy hotil).

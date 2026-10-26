@@ -56,6 +56,75 @@ func (m *command) LoadContactGate(d dispatcher.Dispatcher) {
 
 	d.AddHandlerToGroup(handlers.NewMessage(nil, contactGateMessage), -6)
 	d.AddHandler(handlers.NewCallbackQuery(filters.CallbackQuery.Prefix("cg:"), contactGateCallback))
+	go gateSweepStored() // aadhi verify zalele pan registration adhure — aata purna kara
+}
+
+// gateSweepStored — DB madhe verified mobile asleli pan registration/link na zaleli (gate_contacts) users cha
+// registration aapoaap purna karto ani user + admin la kalavto. Bot start nantar ekda.
+func gateSweepStored() {
+	defer func() { _ = recover() }()
+	time.Sleep(30 * time.Second)
+	if MainBotClient == nil {
+		return
+	}
+	for _, c := range db.ListUnregisteredVerifiedContacts(300) {
+		gateCompleteStored(c)
+		time.Sleep(1500 * time.Millisecond)
+	}
+}
+
+func gateCompleteStored(c db.GateContact) {
+	if linkedUser, _ := db.GetUserByTelegramID(c.TGID); linkedUser != nil {
+		db.MarkContactRegistered(c.TGID)
+		return
+	}
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = "Telegram User"
+	}
+	existing, _ := db.GetUserByMobileVariants(gateMobileVariants(c.Mobile))
+	if existing != nil {
+		if existing.TelegramID != 0 && existing.TelegramID != c.TGID {
+			return // dusrya Telegram shi linked — manual
+		}
+		if existing.TelegramID == 0 {
+			if err := db.SetUserTelegramID(existing.ID, c.TGID); err != nil {
+				return
+			}
+		}
+	} else {
+		if !db.GetSettingBool(db.SettingRegistrationOpen, true) {
+			return
+		}
+		pass, err := randomPassword()
+		if err != nil {
+			return
+		}
+		hash, err := auth.HashPassword(pass)
+		if err != nil {
+			return
+		}
+		nu, err := db.CreateUserFull("", name, c.Mobile, "", hash)
+		if err != nil {
+			return
+		}
+		if err := db.SetUserTelegramID(nu.ID, c.TGID); err != nil {
+			return
+		}
+	}
+	db.MarkContactRegistered(c.TGID)
+	gateMarkLinked(c.TGID)
+	_, _ = MainBotClient.CreateContext().SendMessage(c.TGID, &tg.MessagesSendMessageRequest{
+		Message:     "✅ Tumcha registration purna zale! Aadhi tumcha number verify zala hota, mhanun account aata activate kela. 🎉\n\n📚 Courses baghayla /courses vapra.",
+		ReplyMarkup: mainReplyKeyboardForUser(c.TGID),
+	})
+	if auth.NotifyAdmins != nil {
+		first := ""
+		if c.FirstMsg != "" {
+			first = "\n\n💬 Pahila message: " + c.FirstMsg
+		}
+		auth.NotifyAdmins(fmt.Sprintf("✅ Adhura registration purna kele (verified mobile DB madhe hota)\n\nName: %s\nMobile: %s\nTelegram ID: %d%s", name, c.Mobile, c.TGID, first))
+	}
 }
 
 // ─── State ───────────────────────────────────────────────────────────────────
@@ -88,7 +157,37 @@ var (
 	gateLinked    = map[int64]time.Time{} // positive cache: linked users
 	gateLastPopup = map[int64]time.Time{} // popup flood control
 	gateLinkReqAt = map[int64]time.Time{} // admin link request पाठवलेले users (24h pass-through)
+	gateAccepted  = map[int64]time.Time{} // Accept dabavlele (number share baki) — popup parat parat nako
 )
+
+const gateAcceptedTTL = 30 * time.Minute
+
+func gateIsAccepted(chatID int64) bool {
+	gateMu.Lock()
+	defer gateMu.Unlock()
+	t, ok := gateAccepted[chatID]
+	if !ok {
+		return false
+	}
+	if time.Now().After(t) {
+		delete(gateAccepted, chatID)
+		return false
+	}
+	return true
+}
+
+func gateSetAccepted(chatID int64, on bool) {
+	gateMu.Lock()
+	if on {
+		if len(gateAccepted) > 10000 {
+			gateAccepted = map[int64]time.Time{}
+		}
+		gateAccepted[chatID] = time.Now().Add(gateAcceptedTTL)
+	} else {
+		delete(gateAccepted, chatID)
+	}
+	gateMu.Unlock()
+}
 
 func gateSetPending(chatID int64, st *gateState) {
 	st.ExpiresAt = time.Now().Add(gateStateTTL)
@@ -209,6 +308,9 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.ContinueGroups
 	}
 
+	// 0) Pahilyanda alelya (unregistered) user cha naav + Telegram ID + PAHILA message admin la — registration kela kiva nahi tari.
+	go gateNotifyFirstContact(u, chatID)
+
 	// 1) Contact share आला
 	if c, ok := msg.Media.(*tg.MessageMediaContact); ok {
 		return gateHandleContact(ctx, u, chatID, c)
@@ -258,9 +360,87 @@ func contactGateMessage(ctx *ext.Context, u *ext.Update) error {
 		return dispatcher.ContinueGroups
 	}
 
-	// 4) Popup
+	// 4) Accept zalyavar user ne number share na karta kahi lihile => same popup nahi, fakt share-button reminder.
+	if gateIsAccepted(chatID) {
+		if gatePopupAllowed(chatID) {
+			extra := ""
+			if gateLooksLikeMobile(txt) {
+				extra = "\n\n🔒 Number type kelela chalat nahi — verification sathi khalcha button vapra."
+			}
+			_, _ = ctx.Reply(u,
+				ext.ReplyTextString("📱 Registration purna karnyasathi khalcha '📱 Share my number' button daba."+extra),
+				&ext.ReplyOpts{Markup: gateShareKeyboard()})
+		}
+		return dispatcher.EndGroups
+	}
+
+	// 5) Popup
 	gateSendPopup(ctx, u, chatID)
 	return dispatcher.EndGroups
+}
+
+// gateLooksLikeMobile — user ne number type kela (7-15 digits).
+func gateLooksLikeMobile(s string) bool {
+	n := 0
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			n++
+		case r == '+' || r == ' ' || r == '-':
+		default:
+			return false
+		}
+	}
+	return n >= 7 && n <= 15
+}
+
+// gateDescribeMsg — user cha pahila message (text kiva media prakar) admin sathi.
+func gateDescribeMsg(msg *tg.Message) string {
+	if t := strings.TrimSpace(msg.Message); t != "" {
+		r := []rune(t)
+		if len(r) > 600 {
+			t = string(r[:600]) + "…"
+		}
+		return t
+	}
+	switch msg.Media.(type) {
+	case *tg.MessageMediaPhoto:
+		return "[photo]"
+	case *tg.MessageMediaDocument:
+		return "[file/document/video]"
+	case *tg.MessageMediaContact:
+		return "[contact share]"
+	case *tg.MessageMediaGeo, *tg.MessageMediaVenue:
+		return "[location]"
+	case nil:
+		return "[empty]"
+	}
+	return "[media]"
+}
+
+// gateNotifyFirstContact — fakt pahilyanda (DB madhe nond nasel tevha) admin la pathavto.
+func gateNotifyFirstContact(u *ext.Update, chatID int64) {
+	defer func() { _ = recover() }()
+	if auth.NotifyAdmins == nil || u.EffectiveMessage == nil {
+		return
+	}
+	tu := u.EffectiveUser()
+	name := strings.TrimSpace(tu.FirstName + " " + tu.LastName)
+	if name == "" {
+		name = "Telegram User"
+	}
+	first := gateDescribeMsg(u.EffectiveMessage.Message)
+	isNew, err := db.RecordFirstContact(chatID, name, tu.Username, first)
+	if err != nil || !isNew {
+		return
+	}
+	uname := "—"
+	if tu.Username != "" {
+		uname = "@" + tu.Username
+	}
+	auth.NotifyAdmins(fmt.Sprintf(
+		"👋 Navin user ne bot suru kela\n\n👤 Name: %s\n🔗 Username: %s\n🆔 Telegram ID: %d\n\n💬 Pahila message:\n%s\n\n⏳ Registration: pending (Accept / number share baki)",
+		name, uname, chatID, first))
 }
 
 // gateIsPrivateChat — true फक्त जेव्हा message bot च्या private chat मध्ये आला असेल
@@ -300,8 +480,7 @@ const gatePopupText = "🔐 Verification आवश्यक\n\n" +
 	"Spam आणि misuse टाळण्यासाठी हा bot वापरायला तुमचा Telegram account तुमच्या mobile number शी जोडावा लागतो.\n\n" +
 	"आम्ही घेऊ:\n" +
 	"• Telegram नाव आणि ID\n" +
-	"• Mobile number (Telegram चा contact share button वापरून)\n" +
-	"• Email (optional)\n\n" +
+	"• Mobile number (Telegram चा contact share button वापरून)\n\n" +
 	"हे वापरायला तुम्ही Accept करता का?"
 
 func gatePopupMarkup() *tg.ReplyInlineMarkup {
@@ -407,6 +586,7 @@ func contactGateCallback(ctx *ext.Context, u *ext.Update) error {
 			editCatalogMessage(ctx, u, "✅ तुमचा account आधीच verified आहे.", nil)
 			return dispatcher.EndGroups
 		}
+		gateSetAccepted(chatID, true)
 		editCatalogMessage(ctx, u, "✅ Accept केलं. आता खालचं '📱 Share my number' बटण दाबा.", nil)
 		_, _ = ctx.SendMessage(chatID, &tg.MessagesSendMessageRequest{
 			Message:     "👇 फक्त तुमचा स्वतःचा number share करा:",
@@ -414,6 +594,7 @@ func contactGateCallback(ctx *ext.Context, u *ext.Update) error {
 		})
 
 	case "cg:reject":
+		gateSetAccepted(chatID, false)
 		gateClearPending(chatID)
 		gateMu.Lock()
 		delete(gateLastPopup, chatID) // पुढच्या message वर popup लगेच परत यावा
@@ -451,6 +632,10 @@ func gateHandleContact(ctx *ext.Context, u *ext.Update, chatID int64, c *tg.Mess
 		fullName = "Telegram User"
 	}
 
+	// Verified mobile lagech DB madhe — registration adhura rahila tari harvnar nahi.
+	db.SaveVerifiedContact(chatID, mobile, fullName)
+	gateSetAccepted(chatID, false)
+
 	existing, err := db.GetUserByMobileVariants(gateMobileVariants(mobile))
 	if err != nil {
 		reply(ctx, u, "❌ Server error, थोड्या वेळाने पुन्हा प्रयत्न करा.")
@@ -469,12 +654,12 @@ func gateHandleContact(ctx *ext.Context, u *ext.Update, chatID int64, c *tg.Mess
 			&ext.ReplyOpts{Markup: &tg.ReplyKeyboardHide{}})
 		return dispatcher.EndGroups
 	}
-	gateSetPending(chatID, &gateState{Phase: gatePhaseNewEmail, Mobile: mobile, FullName: fullName})
-	_, _ = ctx.Reply(u,
-		ext.ReplyTextString("✅ Number verify झाला.\n\n"+
-			"📧 तुमचा Email पाठवा (website वर आधी account असेल तर तोच email).\n"+
-			"Email नको असेल तर खालचं ⏭ Skip बटण दाबा."),
-		&ext.ReplyOpts{Markup: gateSkipKeyboard()})
+	// Email nako — verified mobile + Telegram naav var lagech registration + auto-link.
+	finishSelfRegister(ctx, u, chatID, &selfRegState{FullName: fullName, Mobile: mobile})
+	if linked, _ := gateIsLinked(chatID); linked {
+		db.MarkContactRegistered(chatID)
+		_, _ = ctx.Reply(u, ext.ReplyTextString("👇 Menu"), &ext.ReplyOpts{Markup: mainReplyKeyboardForUser(chatID)})
+	}
 	return dispatcher.EndGroups
 }
 
@@ -513,14 +698,7 @@ func gateLinkExisting(ctx *ext.Context, u *ext.Update, chatID int64, existing *d
 				"🔗 Auto-linked (mobile verified)\n\nName: %s\nMobile: %s\nTelegram ID: %d",
 				existing.FullName, mobile, chatID))
 		}
-		if strings.TrimSpace(existing.Email) == "" {
-			// Account ला email नाही → optional विचारतो
-			gateSetPending(chatID, &gateState{Phase: gatePhaseAddEmail, UserID: existing.ID})
-			_, _ = ctx.Reply(u,
-				ext.ReplyTextString("✅ Account link झालं!\n\n📧 तुमच्या account ला Email जोडायचा आहे का? Email पाठवा, नको असेल तर खालचं ⏭ Skip बटण दाबा."),
-				&ext.ReplyOpts{Markup: gateSkipKeyboard()})
-			return dispatcher.EndGroups
-		}
+		db.MarkContactRegistered(chatID)
 		gateFinish(ctx, u, chatID, "✅ Account link झालं! 🎉")
 	}
 	return dispatcher.EndGroups
