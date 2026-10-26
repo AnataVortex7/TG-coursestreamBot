@@ -369,6 +369,8 @@ func adSendOriginal(ctx context.Context, gctx *ext.Context, client *gotgproto.Cl
 	if caption == "" {
 		caption, entities = srcCaption, ents
 	}
+	// Admin (global) replace rules COMPULSORY — title / source caption donhi var.
+	caption, entities = applyAdminReplacesEnt(caption, entities)
 	var sentID int
 	err = adWithFlood(ctx, func() error {
 		upd, e := api.MessagesSendMedia(gctx, &tg.MessagesSendMediaRequest{
@@ -438,6 +440,7 @@ func adResolvePending(ctx context.Context, gctx *ext.Context, client *gotgproto.
 			db.TouchADItem(it.ID)
 			continue
 		}
+		caption, ents = applyAdminReplacesEnt(caption, ents) // admin rules compulsory
 		editErr := adWithFlood(ctx, func() error {
 			_, e := api.MessagesEditMessage(gctx, &tg.MessagesEditMessageRequest{
 				Peer: peer, ID: it.SentMsgID, Media: media, Message: caption, Entities: ents,

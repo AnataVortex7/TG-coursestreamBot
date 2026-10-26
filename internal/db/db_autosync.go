@@ -35,6 +35,7 @@ type AutoSyncTask struct {
 	LastStatus   string             `bson:"last_status"`
 	TotalCopied  int64              `bson:"total_copied"`
 	CreatedAt    time.Time          `bson:"created_at"`
+	Resume       bool               `bson:"resume"` // run adhura (restart/timeout/cap) — scheduler aapoaap continue karel
 }
 
 func colAutoSyncTasks() *mongo.Collection  { return Database.Collection("autosync_tasks") }

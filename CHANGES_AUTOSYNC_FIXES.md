@@ -14,3 +14,6 @@ Files badalleli / navin:
 - internal/utils/helpers.go              — FloodWait notify hook
 
 Env (optional): AUTOSYNC_TEXT_DELAY_MS=500, AUTOSYNC_MEDIA_DELAY_MS=1200, AUTOSYNC_STALL_SEC=120
+- resume flag: restart/timeout/cap nantar task aapoaap continue (db.AutoSyncTask.Resume)
+- auto_delivery.go + replace_ent.go: admin (global) rules compulsory in auto-delivery captions (entity-aware)
+- progress/status: build tag AS-r7, rules loaded count, 'Replace lagla x/y msgs'

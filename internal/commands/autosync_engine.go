@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"EverythingSuckz/fsb/internal/db"
@@ -492,6 +493,22 @@ func asRulesFor(t *db.AutoSyncTask) []db.ReplaceRule {
 	return rules
 }
 
+// asBuildTag — status madhe dakhavto: kontha build chalat ahe te kalnyasathi.
+const asBuildTag = "AS-r7-2026-10-25"
+
+type asRunStat struct{ seen, changed int64 }
+
+var asStats sync.Map // task hex ID -> *asRunStat
+
+func asStatAdd(tid string, changed bool) {
+	v, _ := asStats.LoadOrStore(tid, &asRunStat{})
+	st := v.(*asRunStat)
+	atomic.AddInt64(&st.seen, 1)
+	if changed {
+		atomic.AddInt64(&st.changed, 1)
+	}
+}
+
 // asApplyRules — text var sarva rules (longest-first, applyRules madhe sort hoto).
 func asApplyRules(t *db.AutoSyncTask, s string) string {
 	return applyRules(s, asRulesFor(t))
@@ -647,6 +664,9 @@ func asSendOne(ctx context.Context, c *gotgproto.Client, t *db.AutoSyncTask, dst
 	tid := t.ID.Hex()
 
 	newText, entities, unresN := asTransformText(t, m)
+	if opt.EditID == 0 && !opt.Placeholder {
+		asStatAdd(tid, newText != m.Message)
+	}
 	if opt.Unresolved != nil {
 		*opt.Unresolved = unresN
 	}
@@ -1088,7 +1108,7 @@ func asFinish(t *db.AutoSyncTask, status string, copied int, notify bool) string
 // asFinishEx — stamp=false: last_run_at set karat nahi, mhanje scheduler lavkarch parat chalvel.
 func asFinishEx(t *db.AutoSyncTask, status string, copied int, notify, stamp bool) string {
 	asProgFinish(t.ID.Hex())
-	f := bson.M{"last_status": status}
+	f := bson.M{"last_status": status, "resume": !stamp}
 	if stamp {
 		f["last_run_at"] = time.Now()
 	}
@@ -1128,8 +1148,12 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 
 	ctx, cancel := context.WithTimeout(parent, 6*time.Hour)
 	defer cancel()
+	// Run suru zala: resume=true thev. Process kill/crash zala tari restart nantar task aapoaap continue hoil.
+	// Run purna zala kiva non-resumable fail zala tar asFinishEx resume=false karto.
+	_ = db.SetAutoSyncFields(t.ID, bson.M{"resume": true})
 
 	ctx = context.WithValue(ctx, asTaskKey{}, taskID) // watchdog (asGuard) sathi
+	asStats.Store(taskID, &asRunStat{})
 	asProgStart(taskID, t.Name, t.Mode)
 	defer asProgFinish(taskID)
 
@@ -1493,6 +1517,18 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	if linksFixed > 0 {
 		status += fmt.Sprintf("\n🔗 %d message madhle links destination cha navin links ne fix kele.", linksFixed)
 	}
+	{
+		seen, changed := int64(0), int64(0)
+		if v, ok := asStats.Load(taskID); ok {
+			st := v.(*asRunStat)
+			seen, changed = atomic.LoadInt64(&st.seen), atomic.LoadInt64(&st.changed)
+		}
+		nRules := len(asRulesFor(t))
+		status += fmt.Sprintf("\n🏷 Build %s | 📏 Replace rules loaded: %d | ✏️ Replace lagla: %d/%d messages", asBuildTag, nRules, changed, seen)
+		if nRules == 0 {
+			status += "\n⚠️ Replace rules 0 load zale — /replace madhe rules ahet ka tapasa (admin = global)."
+		}
+	}
 	if phNew > 0 {
 		status += fmt.Sprintf("\n🧩 %d media copy zali nahi — same-type placeholder pathvla (jagevar rahila). Pudhchya run madhe asli media replace hoil.", phNew)
 	}
@@ -1525,6 +1561,12 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 		}
 	} else {
 		asConnRetry.Delete(taskID)
+	}
+	// Adhura run (restart/shutdown, 6h timeout, per-run cap) — fatal nasel tar slot chi vaat baghu nako:
+	// resume=true thevun scheduler (30s tick) lagech continue karel.
+	if !connAbort && fatalHint == "" && !deadSession && (ctx.Err() != nil || remaining > 0) {
+		stamp = false
+		status += "\n🔁 Run adhura rahila (restart / 6h limit / per-run cap) — aapoaap continue hoil."
 	}
 	notify := manual || copied > 0 || errCount > 0 || !completed || fatalHint != ""
 
@@ -1597,6 +1639,9 @@ func asParseHM(s string) (int, int, bool) {
 
 // asDue — aajcha konta hi slot (IST) nighun gela asel ani to slot var run zala nasel tar true.
 func asDue(t *db.AutoSyncTask, now time.Time) bool {
+	if t.Resume {
+		return true // adhura run (restart / timeout / cap) — slot chi vaat baghu nako, lagech continue
+	}
 	loc := istLoc()
 	n := now.In(loc)
 	for _, hm := range t.Times {

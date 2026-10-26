@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"EverythingSuckz/fsb/config"
@@ -223,6 +224,18 @@ func asRenderProgress(taskHex string, live bool) string {
 			pct := snap.Done * 100 / snap.Total
 			sb.WriteString(fmt.Sprintf("▶️ RUNNING (%s mode)\n[%s] %d%%  %d/%d\n", snap.Mode, asBar(snap.Done, snap.Total, 12), pct, snap.Done, snap.Total))
 			sb.WriteString(fmt.Sprintf("✅ Copied %d | ⏭ Skipped %d | ❌ Errors %d\n", snap.Copied, snap.Skipped, snap.Errors))
+			{
+				var seen, changed int64
+				if v, ok := asStats.Load(taskHex); ok {
+					st := v.(*asRunStat)
+					seen, changed = atomic.LoadInt64(&st.seen), atomic.LoadInt64(&st.changed)
+				}
+				sb.WriteString(fmt.Sprintf("✏️ Replace lagla %d/%d msgs | 📏 Rules %d | 🏷 %s\n", changed, seen, len(asRulesFor(t)), asBuildTag))
+			}
+			// Warning phases (atakla / reconnect / FloodWait / topic) — message loop madhe pan dakhav.
+			if ph := snap.Phase; strings.HasPrefix(ph, "⚠️") || strings.HasPrefix(ph, "🔄") || strings.HasPrefix(ph, "⏳") || strings.HasPrefix(ph, "📂") {
+				sb.WriteString(ph + "\n")
+			}
 			rem := snap.Total - snap.Done
 			if rem < 0 {
 				rem = 0
@@ -251,7 +264,9 @@ func asRenderProgress(taskHex string, live bool) string {
 		}
 	} else {
 		sb.WriteString("⏸ Ata task chalu nahi\n")
-		if nr, ok := asNextRun(t, time.Now()); ok {
+		if t.Resume && t.Enabled {
+			sb.WriteString("🔁 Adhura run — aapoaap continue hoil (~30 sec madhe)\n")
+		} else if nr, ok := asNextRun(t, time.Now()); ok {
 			sb.WriteString("🕒 Next run: " + nr.In(istLoc()).Format("02 Jan, 15:04") + " IST\n")
 		}
 		if !t.Enabled {
