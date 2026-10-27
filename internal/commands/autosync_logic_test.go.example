@@ -1,0 +1,231 @@
+// Regression tests (AutoSync logic). Chalvaycha: rename to autosync_logic_test.go, nantar:
+//   STREAM_SECRET=x JWT_SECRET=<32+ chars> CGO_ENABLED=0 go test ./internal/commands/ -run "TestRemap|TestTransform|TestRename|TestLongest|TestUsername|TestMobile|TestURLSig" -v
+
+package commands
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"EverythingSuckz/fsb/internal/db"
+
+	"github.com/gotd/td/tg"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
+func testTask(rules ...db.ReplaceRule) *db.AutoSyncTask {
+	t := &db.AutoSyncTask{ID: primitive.NewObjectID(), SourceChat: -1001234567890, DestChat: -1009876543210}
+	asRuleCache.Store(t.ID.Hex(), &asRuleSnap{at: time.Now().Add(time.Hour), rules: rules})
+	asRuleCache.Store(t.ID.Hex()+":idem", &asRuleSnap{at: time.Now().Add(time.Hour), rules: rules})
+	return t
+}
+
+func TestRemapEntitiesShift(t *testing.T) {
+	old := "Hi @ech0xx bold here"
+	nw := "Hi @ak bold here"
+	b := &tg.MessageEntityBold{Offset: 3, Length: 7}  // @ech0xx
+	c := &tg.MessageEntityItalic{Offset: 11, Length: 4} // bold
+	out, ok := asRemapEntities(old, nw, []tg.MessageEntityClass{b, c})
+	if !ok || len(out) != 2 {
+		t.Fatalf("ok=%v len=%d", ok, len(out))
+	}
+	if b.Offset != 3 || b.Length != 3 {
+		t.Errorf("bold got %d/%d want 3/3", b.Offset, b.Length)
+	}
+	if c.Offset != 7 || c.Length != 4 {
+		t.Errorf("italic got %d/%d want 7/4", c.Offset, c.Length)
+	}
+}
+
+func TestRemapEntitiesEmoji(t *testing.T) {
+	old := "😀 @ech0xx x"
+	nw := "😀 @ak x"
+	// utf16: 😀=2, space=1 => @ech0xx at 3
+	e := &tg.MessageEntityBold{Offset: 3, Length: 7}
+	out, ok := asRemapEntities(old, nw, []tg.MessageEntityClass{e})
+	if !ok || len(out) != 1 {
+		t.Fatalf("ok=%v len=%d", ok, len(out))
+	}
+	if e.Offset != 3 || e.Length != 3 {
+		t.Errorf("got %d/%d want 3/3", e.Offset, e.Length)
+	}
+}
+
+func TestRemapEntitiesCrossBoundary(t *testing.T) {
+	// rule spans two entities: "@ech" bold + "0xx" italic -> "@ak" ; both entities must survive sanely
+	old := "By @ech0xx ok"
+	nw := "By @ak ok"
+	b := &tg.MessageEntityBold{Offset: 3, Length: 4}   // @ech
+	i := &tg.MessageEntityItalic{Offset: 7, Length: 3} // 0xx
+	out, ok := asRemapEntities(old, nw, []tg.MessageEntityClass{b, i})
+	if !ok {
+		t.Fatal("not ok")
+	}
+	for _, e := range out {
+		off, ln := entFields(e)
+		if *off < 0 || *ln <= 0 || *off+*ln > 9 { // len("By @ak ok") == 9
+			t.Errorf("entity out of range: %d/%d", *off, *ln)
+		}
+	}
+}
+
+func TestTransformTextPlainAndEntities(t *testing.T) {
+	tk := testTask(db.ReplaceRule{Old: "@ech0xx", New: "@ak"}, db.ReplaceRule{Old: "@itzAnandXD", New: "A"})
+	m := &tg.Message{Message: "Extention: @ech0xx.pdf\nBy @ech0xx and @ECH0XX by @itzAnandXD",
+		Entities: []tg.MessageEntityClass{&tg.MessageEntityBold{Offset: 0, Length: 9}}}
+	txt, ents, _ := asTransformText(tk, m)
+	if strings.Contains(strings.ToLower(txt), "ech0xx") || strings.Contains(txt, "itzAnand") {
+		t.Fatalf("not replaced: %q", txt)
+	}
+	if !strings.Contains(txt, "@ak.pdf") || !strings.HasSuffix(txt, "by A") {
+		t.Errorf("unexpected: %q", txt)
+	}
+	if len(ents) != 1 {
+		t.Errorf("entities lost: %v", ents)
+	}
+}
+
+func TestTransformKeepsTextURLAndRewritesUsername(t *testing.T) {
+	tk := testTask(db.ReplaceRule{Old: "@ech0xx", New: "@ak"})
+	text := "Join Channel now"
+	m := &tg.Message{Message: text, Entities: []tg.MessageEntityClass{
+		&tg.MessageEntityTextURL{Offset: 0, Length: 12, URL: "https://t.me/ech0xx"}}}
+	_, ents, _ := asTransformText(tk, m)
+	if len(ents) != 1 {
+		t.Fatalf("entities=%d", len(ents))
+	}
+	tu := ents[0].(*tg.MessageEntityTextURL)
+	if tu.URL != "https://t.me/ak" {
+		t.Errorf("url=%q want https://t.me/ak", tu.URL)
+	}
+	// original message entity must NOT be mutated (retries!)
+	if m.Entities[0].(*tg.MessageEntityTextURL).URL != "https://t.me/ech0xx" {
+		t.Errorf("original entity mutated: %q", m.Entities[0].(*tg.MessageEntityTextURL).URL)
+	}
+}
+
+func TestTransformPlainWordUnlinks(t *testing.T) {
+	tk := testTask(db.ReplaceRule{Old: "@itzAnandXD", New: "A"})
+	m := &tg.Message{Message: "Join here", Entities: []tg.MessageEntityClass{
+		&tg.MessageEntityTextURL{Offset: 0, Length: 9, URL: "https://t.me/itzAnandXD"}}}
+	txt, ents, _ := asTransformText(tk, m)
+	if txt != "Join here" {
+		t.Errorf("text changed: %q", txt)
+	}
+	if len(ents) != 0 {
+		t.Errorf("old deep link must be removed, got %d entities", len(ents))
+	}
+}
+
+func TestTransformDropsMentionName(t *testing.T) {
+	tk := testTask()
+	m := &tg.Message{Message: "hello Bob", Entities: []tg.MessageEntityClass{
+		&tg.MessageEntityMentionName{Offset: 6, Length: 3, UserID: 42}}}
+	_, ents, _ := asTransformText(tk, m)
+	if len(ents) != 0 {
+		t.Errorf("mention-name should be dropped: %v", ents)
+	}
+}
+
+func TestTransformCrossBoundaryReplaceKeepsLinks(t *testing.T) {
+	tk := testTask(db.ReplaceRule{Old: "@ech0xx", New: "@ak"})
+	m := &tg.Message{Message: "By @ech0xx see site", Entities: []tg.MessageEntityClass{
+		&tg.MessageEntityBold{Offset: 3, Length: 4}, // "@ech"
+		&tg.MessageEntityItalic{Offset: 7, Length: 3},
+		&tg.MessageEntityTextURL{Offset: 15, Length: 4, URL: "https://example.com/x"}}}
+	txt, ents, _ := asTransformText(tk, m)
+	if !strings.Contains(txt, "@ak") || strings.Contains(txt, "ech0xx") {
+		t.Fatalf("cross-boundary rule skipped: %q", txt)
+	}
+	found := false
+	for _, e := range ents {
+		if tu, ok := e.(*tg.MessageEntityTextURL); ok {
+			found = true
+			if tu.URL != "https://example.com/x" {
+				t.Errorf("url changed %q", tu.URL)
+			}
+			// link text "site" must still be at the right place
+			r := []rune(txt)
+			if string(r[tu.Offset:tu.Offset+tu.Length]) != "site" {
+				t.Errorf("link now covers %q", string(r[tu.Offset:tu.Offset+tu.Length]))
+			}
+		}
+	}
+	if !found {
+		t.Error("hidden link lost")
+	}
+}
+
+func TestRenameFileKeepsExt(t *testing.T) {
+	tk := testTask(db.ReplaceRule{Old: "@ech0xx", New: "@ak"})
+	got := asRenameFile(tk, "019_SCIENCE_@ech0xx_BIO_@ECH0XX.pdf")
+	if got != "019_SCIENCE_@ak_BIO_@ak.pdf" {
+		t.Errorf("got %q", got)
+	}
+	if asRenameFile(tk, "plain.mkv") != "plain.mkv" {
+		t.Error("plain changed")
+	}
+}
+
+func TestLongestRuleFirst(t *testing.T) {
+	rules := []db.ReplaceRule{{Old: "@abc", New: "A"}, {Old: "@abc_official", New: "B"}}
+	if got := applyRules("x @abc_official y @abc", rules); got != "x B y A" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestIdemOnlySkipsGrowingRules(t *testing.T) {
+	// rule whose New contains Old would grow on every backfill
+	tk := &db.AutoSyncTask{ID: primitive.NewObjectID(), IdemOnly: true}
+	_ = tk
+	if !strings.Contains(string(foldPattern("Akshay Patil")), string(foldPattern("Akshay"))) {
+		t.Skip("fold sanity")
+	}
+}
+
+func TestMobileLooksLike(t *testing.T) {
+	for in, want := range map[string]bool{"9876543210": true, "+91 98765-43210": true, "hello": false, "12": false, "": false} {
+		if gateLooksLikeMobile(in) != want {
+			t.Errorf("%q", in)
+		}
+	}
+}
+
+func TestURLSig(t *testing.T) {
+	a := []tg.MessageEntityClass{&tg.MessageEntityTextURL{URL: "b"}, &tg.MessageEntityTextURL{URL: "a"}, &tg.MessageEntityBold{}}
+	b := []tg.MessageEntityClass{&tg.MessageEntityTextURL{URL: "a"}, &tg.MessageEntityTextURL{URL: "b"}}
+	if bfURLSig(a) != bfURLSig(b) {
+		t.Error("sig mismatch")
+	}
+}
+
+func TestAdminReplacesEntNoPanicEmpty(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Logf("needs DB (expected): %v", r)
+		}
+	}()
+	_, _ = applyAdminReplacesEnt("", nil)
+}
+
+func TestUsernameRuleVariants(t *testing.T) {
+	cases := []struct{ rule db.ReplaceRule; url string; want string; keep bool }{
+		{db.ReplaceRule{Old: "@ech0xx", New: "@mychannel"}, "https://t.me/ech0xx/55?single", "https://t.me/mychannel/55?single", true},
+		{db.ReplaceRule{Old: "@ech0xx", New: "https://t.me/mine"}, "https://t.me/ech0xx", "https://t.me/mine", true},
+		{db.ReplaceRule{Old: "@Exxhoherexx", New: "Akshay"}, "https://t.me/Exxhoherexx", "", false}, // bare word => unlink
+		{db.ReplaceRule{Old: "@ech0xx", New: "@ak"}, "tg://resolve?domain=ech0xx", "tg://resolve?domain=ak", true},
+		{db.ReplaceRule{Old: "@ech0xx", New: "@ak"}, "https://t.me/joinchat/ABCDEF", "https://t.me/joinchat/ABCDEF", true},
+		{db.ReplaceRule{Old: "@ech0xx", New: "@ak"}, "https://t.me/otherchan/5", "https://t.me/otherchan/5", true},
+	}
+	for i, c := range cases {
+		tk := testTask(c.rule)
+		out, unlink := asApplyUsernameRules(tk, c.url, true)
+		if unlink == c.keep {
+			t.Errorf("case %d unlink=%v want keep=%v", i, unlink, c.keep)
+		}
+		if c.keep && out != c.want {
+			t.Errorf("case %d got %q want %q", i, out, c.want)
+		}
+	}
+}

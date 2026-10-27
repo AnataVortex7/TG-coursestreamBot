@@ -1580,7 +1580,8 @@ func runAutoSyncTask(parent context.Context, taskID string, manual bool) string 
 	}
 	// Adhura run (restart/shutdown, 6h timeout, per-run cap) — fatal nasel tar slot chi vaat baghu nako:
 	// resume=true thevun scheduler (30s tick) lagech continue karel.
-	if !connAbort && fatalHint == "" && !deadSession && (ctx.Err() != nil || remaining > 0) {
+	// progress zala asel (kiva shutdown/timeout) tarach — nahitar 0-progress run var 30s la parat parat loop lagel.
+	if !connAbort && fatalHint == "" && !deadSession && (ctx.Err() != nil || (remaining > 0 && (copied > 0 || skipped > 0))) {
 		stamp = false
 		status += "\n🔁 Run adhura rahila (restart / 6h limit / per-run cap) — aapoaap continue hoil."
 	}

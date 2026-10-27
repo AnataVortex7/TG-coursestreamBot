@@ -589,8 +589,8 @@ func bfRunTask(ctx context.Context, t *db.AutoSyncTask, st *bfStats, seenDest ma
 		msgs := bfMsgs(res)
 		if len(msgs) == 0 {
 			emptyRuns++
-			if id > maxMapped && emptyRuns >= 3 {
-				break // destination cha shevat
+			if id > maxMapped && emptyRuns >= 10 { // 1000 sallagpane rikame IDs
+				break // destination cha shevat (gaps/deleted nantar)
 			}
 		} else {
 			emptyRuns = 0

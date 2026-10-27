@@ -75,6 +75,27 @@ func adItems() *mongo.Collection   { return Database.Collection("auto_delivery_i
 
 var adIndexOnce sync.Once
 
+// adClaimLease — "sending" claim kiti vel valid (nantar dusra tick punha ghet).
+const adClaimLease = 5 * time.Minute
+
+// ReleaseStaleADClaims — bot restart/crash madhe adaklelya "sending" claims sodto (startup var).
+// olderThan peksha junya claims fakt; nave (dusrya live instance che) tasech rahtat.
+func ReleaseStaleADClaims(olderThan time.Duration) int64 {
+	ctx, cancel := Ctx()
+	defer cancel()
+	res, err := adItems().DeleteMany(ctx, bson.M{"state": ADStateSending, "updated_at": bson.M{"$lt": time.Now().Add(-olderThan)}})
+	if err != nil {
+		return 0
+	}
+	return res.DeletedCount
+}
+
+// ADItemInFlight — ha item "sending" (pathavna chalu / adakla) state madhe aahe ka.
+func ADItemInFlight(userID, courseID primitive.ObjectID, messageID int) bool {
+	it := GetADItem(userID, courseID, messageID)
+	return it != nil && it.State == ADStateSending
+}
+
 // EnsureAutoDeliveryIndexes -- unique indexes (ekda).
 func EnsureAutoDeliveryIndexes() {
 	adIndexOnce.Do(func() {
@@ -318,7 +339,7 @@ func ListADCoursesForUser(userID primitive.ObjectID) []ADCourse {
 
 // ClaimADItem -- (user, course, message) pathavnyacha "haqq" atomically ghya.
 // true = tumhi pathava. false = aadhich purna zala / dusra instance pathavtoy.
-// 10 minutanpekshaa junya adaklelya ("sending") claim punha ghetla jato (crash/redeploy nantar).
+// adClaimLease (5 min) peksha junya adaklelya ("sending") claim punha ghetla jato (crash/redeploy nantar).
 func ClaimADItem(userID, courseID primitive.ObjectID, messageID int, chatID int64) bool {
 	ctx, cancel := Ctx()
 	defer cancel()
@@ -335,7 +356,7 @@ func ClaimADItem(userID, courseID primitive.ObjectID, messageID int, chatID int6
 	}
 	res := adItems().FindOneAndUpdate(ctx,
 		bson.M{"user_id": userID, "course_id": courseID, "message_id": messageID,
-			"state": ADStateSending, "updated_at": bson.M{"$lt": now.Add(-10 * time.Minute)}},
+			"state": ADStateSending, "updated_at": bson.M{"$lt": now.Add(-adClaimLease)}},
 		bson.M{"$set": bson.M{"updated_at": now}})
 	return res.Err() == nil
 }

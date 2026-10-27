@@ -8,6 +8,7 @@
 package db
 
 import (
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -282,9 +283,16 @@ type AutoSyncPair struct {
 }
 
 // AutoSyncMapPage — destination msg id vadhtya kramane (afterDest nantarche) copy zalelya messages.
+var autoSyncMapDestIdxOnce sync.Once
+
 func AutoSyncMapPage(taskID primitive.ObjectID, afterDest, limit int) []AutoSyncPair {
 	ctx, cancel := Ctx()
 	defer cancel()
+	// (task_id, dest_msg_id) index — motha map madhe sorted paging fast ani "sort memory limit" nahi.
+	autoSyncMapDestIdxOnce.Do(func() {
+		_, _ = colAutoSyncMap().Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "task_id", Value: 1}, {Key: "dest_msg_id", Value: 1}}})
+	})
 	cur, err := colAutoSyncMap().Find(ctx,
 		bson.M{"task_id": taskID, "dest_msg_id": bson.M{"$gt": afterDest}},
 		options.Find().SetSort(bson.D{{Key: "dest_msg_id", Value: 1}}).SetLimit(int64(limit)),

@@ -6,6 +6,7 @@ package db
 import (
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -91,7 +92,18 @@ func SetUserEmailIfEmpty(userID primitive.ObjectID, email string) error {
 
 // ─── Gate contacts: pahila message + verified mobile (registration adhura rahila tari harvat nahi) ───
 
-func colGateContacts() *mongo.Collection { return Database.Collection("gate_contacts") }
+var gateContactsIdxOnce sync.Once
+
+func colGateContacts() *mongo.Collection {
+	// tg_id unique — ek-vela jast messages (race) aale tari ekach doc / ekach "navin user" notification.
+	gateContactsIdxOnce.Do(func() {
+		ctx, cancel := Ctx()
+		defer cancel()
+		_, _ = Database.Collection("gate_contacts").Indexes().CreateOne(ctx, mongo.IndexModel{
+			Keys: bson.D{{Key: "tg_id", Value: 1}}, Options: options.Index().SetUnique(true)})
+	})
+	return Database.Collection("gate_contacts")
+}
 
 // GateContact — bot var pahilyanda alelya (unregistered) user chi nond.
 type GateContact struct {
@@ -114,10 +126,13 @@ func RecordFirstContact(tgID int64, name, username, firstMsg string) (bool, erro
 	defer cancel()
 	res, err := colGateContacts().UpdateOne(ctx,
 		bson.M{"tg_id": tgID},
-		bson.M{"$setOnInsert": bson.M{"tg_id": tgID, "name": name, "username": username, "first_msg": firstMsg, "first_at": time.Now(), "registered": false}},
+		bson.M{"$setOnInsert": bson.M{"name": name, "username": username, "first_msg": firstMsg, "first_at": time.Now(), "registered": false}},
 		options.Update().SetUpsert(true),
 	)
 	if err != nil {
+		if mongo.IsDuplicateKeyError(err) {
+			return false, nil // dusrya goroutine ne aadhich nond keli
+		}
 		return false, err
 	}
 	return res.UpsertedCount > 0, nil
@@ -130,12 +145,17 @@ func SaveVerifiedContact(tgID int64, mobile, name string) {
 	}
 	ctx, cancel := Ctx()
 	defer cancel()
-	_, _ = colGateContacts().UpdateOne(ctx,
-		bson.M{"tg_id": tgID},
-		bson.M{"$set": bson.M{"mobile": mobile, "verified_at": time.Now(), "name": name},
-			"$setOnInsert": bson.M{"tg_id": tgID, "first_at": time.Now(), "registered": false}},
-		options.Update().SetUpsert(true),
-	)
+	for try := 0; try < 3; try++ {
+		_, err := colGateContacts().UpdateOne(ctx,
+			bson.M{"tg_id": tgID},
+			bson.M{"$set": bson.M{"mobile": mobile, "verified_at": time.Now(), "name": name},
+				"$setOnInsert": bson.M{"first_at": time.Now(), "registered": false}},
+			options.Update().SetUpsert(true),
+		)
+		if err == nil || !mongo.IsDuplicateKeyError(err) {
+			return
+		}
+	}
 }
 
 func MarkContactRegistered(tgID int64) {

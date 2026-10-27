@@ -20,3 +20,8 @@ Env (optional): AUTOSYNC_TEXT_DELAY_MS=500, AUTOSYNC_MEDIA_DELAY_MS=1200, AUTOSY
 - /asfixrules [all|task_id], /asfixstop — destination madhlya junya messages var replace rules parat (edit), live progress (autosync_backfill.go)
 - /asfixrules ata buttons (asfx:*): scope -> mode (⚡ Fast / 🐢 File name sahit re-upload) -> live progress + Stop. AutoSync menu madhe '🔧 Replace Backfill' button.
 - contact gate: email step removed (mobile share = lagech registration), accepted-state reminder, first-contact admin notify (name/username/TG ID/pahila message), gate_contacts collection + startup sweep
+- auto-delivery: restart nantar adaklela ('sending') lecture course 'done' mark honar nahi; startup var stale claims sodto; lease 5 min
+- verified: full project go build OK (sqlite stubbed), go vet clean, logic tests pass (autosync_logic_test.go.example)
+- bugfixes (found by tests): short @username New (@ak) ata link rewrite hoto; bare word New => link unlink; backfill scan 1000-empty rule; resume-loop guard (progress nasel tar auto-resume nahi); map (task,dest_msg_id) index
+- real MongoDB integration tests (30+ tests) pass: live rule reload, link rewrite, resume flag, gate contacts (race fixed: unique tg_id index), AD claim/stale release, map paging/placeholders
+- fix: gate_contacts race => duplicate 'navin user' admin notifications + duplicate docs

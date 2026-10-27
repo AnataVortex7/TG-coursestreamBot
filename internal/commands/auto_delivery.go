@@ -93,6 +93,10 @@ func StartAutoDelivery(ctx context.Context, client *gotgproto.Client, log *zap.L
 		return
 	}
 	db.EnsureAutoDeliveryIndexes()
+	// Restart/crash madhe "sending" madhe adaklele lectures (pathavna madhech bot band zala) sodto — tyanchi delivery parat hoil.
+	if n := db.ReleaseStaleADClaims(90 * time.Second); n > 0 {
+		log.Info("Auto-delivery: adaklelya claims sodlya (restart nantar parat pathavle jatil)", zap.Int64("count", n))
+	}
 	log.Info("Auto-delivery worker started")
 	time.Sleep(25 * time.Second) // bot ani peer cache tayar hou dya
 
@@ -164,9 +168,13 @@ func adDeliverNew(ctx context.Context, gctx *ext.Context, client *gotgproto.Clie
 				continue
 			}
 			db.EnsureADCourse(au.UserID, ac.CourseID)
-			if ok := adDeliverCourse(ctx, gctx, client, log, au, ac.CourseID); ok {
+			done, hold := adDeliverCourse(ctx, gctx, client, log, au, ac.CourseID)
+			switch {
+			case done:
 				db.MarkADCourseDone(au.UserID, ac.CourseID)
-			} else {
+			case hold:
+				continue // adaklela lecture (restart) — claim lease nantar parat; baki courses chalu
+			default:
 				return // flood / error -- pudhchya tick madhe resume (items DB madhe aahet)
 			}
 		}
@@ -176,19 +184,19 @@ func adDeliverNew(ctx context.Context, gctx *ext.Context, client *gotgproto.Clie
 
 // adDeliverCourse -- true = course purna zala. false = thamba (flood/error), nantar resume.
 func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.Client, log *zap.Logger,
-	au db.ADUser, courseID primitive.ObjectID) bool {
+	au db.ADUser, courseID primitive.ObjectID) (done bool, hold bool) {
 
 	course, err := db.GetCourseByID(courseID)
 	if err != nil || course == nil {
-		return true
+		return true, false
 	}
 	folders, err := db.GetFoldersForCourse(courseID)
 	if err != nil {
-		return false
+		return false, false
 	}
 	files, err := db.FilesForCourse(courseID)
 	if err != nil {
-		return false
+		return false, false
 	}
 
 	type group struct {
@@ -221,8 +229,11 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 	botID := client.Self.ID
 	peer := gctx.PeerStorage.GetInputPeerById(au.ChatID)
 	if peer.Zero() {
-		return false
+		return false, false
 	}
+	// Jar kahi lecture ajun "sending" (restart/crash madhe adakla) asel tar course "done" mark karu nako —
+	// claim lease sampalyavar pudhchya tick madhe to parat pathavla jail.
+	incomplete := false
 
 	for gi, g := range groups {
 		if len(g.files) == 0 {
@@ -230,7 +241,11 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 		}
 		// folder header (pinned) -- ekdach
 		headerKey := -(gi + 1)
-		if db.ClaimADItem(au.UserID, courseID, headerKey, au.ChatID) {
+		headerClaimed := db.ClaimADItem(au.UserID, courseID, headerKey, au.ChatID)
+		if !headerClaimed && db.ADItemInFlight(au.UserID, courseID, headerKey) {
+			incomplete = true
+		}
+		if headerClaimed {
 			text := fmt.Sprintf("📁 %s\n%s", g.name, course.Title)
 			var hid int
 			if err := adWithFlood(ctx, func() error {
@@ -242,7 +257,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 			}); err != nil {
 				db.ReleaseADItem(au.UserID, courseID, headerKey)
 				log.Warn("header send failed", zap.Error(err))
-				return false
+				return false, false
 			}
 			if hid != 0 {
 				_ = db.RecordSentLectureMsg(au.UserID, courseID, au.ChatID, hid, botID)
@@ -262,9 +277,12 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 
 		for _, f := range g.files {
 			if ctx.Err() != nil {
-				return false
+				return false, false
 			}
 			if !db.ClaimADItem(au.UserID, courseID, f.MessageID, au.ChatID) {
+				if db.ADItemInFlight(au.UserID, courseID, f.MessageID) {
+					incomplete = true // adaklela lecture — lease sampalyavar parat try
+				}
 				continue // aadhich zala kiva dusra instance pathavtoy
 			}
 			title := f.Title
@@ -287,7 +305,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 					state = db.ADStateDelivered
 				} else if strings.Contains(strings.ToUpper(fErr.Error()), "FLOOD") {
 					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
-					return false
+					return false, false
 				}
 			}
 			if state != db.ADStateDelivered {
@@ -301,7 +319,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 					state = db.ADStateRaw
 				case rErr != nil && strings.Contains(strings.ToUpper(fmtErr(rErr)), "FLOOD"):
 					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
-					return false
+					return false, false
 				case rErr != nil:
 					log.Warn("original copy send failed -- placeholder fallback", zap.Error(rErr))
 				}
@@ -312,7 +330,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 				if mErr != nil {
 					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
 					log.Warn("pending placeholder media nahi", zap.Error(mErr))
-					return false
+					return false, false
 				}
 				caption := "⏳ " + title + "\n\nहा lecture लवकरच इथेच येईल — काही करायची गरज नाही."
 				if err := adWithFlood(ctx, func() error {
@@ -324,7 +342,7 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 				}); err != nil {
 					db.ReleaseADItem(au.UserID, courseID, f.MessageID)
 					log.Warn("pending send failed", zap.Error(err))
-					return false
+					return false, false
 				}
 			}
 			if sentID != 0 {
@@ -339,7 +357,10 @@ func adDeliverCourse(ctx context.Context, gctx *ext.Context, client *gotgproto.C
 			time.Sleep(adSendGap)
 		}
 	}
-	return true
+	if incomplete {
+		return false, true // adaklela lecture — course done mark nako, pan baki users/courses thambvu nako
+	}
+	return true, false
 }
 
 // adSendOriginal -- source channel madhla original (watermark nasleli) lecture user chya chat madhe

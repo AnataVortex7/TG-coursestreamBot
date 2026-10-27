@@ -159,11 +159,12 @@ var _ *gotgproto.Client // (import)
 // Rule "@old=new" fakt text madhle "@old" la match karto. Pan hidden hyperlink / visible URL madhe username
 // "t.me/old" kiva "tg://resolve?domain=old" ashya roopat asto (@ nahi) — tya var rule lagat nahi.
 // Ata username-rule (Old = @name kiva name) URL forms var pan aapoaap lagto:
-//   New = username / @username  → URL madhla username badalto (t.me/old/xyz → t.me/new/xyz)
+//   New = @username            → URL madhla username badalto (t.me/old/xyz → t.me/new/xyz)
 //   New = full link             → to link vaparto
 //   New = saadha shabd ("A")     → hyperlink kadhun takto (old deep link nako), visible URL text madhe shabd.
 var (
 	asUserTokRe = regexp.MustCompile(`^@?([A-Za-z][A-Za-z0-9_]{3,31})$`)
+	asNewUserRe = regexp.MustCompile(`^@([A-Za-z][A-Za-z0-9_]{1,31})$`)
 	asURLUserRe = regexp.MustCompile(`(?i)((?:https?://)?(?:t|telegram)\.me/|(?:https?://)?telegram\.dog/|tg://resolve\?domain=)([A-Za-z][A-Za-z0-9_]{3,31})`)
 )
 
@@ -205,8 +206,9 @@ func asApplyUsernameRules(t *db.AutoSyncTask, s string, isLink bool) (out string
 				return ""
 			case strings.HasPrefix(lnw, "http") || strings.Contains(lnw, "t.me/") || strings.HasPrefix(lnw, "tg://"):
 				return nw
-			case asUserTokRe.MatchString(nw):
-				return prefix + asUserTokRe.FindStringSubmatch(nw)[1]
+			case asNewUserRe.MatchString(nw):
+				// New "@username" (@ compulsory) — bare shabd (Akshay) username manu nako: to dusrya user la link jail.
+				return prefix + asNewUserRe.FindStringSubmatch(nw)[1]
 			default: // saadha shabd — username nahi
 				if isLink {
 					unlink = true

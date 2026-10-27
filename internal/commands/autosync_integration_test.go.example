@@ -1,0 +1,116 @@
+// Integration tests (real MongoDB lagto: MONGODB_URI=mongodb://127.0.0.1:27017). Rename to *_test.go to run.
+// Package commands madhe STREAM_SECRET (>=32 chars) ani JWT_SECRET (>=32 chars) env lagtat. TestMain already ahe — zz_logic test sobat chalvtana ek TestMain rahu dya.
+
+package commands
+
+import (
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"EverythingSuckz/fsb/internal/db"
+
+	"github.com/gotd/td/tg"
+	"go.mongodb.org/mongo-driver/bson"
+)
+
+func TestMain(m *testing.M) {
+	os.Setenv("MONGODB_URI", "mongodb://127.0.0.1:27099")
+	os.Setenv("MONGODB_DB", "zz_cmd_"+time.Now().Format("150405"))
+	db.Connect()
+	db.EnsureAutoSyncIndexes()
+	os.Exit(m.Run())
+}
+
+func mkTask(t *testing.T, reps []db.ReplaceRule) *db.AutoSyncTask {
+	tk := &db.AutoSyncTask{Name: "it", Enabled: true, SessionKey: "main", OwnerID: 1,
+		SourceChat: -1001234567890, DestChat: -1009876543210, Mode: "full", Times: []string{"23:59"}, Replaces: reps}
+	if err := db.CreateAutoSyncTask(tk); err != nil {
+		t.Fatal(err)
+	}
+	return tk
+}
+
+func TestIntegrationLiveRuleReload(t *testing.T) {
+	if err := db.SaveReplaceRules(db.GlobalReplaceUserID, []db.ReplaceRule{{Old: "@ech0xx", New: "@ak"}}); err != nil {
+		t.Fatal(err)
+	}
+	tk := mkTask(t, nil)
+	m := &tg.Message{Message: "By @ech0xx and @newone"}
+	txt, _, _ := asTransformText(tk, m)
+	if !strings.Contains(txt, "@ak") || !strings.Contains(txt, "@newone") {
+		t.Fatalf("global rule not applied: %q", txt)
+	}
+	// admin adds another GLOBAL rule while task is "running"
+	_ = db.SaveReplaceRules(db.GlobalReplaceUserID, []db.ReplaceRule{{Old: "@ech0xx", New: "@ak"}, {Old: "@newone", New: "@zzz"}})
+	// task-specific rule added too
+	_ = db.SetAutoSyncFields(tk.ID, bson.M{"replaces": []db.ReplaceRule{{Old: "By", New: "Via"}}})
+	time.Sleep(3300 * time.Millisecond) // rule snapshot TTL = 3s
+	txt, _, _ = asTransformText(tk, m)
+	if txt != "Via @ak and @zzz" {
+		t.Fatalf("live reload failed: %q", txt)
+	}
+}
+
+func TestIntegrationLinkRewrite(t *testing.T) {
+	tk := mkTask(t, nil)
+	_ = db.AutoSyncMapPut(tk.ID, 89, 4001)
+	_ = db.AutoSyncMapPut(tk.ID, 90, 4002)
+	asUsernames.Store(tk.ID.Hex()+":src", "")
+	asUsernames.Store(tk.ID.Hex()+":dst", "")
+	un := 0
+	in := "see https://t.me/c/1234567890/89 | t.me/c/1234567890/12/90 | https://t.me/other/5 | https://t.me/c/999/1 | https://t.me/c/1234567890/777 | https://t.me/MyBot?start=x"
+	out := asRewriteLinks(tk, in, &un)
+	want := "see https://t.me/c/9876543210/4001 | t.me/c/9876543210/4002 | https://t.me/other/5 | https://t.me/c/999/1 | https://t.me/c/1234567890/777 | https://t.me/MyBot?start=x"
+	if out != want {
+		t.Errorf("\n got %q\nwant %q", out, want)
+	}
+	if un != 1 {
+		t.Errorf("unresolved=%d want 1", un)
+	}
+	// public destination -> username form
+	asUsernames.Store(tk.ID.Hex()+":dst", "mychan")
+	un = 0
+	if got := asRewriteLinks(tk, "https://t.me/c/1234567890/89", &un); got != "https://t.me/mychan/4001" {
+		t.Errorf("public dst: %q", got)
+	}
+}
+
+func TestIntegrationResumeFlagAndDue(t *testing.T) {
+	tk := mkTask(t, nil)
+	now := time.Now()
+	_ = db.SetAutoSyncFields(tk.ID, bson.M{"last_run_at": now})
+	got, _ := db.GetAutoSyncTask(tk.ID)
+	if asDue(got, now) {
+		t.Fatal("completed today -> must not be due")
+	}
+	// run started (resume=true persisted) and process died
+	_ = db.SetAutoSyncFields(tk.ID, bson.M{"resume": true})
+	got, _ = db.GetAutoSyncTask(tk.ID)
+	if !asDue(got, now) {
+		t.Fatal("resume flag must make task due immediately (restart case)")
+	}
+	// finish with stamp=true clears resume; stamp=false keeps it
+	asFinishEx(got, "done", 0, false, true)
+	got, _ = db.GetAutoSyncTask(tk.ID)
+	if got.Resume {
+		t.Fatal("stamp=true must clear resume")
+	}
+	asFinishEx(got, "partial", 0, false, false)
+	got, _ = db.GetAutoSyncTask(tk.ID)
+	if !got.Resume {
+		t.Fatal("stamp=false must set resume")
+	}
+}
+
+func TestIntegrationIdemRulesSkipGrowing(t *testing.T) {
+	tk := mkTask(t, []db.ReplaceRule{{Old: "Akshay", New: "Akshay Patil"}, {Old: "@ech0xx", New: "@ak"}})
+	idem := *tk
+	idem.IdemOnly = true
+	m := &tg.Message{Message: "Akshay Patil @ech0xx"}
+	txt, _, _ := asTransformText(&idem, m)
+	if txt != "Akshay Patil @ak" {
+		t.Errorf("idempotent backfill must not grow text: %q", txt)
+	}
+}
