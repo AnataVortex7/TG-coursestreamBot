@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 
+	"EverythingSuckz/fsb/internal/ghworkers"
 	"EverythingSuckz/fsb/internal/wmqueue"
 
 	"github.com/gin-gonic/gin"
@@ -31,6 +32,7 @@ func (e *allRoutes) LoadColabAPI(r *Route) {
 
 	wmqueue.StartCleanupLoop()
 	wmqueue.StartColabWatcher()
+	ghworkers.Start() // GitHub Actions workspaces auto start/stop
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

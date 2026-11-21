@@ -425,6 +425,9 @@ func (e *allRoutes) LoadAdminAPI(r *Route) {
 	// ── Colab selective disable toggles ─────────────────────────────────
 	api.GET("/settings/colab", adminGetColabToggles)
 	api.POST("/settings/colab", adminSetColabToggles)
+
+	// ── GitHub Actions workspaces (auto start/stop watermark workers) ───
+	registerGHWorkersAdmin(api)
 }
 
 // GET /api/admin/settings/colab

@@ -660,6 +660,51 @@
         </div>
       </div>
 
+      <!-- GITHUB ACTIONS WORKSPACES -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-head">
+          <div class="card-title">🐙 GitHub Actions Workspaces (Auto Start/Stop)</div>
+          <button class="btn btn-primary btn-sm" onclick="loadGH()">🔄 Refresh</button>
+        </div>
+        <div class="card-body">
+          <label style="display:flex;align-items:flex-start;gap:12px;padding:6px 0 12px;cursor:pointer;border-bottom:1px solid #eee">
+            <input type="checkbox" id="gh-auto" onchange="ghSetAuto(this)" style="width:18px;height:18px;margin-top:2px"/>
+            <span><b>Auto start/stop ON</b><br>
+              <span style="font-size:12px;color:#888">Watermark job आला की निवडलेले (✔) सगळे workspaces start होतात; काम संपलं की off. Run/daily limit आणि restart-wait खालच्या settings प्रमाणे.</span></span>
+          </label>
+
+          <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;padding:12px 0;border-bottom:1px solid #eee">
+            <div><div style="font-size:11px;color:#888">Default daily limit (hours)</div><input id="gh-daily" type="number" step="0.5" min="0.5" max="24" style="width:110px"/></div>
+            <div><div style="font-size:11px;color:#888">Max run (hours, ≤5.9)</div><input id="gh-run" type="number" step="0.5" min="0.5" max="5.9" style="width:110px"/></div>
+            <div><div style="font-size:11px;color:#888">⏱ Restart wait (minutes)</div><input id="gh-wait" type="number" step="1" min="1" max="240" style="width:110px"/></div>
+            <div><div style="font-size:11px;color:#888">💤 Idle kill (min, 0 = लगेच)</div><input id="gh-idle" type="number" step="1" min="0" max="120" style="width:110px"/></div>
+            <div><div style="font-size:11px;color:#888">⚡ Parallel workspaces</div><input id="gh-parallel" type="number" step="1" min="1" max="10" style="width:110px"/></div>
+            <button class="btn btn-primary btn-sm" onclick="ghSaveSettings()">💾 Save</button>
+          </div>
+
+          <div id="gh-summary" style="font-size:12px;color:#888;padding:10px 0"></div>
+          <div id="gh-list"><div class="loading">⏳ Loading...</div></div>
+
+          <div style="display:flex;gap:8px;margin:12px 0;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="ghAll('start-all')">▶️ Start all selected</button>
+            <button class="btn btn-danger btn-sm" onclick="ghAll('stop-all')">⏹ Stop all</button>
+          </div>
+
+          <div style="border-top:1px solid #eee;padding-top:12px">
+            <div style="font-weight:600;margin-bottom:8px">➕ Add workspace (GitHub account + repo)</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <input id="gh-new-label" type="text" placeholder="Label (optional)" style="width:140px"/>
+              <input id="gh-new-repo" type="text" placeholder="owner/repo" style="width:220px"/>
+              <input id="gh-new-token" type="password" autocomplete="off" placeholder="GitHub token (PAT)" style="width:260px"/>
+              <input id="gh-new-event" type="text" placeholder="event type (start_worker)" style="width:170px"/>
+              <button class="btn btn-primary btn-sm" onclick="ghAdd()">➕ Add</button>
+            </div>
+            <div id="gh-add-msg" style="margin-top:8px;font-size:12px;color:#888"></div>
+            <div style="font-size:12px;color:#888;margin-top:6px">Token DB मध्ये encrypted साठवला जातो आणि पुन्हा दिसत नाही. Token ला Actions (read/write) + Contents (write) हवं — classic PAT साठी <code>repo</code> + <code>workflow</code>.</div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-head">
           <div class="card-title">➕ Add Worker</div>
@@ -1006,7 +1051,7 @@ function goto(name, el) {
   if (name==='access')      { loadUsers(); loadCourses(); }
   if (name==='tglogin')     loadTGStatus();
   if (name==='broadcast')   { loadAnnouncements(); loadCoursesForBroadcast(); }
-  if (name==='workers')     { loadColabToggles(); loadWorkers(); loadLiveStreams(); startLiveStreamRefresh(); }
+  if (name==='workers')     { loadColabToggles(); loadGH(); loadWorkers(); loadLiveStreams(); startLiveStreamRefresh(); }
   else stopLiveStreamRefresh();
   if (name==='urlmonitor')  { loadURLMonitor(); startUMAutoRefresh(); }
   else stopUMAutoRefresh();
@@ -2444,6 +2489,102 @@ async function loadColabToggles() {
     document.getElementById('colab-dis-userbot').checked = !!d.disable_userbot;
     document.getElementById('colab-dis-nonwm').checked = !!d.disable_non_wm;
   } catch (e) { toast('Colab settings load failed', 'error'); }
+}
+
+// ═══ GitHub Actions workspaces ═══════════════════════════════════════════════
+const GH_STATE = {running:'🟢 running', queued:'🟡 queued', cooldown:'⏸ cooldown', blocked:'⛔ blocked', limit:'🚫 daily limit', disabled:'⚪ not selected', ready:'🔵 ready'};
+
+function ghRender(snap) {
+  if (!snap) return;
+  const st = snap.settings;
+  document.getElementById('gh-auto').checked = !!st.auto_enabled;
+  document.getElementById('gh-daily').value = (st.daily_limit_min/60).toFixed(1).replace(/\.0$/,'');
+  document.getElementById('gh-run').value = (st.run_limit_min/60).toFixed(1).replace(/\.0$/,'');
+  document.getElementById('gh-wait').value = st.restart_wait_min;
+  document.getElementById('gh-idle').value = st.idle_off_min;
+  document.getElementById('gh-parallel').value = st.parallel;
+  document.getElementById('gh-summary').textContent =
+    `Queue: ${snap.pending} pending • ${snap.processing} processing • Auto: ${st.auto_enabled ? 'ON' : 'OFF'}`;
+  const box = document.getElementById('gh-list');
+  if (!snap.workspaces.length) {
+    box.innerHTML = '<div style="padding:16px;color:#888;text-align:center">एकही workspace नाही. खाली add करा.</div>';
+    return;
+  }
+  let h = '<div class="table-wrap"><table><thead><tr><th>Use</th><th>Workspace</th><th>Status</th><th>आज वापर</th><th>Last event</th><th>Action</th></tr></thead><tbody>';
+  for (const w of snap.workspaces) {
+    let extra = '';
+    if (w.state === 'running') extra = ` (run ${w.run_elapsed_min} min)`;
+    if (w.state === 'blocked') extra = ' — ' + (w.blocked_reason || '');
+    if (w.state === 'cooldown') extra = ` (~${w.cooldown_left_min} min)`;
+    h += `<tr>
+      <td><input type="checkbox" ${w.enabled ? 'checked' : ''} onchange="ghToggle(${jsq(w.id)}, this)" style="width:18px;height:18px"/></td>
+      <td><b>${esc(w.label)}</b><br><span style="font-size:11px;color:#888">${esc(w.repo)}</span></td>
+      <td style="font-size:12px">${GH_STATE[w.state] || esc(w.state)}${esc(extra)}</td>
+      <td style="font-size:12px">${w.used_min} / ${w.daily_limit_min} min${w.custom_daily ? ' ✏️' : ''}<br><a href="#" onclick="ghSetDaily(${jsq(w.id)}, ${w.custom_daily ? w.daily_limit_min : 0}); return false;" style="font-size:11px">⏱ timer बदला</a></td>
+      <td style="font-size:11px;color:#888">${esc(w.last_event)}${w.last_error ? '<br><span style="color:#e53935">⚠️ ' + esc(w.last_error) + '</span>' : ''}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-primary btn-sm" onclick="ghAction(${jsq(w.id)},'start')">▶️</button>
+        <button class="btn btn-sm" onclick="ghAction(${jsq(w.id)},'stop')">⏹</button>
+        <button class="btn btn-danger btn-sm" onclick="ghDelete(${jsq(w.id)},${jsq(w.label)})">🗑</button>
+      </td></tr>`;
+  }
+  box.innerHTML = h + '</tbody></table></div>';
+}
+
+async function ghCall(path, method, body, okMsg) {
+  try {
+    const res = await api('/ghworkers' + path, { method: method || 'GET', body: body ? JSON.stringify(body) : undefined });
+    const d = await res.json();
+    if (!res.ok || d.ok === false) throw new Error((d.errors && d.errors.join('; ')) || d.error || 'failed');
+    if (okMsg) toast(okMsg);
+    ghRender(d.snapshot);
+    return d;
+  } catch (e) { toast('GitHub: ' + e.message, 'error'); if (path !== '') await loadGH(); return null; }
+}
+
+async function loadGH() { await ghCall('', 'GET'); }
+async function ghSetAuto(el) { await ghCall('/settings', 'POST', { auto_enabled: el.checked }, el.checked ? '✅ Auto ON' : '⛔ Auto OFF'); }
+async function ghSaveSettings() {
+  const h = id => parseFloat(document.getElementById(id).value);
+  const body = {
+    daily_limit_min: Math.round(h('gh-daily') * 60),
+    run_limit_min: Math.round(h('gh-run') * 60),
+    restart_wait_min: Math.round(h('gh-wait')),
+    idle_off_min: Math.round(h('gh-idle')),
+    parallel: Math.round(h('gh-parallel')),
+  };
+  await ghCall('/settings', 'POST', body, '💾 Saved');
+}
+async function ghToggle(id, el) { await ghCall('/workspace/' + encodeURIComponent(id), 'PUT', { enabled: el.checked }, el.checked ? '🟢 Selected' : '⚪ Deselected'); }
+async function ghSetDaily(id, curMin) {
+  const v = prompt('या workspace चा daily timer (तास, 0.5–24). 0 = default वापर:', curMin ? (curMin/60) : '0');
+  if (v === null) return;
+  const h = parseFloat(String(v).replace(',', '.'));
+  if (isNaN(h) || h < 0) { toast('valid तास टाका', 'error'); return; }
+  await ghCall('/workspace/' + encodeURIComponent(id), 'PUT', { daily_limit_min: Math.round(h * 60) }, '⏱ Timer saved');
+}
+async function ghAction(id, act) { await ghCall('/workspace/' + encodeURIComponent(id) + '/' + act, 'POST', {}, act === 'start' ? '🚀 Start sent' : '🛑 Stop sent'); }
+async function ghAll(act) { await ghCall('/' + act, 'POST', {}, act === 'start-all' ? '🚀 Start sent' : '🛑 Stop sent'); }
+async function ghDelete(id, label) {
+  if (!confirm('Workspace काढायचा? ' + label + '\n(चालू run असेल तर cancel होईल)')) return;
+  await ghCall('/workspace/' + encodeURIComponent(id), 'DELETE', null, '🗑 Removed');
+}
+async function ghAdd() {
+  const msg = document.getElementById('gh-add-msg');
+  const body = {
+    label: document.getElementById('gh-new-label').value.trim(),
+    repo: document.getElementById('gh-new-repo').value.trim(),
+    token: document.getElementById('gh-new-token').value.trim(),
+    event_type: document.getElementById('gh-new-event').value.trim(),
+  };
+  if (!body.repo || !body.token) { msg.textContent = 'repo आणि token दोन्ही हवेत'; msg.style.color = '#e53935'; return; }
+  msg.textContent = '⏳ Token verify होतोय...'; msg.style.color = '#888';
+  const d = await ghCall('/workspace', 'POST', body, '✅ Workspace added');
+  if (d) {
+    ['gh-new-label','gh-new-repo','gh-new-token','gh-new-event'].forEach(i => document.getElementById(i).value = '');
+    msg.textContent = '✅ Added';
+    msg.style.color = '#4ade80';
+  } else { msg.textContent = ''; }
 }
 
 async function setColabToggle(key, el) {
